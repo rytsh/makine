@@ -19,6 +19,7 @@ egui_extras = { version = "0.37", features = ["svg", "image"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 makine-rv = { path = "../rv" }
 makine-pack = { path = "../pack" }
+makine-world = { path = "../world" }
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }

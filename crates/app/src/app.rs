@@ -40,6 +40,8 @@ enum View {
     Play,
     /// The built-in wiki.
     Wiki,
+    /// The isometric block world.
+    World,
 }
 
 pub struct App {
@@ -71,6 +73,8 @@ pub struct App {
     wiki: Wiki,
     /// Wiki images are registered with egui on the first frame.
     wiki_installed: bool,
+    /// The open block world, if any.
+    world: Option<crate::worldview::WorldView>,
     /// Sandbox UI state.
     new_chip_name: String,
     rename_to: String,
@@ -121,6 +125,7 @@ impl App {
             play_started: 0.0,
             wiki: Wiki::default(),
             wiki_installed: false,
+            world: None,
             new_chip_name: String::new(),
             rename_to: String::new(),
             pin_editor: None,
@@ -290,6 +295,16 @@ impl App {
             .clicked()
         {
             self.view = View::Wiki;
+        }
+        if ui
+            .add(egui::Button::selectable(
+                self.view == View::World,
+                "🌍  Dünya",
+            ))
+            .on_hover_text("Blokları yerleştirerek kendi devreni kur (izometrik)")
+            .clicked()
+        {
+            self.open_world();
         }
         let cpu_done = self.progress.solved("Cpu");
         let r = ui
@@ -615,6 +630,7 @@ impl App {
                     (View::Editor, Target::Free(_)) => self.sandbox_panel(ui),
                     (View::Computer | View::Play, _) => self.computer_controls(ui),
                     (View::Wiki, _) => self.wiki.contents(ui),
+                    (View::World, _) => self.world_panel(ui),
                 });
             });
         if let Some(status) = self.status.clone() {
@@ -629,6 +645,20 @@ impl App {
         }
         if self.view == View::Computer {
             egui::CentralPanel::default().show(ui, |ui| self.computer_view(ui));
+            return;
+        }
+        if self.view == View::World {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    if let Some(w) = &mut self.world {
+                        let rev = w.world.revision();
+                        w.show(ui);
+                        if w.world.revision() != rev {
+                            self.store_world();
+                        }
+                    }
+                });
             return;
         }
         if self.view == View::Wiki {
@@ -701,6 +731,140 @@ fn design_for<'a>(progress: &'a mut Progress, target: &Target) -> &'a mut Design
 }
 
 impl App {
+    fn open_world(&mut self) {
+        if self.world.is_none() {
+            let world = self
+                .progress
+                .worlds
+                .values()
+                .next()
+                .cloned()
+                .unwrap_or_else(|| makine_world::World::new("dünya"));
+            self.world = Some(crate::worldview::WorldView::new(world));
+        }
+        self.view = View::World;
+    }
+
+    /// Save the open world into the progress file. Called after edits;
+    /// saving is cheap for worlds of reasonable size.
+    fn store_world(&mut self) {
+        if let Some(w) = &self.world {
+            self.progress
+                .worlds
+                .insert(w.world.name.clone(), w.world.clone());
+            self.save();
+        }
+    }
+
+    /// Right panel in the world view: build bar, layer, simulation.
+    fn world_panel(&mut self, ui: &mut Ui) {
+        let Some(w) = &mut self.world else { return };
+        ui.heading("🌍 Dünya");
+        ui.label(
+            RichText::new(
+                "Sol tık: yerleştir (sürükleyerek boya) · Sağ tık: sil · R: döndür · \
+                 Q/E: katman · Tekerlek: yakınlaştır · Orta tık ya da Boşluk+sürükle: kaydır · \
+                 Anahtara tıkla: aç/kapa",
+            )
+            .weak()
+            .small(),
+        );
+        ui.add_space(6.0);
+        ui.label(RichText::new("Bloklar").strong());
+        let current = w.brush.as_ref().map(|b| std::mem::discriminant(&b.block));
+        let current_gate = match w.brush.as_ref().map(|b| &b.block) {
+            Some(makine_world::Block::Gate { gate, .. }) => Some(*gate),
+            _ => None,
+        };
+        ui.horizontal_wrapped(|ui| {
+            for (name, block, tip) in crate::worldview::palette() {
+                let gate = match &block {
+                    makine_world::Block::Gate { gate, .. } => Some(*gate),
+                    _ => None,
+                };
+                let selected =
+                    current == Some(std::mem::discriminant(&block)) && gate == current_gate;
+                let r = ui.selectable_label(selected, name);
+                let r = if tip.is_empty() {
+                    r
+                } else {
+                    r.on_hover_text(tip)
+                };
+                if r.clicked() {
+                    w.brush = Some(crate::worldview::Brush { block });
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.label("Yön:");
+            let arrow = match w.facing {
+                makine_world::Dir::East => "↘ doğu",
+                makine_world::Dir::South => "↙ güney",
+                makine_world::Dir::West => "↖ batı",
+                makine_world::Dir::North => "↗ kuzey",
+            };
+            if ui.button(arrow).on_hover_text("R ile de döner").clicked() {
+                w.facing = w.facing.cw();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(format!("Katman: {}", w.layer));
+            if ui.small_button("▼").on_hover_text("Q").clicked() {
+                w.layer = (w.layer - 1).max(0);
+            }
+            if ui.small_button("▲").on_hover_text("E").clicked() {
+                w.layer = (w.layer + 1).min(makine_world::world::MAX_LAYER);
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Üst katmanlar gizlenir, alttakiler soluk görünür. Katmanlar arası bağlantı için \
+                 iki katmana da 'Geçiş' koy.",
+            )
+            .weak()
+            .small(),
+        );
+        ui.separator();
+        ui.horizontal(|ui| {
+            let label = if w.running {
+                "⏸ Durdur"
+            } else {
+                "▶ Çalıştır"
+            };
+            if ui
+                .button(label)
+                .on_hover_text("Saatleri durdur/başlat")
+                .clicked()
+            {
+                w.running = !w.running;
+            }
+            if ui
+                .add_enabled(w.can_undo(), egui::Button::new("↶ Geri al"))
+                .clicked()
+            {
+                w.undo();
+            }
+            if ui
+                .add_enabled(w.can_redo(), egui::Button::new("↷ Yinele"))
+                .clicked()
+            {
+                w.redo();
+            }
+            if ui
+                .button("⌖ Ortala")
+                .on_hover_text("Bütün dünyayı göster")
+                .clicked()
+            {
+                w.refit();
+            }
+        });
+        ui.label(RichText::new(format!("{} blok", w.world.len())).weak());
+        if let Some(e) = w.error() {
+            ui.colored_label(Color32::LIGHT_RED, e);
+        }
+    }
+
     /// The sandbox section of the left panel: list of free chips and a
     /// field to create a new one.
     fn sandbox_list(&mut self, ui: &mut Ui) {
@@ -1347,6 +1511,96 @@ mod tests {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-play.png")).unwrap();
 
+        // A block world: two switches into a half adder lighting two lamps,
+        // and a clock blinking a lamp on layer 1.
+        {
+            use makine_world::{Block, Dir, Edit, Gate, Pos};
+            let mut w = makine_world::World::new("örnek");
+            let mut set = |x, y, z, b| {
+                w.apply(Edit::Set {
+                    pos: Pos::new(x, y, z),
+                    block: Some(b),
+                });
+            };
+            set(
+                0,
+                0,
+                0,
+                Block::Switch {
+                    on: true,
+                    facing: Dir::East,
+                },
+            );
+            for x in 1..=5 {
+                set(x, 0, 0, Block::Wire);
+            }
+            set(
+                0,
+                2,
+                0,
+                Block::Switch {
+                    on: false,
+                    facing: Dir::East,
+                },
+            );
+            for x in 1..=5 {
+                set(x, 2, 0, Block::Wire);
+            }
+            set(
+                5,
+                1,
+                0,
+                Block::Gate {
+                    gate: Gate::Xor,
+                    facing: Dir::East,
+                },
+            );
+            set(6, 1, 0, Block::Wire);
+            set(7, 1, 0, Block::Lamp);
+            set(3, 1, 0, Block::Wire);
+            set(3, 2, 0, Block::Cross);
+            set(3, 3, 0, Block::Wire);
+            for x in 3..=5 {
+                set(x, 4, 0, Block::Wire);
+            }
+            for y in 3..=6 {
+                set(1, y, 0, Block::Wire);
+            }
+            for x in 2..=5 {
+                set(x, 6, 0, Block::Wire);
+            }
+            set(
+                5,
+                5,
+                0,
+                Block::Gate {
+                    gate: Gate::And,
+                    facing: Dir::East,
+                },
+            );
+            set(6, 5, 0, Block::Wire);
+            set(7, 5, 0, Block::Lamp);
+            set(
+                2,
+                9,
+                1,
+                Block::Clock {
+                    period: 30,
+                    facing: Dir::East,
+                },
+            );
+            for x in 3..=5 {
+                set(x, 9, 1, Block::Wire);
+            }
+            set(6, 9, 1, Block::Lamp);
+            let mut a = app.borrow_mut();
+            a.view = View::World;
+            a.world = Some(crate::worldview::WorldView::new(w));
+        }
+        harness.run_steps(3);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-world.png")).unwrap();
+
         // Wiki pages, with their images loaded.
         for slug in ["nand", "kapilar", "hafiza", "islemci"] {
             {
@@ -1444,11 +1698,15 @@ mod glyph_tests {
     #[test]
     fn ui_symbols_have_glyphs() {
         let ctx = egui::Context::default();
+        // The app installs the DejaVu fallbacks on its first frame.
+        crate::wiki::install_fonts(&ctx);
         let sources = [
             include_str!("app.rs"),
             include_str!("canvas.rs"),
             include_str!("computer.rs"),
             include_str!("wiki.rs"),
+            include_str!("worldview.rs"),
+            include_str!("sandbox.rs"),
         ];
         let mut missing = Vec::new();
         let mut out = ctx.run_ui(Default::default(), |ui| {

@@ -36,6 +36,9 @@ pub struct Progress {
     /// Free-form chips.
     #[serde(default)]
     pub sandbox: Sandbox,
+    /// Block worlds, by name.
+    #[serde(default)]
+    pub worlds: BTreeMap<String, makine_world::World>,
 }
 
 fn yes() -> bool {
@@ -52,6 +55,7 @@ impl Default for Progress {
             symbols: true,
             fullscreen: false,
             sandbox: Sandbox::default(),
+            worlds: BTreeMap::new(),
         }
     }
 }

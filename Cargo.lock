@@ -2056,6 +2056,7 @@ dependencies = [
  "makine-pack",
  "makine-rv",
  "makine-sim",
+ "makine-world",
  "rfd",
  "serde",
  "serde_json",
@@ -2092,6 +2093,11 @@ dependencies = [
 [[package]]
 name = "makine-world"
 version = "0.1.0"
+dependencies = [
+ "makine-sim",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "memchr"

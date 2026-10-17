@@ -9,6 +9,7 @@ mod design;
 mod sandbox;
 mod store;
 mod wiki;
+mod worldview;
 
 use store::Progress;
 
