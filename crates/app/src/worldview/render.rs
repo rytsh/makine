@@ -1,36 +1,35 @@
-//! Drawing the world in 3D: blocks become boxes in a [`Mesh`] for the GPU,
-//! and names and numbers are drawn over it by egui.
+//! Drawing the world from above: a flat grid, one layer at a time.
 //!
-//! One cell is a unit cube; layer `z` sits between heights `z` and `z + 1`.
-//! Only blocks near the eye are drawn, so the world can be endless.
+//! Each cell is a square. The edited layer is drawn in full; the layer just
+//! below shows through faintly, so the player sees what they build on.
+//! Gates are drawn as their logic symbols (the canvas's outlines), with
+//! short leads on the sides wires attach to.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Rect};
-use glam::DVec3;
+use egui::{vec2, Align2, Color32, FontId, Pos2, Rect, Shape, Stroke};
 use makine_world::block::{Block, Dir, Gate};
 use makine_world::compile::{CompileError, Compiled, Lane};
 use makine_world::device::{self, Device};
 use makine_world::Pos;
 
-use super::camera::{render, VIEW_DIST};
-use super::gpu::{self, Mesh, Scene, Vertex};
 use super::WorldView;
 use crate::canvas::gate_outline;
 use crate::design::Symbol;
 use crate::worldsim::SimError;
 
+/// Size of one cell on screen at zoom 1.
+const CELL: f32 = 32.0;
+
 pub(super) const BG: Color32 = Color32::from_rgb(20, 22, 27);
-const GRID: Color32 = Color32::from_rgb(52, 57, 68);
+const GRID: Color32 = Color32::from_rgb(36, 40, 48);
 const WIRE_OFF: Color32 = Color32::from_rgb(110, 60, 55);
 const WIRE_ON: Color32 = Color32::from_rgb(255, 80, 60);
-const GATE: Color32 = Color32::from_rgb(200, 205, 215);
-/// Height of a gate's body.
-pub(super) const GATE_H: f64 = 0.42;
-const SWITCH_OFF: Color32 = Color32::from_rgb(90, 90, 100);
-const BASE: Color32 = Color32::from_rgb(150, 155, 168);
-const TEXT: Color32 = Color32::from_rgb(235, 238, 245);
+const GATE_FILL: Color32 = Color32::from_rgb(52, 57, 68);
+const GATE_LINE: Color32 = Color32::from_rgb(200, 206, 216);
+const BASE: Color32 = Color32::from_rgb(70, 74, 86);
+const TEXT: Color32 = Color32::from_rgb(220, 224, 230);
+const DARK: Color32 = Color32::from_rgb(30, 32, 38);
 const LAMP_OFF: Color32 = Color32::from_rgb(70, 64, 40);
 const LAMP_ON: Color32 = Color32::from_rgb(255, 220, 90);
 const VIA: Color32 = Color32::from_rgb(120, 170, 230);
@@ -39,176 +38,275 @@ const ERROR: Color32 = Color32::from_rgb(255, 70, 70);
 const SELECT: Color32 = Color32::from_rgb(255, 210, 80);
 const PASTE: Color32 = Color32::from_rgb(120, 200, 255);
 
-fn shade(c: Color32, f: f32) -> Color32 {
-    let [r, g, b, a] = c.to_srgba_unmultiplied();
-    let m = |v: u8| (v as f32 * f).min(255.0) as u8;
-    Color32::from_rgba_unmultiplied(m(r), m(g), m(b), a)
-}
-
-fn with_alpha(c: Color32, a: u8) -> Color32 {
-    let [r, g, b, _] = c.to_srgba_unmultiplied();
-    Color32::from_rgba_unmultiplied(r, g, b, a)
-}
-
-fn corner(x: f64, y: f64, z: f64) -> DVec3 {
-    DVec3::new(x, y, z)
-}
-
 /// The rectangle a device covers: (min x, min y, max x, max y) in cell
 /// coordinates, edges included.
-fn extent(d: &Device, anchor: Pos, facing: Dir) -> (f64, f64, f64, f64) {
+fn extent(d: &Device, anchor: Pos, facing: Dir) -> (f32, f32, f32, f32) {
     let cells = device::layout(d, anchor, facing).cells;
-    let x0 = cells.iter().map(|c| c.x).min().unwrap_or(anchor.x) as f64;
-    let y0 = cells.iter().map(|c| c.y).min().unwrap_or(anchor.y) as f64;
-    let x1 = cells.iter().map(|c| c.x).max().unwrap_or(anchor.x) as f64 + 1.0;
-    let y1 = cells.iter().map(|c| c.y).max().unwrap_or(anchor.y) as f64 + 1.0;
+    let x0 = cells.iter().map(|c| c.x).min().unwrap_or(anchor.x) as f32;
+    let y0 = cells.iter().map(|c| c.y).min().unwrap_or(anchor.y) as f32;
+    let x1 = cells.iter().map(|c| c.x).max().unwrap_or(anchor.x) as f32 + 1.0;
+    let y1 = cells.iter().map(|c| c.y).max().unwrap_or(anchor.y) as f32 + 1.0;
     (x0, y0, x1, y1)
 }
 
-/// Builds the frame's mesh, relative to the camera's origin.
-struct Builder {
-    mesh: Mesh,
-    origin: DVec3,
+fn faded(c: Color32, below: bool) -> Color32 {
+    if below {
+        c.gamma_multiply(0.22)
+    } else {
+        c
+    }
 }
 
-impl Builder {
-    fn vertex(&self, w: DVec3, c: Color32) -> Vertex {
-        Vertex {
-            pos: render(w - self.origin).as_vec3().to_array(),
-            color: c.to_srgba_unmultiplied(),
-        }
-    }
-
-    /// A flat four-sided face (two triangles).
-    fn quad(&mut self, q: [DVec3; 4], c: Color32) {
-        let v = q.map(|p| self.vertex(p, c));
-        let list = if c.a() < 255 {
-            &mut self.mesh.ghost
-        } else {
-            &mut self.mesh.solid
+impl WorldView {
+    /// Centre and zoom the camera so the world (its blocks on every layer)
+    /// fits in `rect`.
+    pub(super) fn fit_to(&mut self, rect: Rect, origin: Pos2) {
+        let Some((lo, hi)) = self.world.bounds() else {
+            self.zoom = 1.4;
+            self.pan = rect.center() - origin;
+            return;
         };
-        list.extend([v[0], v[1], v[2], v[0], v[2], v[3]]);
+        let (w, h) = ((hi.x - lo.x + 1) as f32, (hi.y - lo.y + 1) as f32);
+        // Leave room around the world to build in.
+        self.zoom = (rect.width() * 0.6 / (w * CELL))
+            .min(rect.height() * 0.6 / (h * CELL))
+            .clamp(0.4, 1.5);
+        let centre = vec2(lo.x as f32 + w / 2.0, lo.y as f32 + h / 2.0) * CELL * self.zoom;
+        self.pan = rect.center() - origin - centre;
     }
 
-    fn triangle(&mut self, t: [DVec3; 3], c: Color32) {
-        let v = t.map(|p| self.vertex(p, c));
-        let list = if c.a() < 255 {
-            &mut self.mesh.ghost
-        } else {
-            &mut self.mesh.solid
+    /// Screen position of world point (x, y) on any layer.
+    pub(super) fn to_screen(&self, origin: Pos2, x: f32, y: f32) -> Pos2 {
+        origin + self.pan + vec2(x, y) * CELL * self.zoom
+    }
+
+    /// The cell on `layer` under a screen point.
+    pub(super) fn pick(&self, origin: Pos2, p: Pos2, layer: i32) -> Pos {
+        let v = (p - origin - self.pan) / (CELL * self.zoom);
+        Pos::new(v.x.floor() as i32, v.y.floor() as i32, layer)
+    }
+
+    /// The screen square of cell (x, y).
+    fn cell_rect(&self, origin: Pos2, x: f32, y: f32) -> Rect {
+        Rect::from_min_max(
+            self.to_screen(origin, x, y),
+            self.to_screen(origin, x + 1.0, y + 1.0),
+        )
+    }
+
+    pub(super) fn draw(
+        &self,
+        painter: &egui::Painter,
+        origin: Pos2,
+        clip: Rect,
+        screens: &HashMap<Pos, Vec<bool>>,
+    ) {
+        let z = self.zoom;
+        let compiled = self.sim.compiled();
+        let values = self.sim.values();
+        let value_at = |p: Pos, lane: Lane| -> Option<bool> {
+            let o = compiled?.output_at(p, lane)?;
+            self.sim.output(o)
         };
-        list.extend(v);
-    }
 
-    /// A thin bar from `a` to `b` (along one axis). Bars instead of GPU
-    /// lines: lines are one pixel wide and some drivers clip them badly.
-    fn line(&mut self, a: DVec3, b: DVec3, c: Color32) {
-        let w = 0.025;
-        self.cuboid(a.min(b) - DVec3::splat(w), a.max(b) + DVec3::splat(w), c);
-    }
+        // The visible cells.
+        let a = self.pick(origin, clip.left_top(), self.layer);
+        let b = self.pick(origin, clip.right_bottom(), self.layer);
 
-    /// A flat line on the floor at height `z`.
-    fn floor_line(&mut self, a: DVec3, b: DVec3, c: Color32) {
-        let w = 0.02;
-        let (lo, hi) = (a.min(b) - DVec3::splat(w), a.max(b) + DVec3::splat(w));
-        let z = a.z;
-        self.quad(
-            [
-                corner(lo.x, lo.y, z),
-                corner(hi.x, lo.y, z),
-                corner(hi.x, hi.y, z),
-                corner(lo.x, hi.y, z),
-            ],
-            c,
-        );
-    }
-
-    /// A box from `lo` to `hi`, its sides shaded so its shape reads.
-    fn cuboid(&mut self, lo: DVec3, hi: DVec3, c: Color32) {
-        let (a, b) = (lo, hi);
-        let p = |x: bool, y: bool, z: bool| {
-            corner(
-                if x { b.x } else { a.x },
-                if y { b.y } else { a.y },
-                if z { b.z } else { a.z },
-            )
-        };
-        let (t, f) = (true, false);
-        self.quad([p(f, f, t), p(t, f, t), p(t, t, t), p(f, t, t)], c);
-        self.quad(
-            [p(f, f, f), p(t, f, f), p(t, t, f), p(f, t, f)],
-            shade(c, 0.45),
-        );
-        self.quad(
-            [p(t, f, f), p(t, t, f), p(t, t, t), p(t, f, t)],
-            shade(c, 0.78),
-        );
-        self.quad(
-            [p(f, f, f), p(f, t, f), p(f, t, t), p(f, f, t)],
-            shade(c, 0.78),
-        );
-        self.quad(
-            [p(f, t, f), p(t, t, f), p(t, t, t), p(f, t, t)],
-            shade(c, 0.62),
-        );
-        self.quad(
-            [p(f, f, f), p(t, f, f), p(t, f, t), p(f, f, t)],
-            shade(c, 0.62),
-        );
-    }
-
-    /// The edges of a box.
-    fn wire_box(&mut self, lo: DVec3, hi: DVec3, c: Color32) {
-        let (a, b) = (lo, hi);
-        for z in [a.z, b.z] {
-            let q = [
-                corner(a.x, a.y, z),
-                corner(b.x, a.y, z),
-                corner(b.x, b.y, z),
-                corner(a.x, b.y, z),
-            ];
-            for i in 0..4 {
-                self.line(q[i], q[(i + 1) % 4], c);
+        // Grid.
+        if CELL * z >= 8.0 {
+            let stroke = Stroke::new(1.0, GRID);
+            for x in a.x..=b.x + 1 {
+                painter.line_segment(
+                    [
+                        self.to_screen(origin, x as f32, a.y as f32),
+                        self.to_screen(origin, x as f32, (b.y + 1) as f32),
+                    ],
+                    stroke,
+                );
+            }
+            for y in a.y..=b.y + 1 {
+                painter.line_segment(
+                    [
+                        self.to_screen(origin, a.x as f32, y as f32),
+                        self.to_screen(origin, (b.x + 1) as f32, y as f32),
+                    ],
+                    stroke,
+                );
             }
         }
-        for (x, y) in [(a.x, a.y), (b.x, a.y), (b.x, b.y), (a.x, b.y)] {
-            self.line(corner(x, y, a.z), corner(x, y, b.z), c);
+
+        // The layer below, faintly, then the edited one.
+        for z_layer in [self.layer - 1, self.layer] {
+            let below = z_layer < self.layer;
+            let lo = Pos::new(a.x - 1, a.y - 1, z_layer);
+            let hi = Pos::new(b.x + 1, b.y + 1, z_layer);
+            for (p, block) in self.world.blocks_in(lo, hi) {
+                self.draw_block(
+                    painter, origin, p, block, below, &value_at, compiled, values, screens,
+                );
+            }
         }
+
+        self.draw_overlays(painter, origin);
     }
 
-    /// The edges of a box, as hairlines (bars a thirtieth of a cell wide).
-    fn thin_box(&mut self, lo: DVec3, hi: DVec3, c: Color32) {
-        let w = 0.012;
-        let (a, b) = (lo, hi);
-        let bar = |s: &mut Self, p: DVec3, q: DVec3| {
-            s.cuboid(p.min(q) - DVec3::splat(w), p.max(q) + DVec3::splat(w), c)
+    /// One block on its cell.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_block(
+        &self,
+        painter: &egui::Painter,
+        origin: Pos2,
+        p: Pos,
+        block: &Block,
+        below: bool,
+        value_at: &dyn Fn(Pos, Lane) -> Option<bool>,
+        compiled: Option<&Compiled>,
+        values: &[u64],
+        screens: &HashMap<Pos, Vec<bool>>,
+    ) {
+        let z = self.zoom;
+        let fade = |c: Color32| faded(c, below);
+        let (x, y) = (p.x as f32, p.y as f32);
+        let r = self.cell_rect(origin, x, y);
+        let c = r.center();
+        let lit = |lane| match value_at(p, lane) {
+            Some(true) => WIRE_ON,
+            _ => WIRE_OFF,
         };
-        for z in [a.z, b.z] {
-            bar(self, corner(a.x, a.y, z), corner(b.x, a.y, z));
-            bar(self, corner(b.x, a.y, z), corner(b.x, b.y, z));
-            bar(self, corner(a.x, b.y, z), corner(b.x, b.y, z));
-            bar(self, corner(a.x, a.y, z), corner(a.x, b.y, z));
-        }
-        for (x, y) in [(a.x, a.y), (b.x, a.y), (b.x, b.y), (a.x, b.y)] {
-            bar(self, corner(x, y, a.z), corner(x, y, b.z));
+        let font = |s: f32| FontId::proportional(s * z);
+        match block {
+            Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via => {
+                let w = 6.0 * z;
+                for d in Dir::ALL {
+                    if !(self.world.accepts_wire(p, d)
+                        && self.world.accepts_wire(p.step(d), d.opposite()))
+                    {
+                        continue;
+                    }
+                    let lane = if matches!(block, Block::Cross) && !d.is_horizontal() {
+                        Lane::Cross
+                    } else {
+                        Lane::Main
+                    };
+                    let (dx, dy) = d.delta();
+                    let edge = c + vec2(dx as f32, dy as f32) * (CELL * z / 2.0);
+                    painter.line_segment([c, edge], Stroke::new(w, fade(lit(lane))));
+                }
+                match block {
+                    Block::Via => {
+                        painter.circle_filled(c, w * 1.3, fade(VIA));
+                        painter.circle_stroke(c, w * 1.3, Stroke::new(1.5 * z, fade(DARK)));
+                    }
+                    Block::Cross => {
+                        // The vertical lane hops over the horizontal one.
+                        painter.circle_filled(c, w * 1.1, fade(BG));
+                        painter.circle_stroke(c, w * 1.1, Stroke::new(1.5 * z, fade(GATE_LINE)));
+                    }
+                    _ => {
+                        painter.circle_filled(c, w * 0.5, fade(lit(Lane::Main)));
+                    }
+                }
+            }
+            Block::Gate { gate, facing } => {
+                self.draw_gate(painter, origin, p, *gate, *facing, below, value_at);
+            }
+            Block::Switch { on, facing } => {
+                painter.rect_filled(r.shrink(4.0 * z), 4.0 * z, fade(BASE));
+                let knob = if *on { WIRE_ON } else { DARK };
+                painter.rect_filled(r.shrink(9.0 * z), 3.0 * z, fade(knob));
+                self.lead(painter, c, *facing, fade(lit(Lane::Main)));
+                painter.text(
+                    c,
+                    Align2::CENTER_CENTER,
+                    if *on { "1" } else { "0" },
+                    font(12.0),
+                    fade(TEXT),
+                );
+            }
+            Block::Lamp => {
+                let on = self.sim.lamp_lit(p);
+                if on && !below {
+                    painter.circle_filled(c, CELL * z * 0.75, LAMP_ON.gamma_multiply(0.18));
+                }
+                painter.circle_filled(
+                    c,
+                    CELL * z * 0.36,
+                    fade(if on { LAMP_ON } else { LAMP_OFF }),
+                );
+                painter.circle_stroke(c, CELL * z * 0.36, Stroke::new(1.5 * z, fade(DARK)));
+            }
+            Block::Clock { facing, period } => {
+                let on = value_at(p, Lane::Main) == Some(true);
+                let fill = if on {
+                    Color32::from_rgb(230, 160, 80)
+                } else {
+                    Color32::from_rgb(120, 90, 60)
+                };
+                painter.rect_filled(r.shrink(4.0 * z), 4.0 * z, fade(fill));
+                self.lead(painter, c, *facing, fade(lit(Lane::Main)));
+                if z > 0.7 {
+                    painter.text(
+                        c,
+                        Align2::CENTER_CENTER,
+                        format!("⏱{period}"),
+                        font(9.0),
+                        fade(DARK),
+                    );
+                }
+            }
+            Block::Port { name, facing, .. } => {
+                painter.rect_filled(r.shrink(4.0 * z), 4.0 * z, fade(PORT));
+                self.lead(painter, c, *facing, fade(DARK));
+                painter.text(c, Align2::CENTER_CENTER, name, font(11.0), fade(DARK));
+            }
+            Block::Device { device, facing } => {
+                self.draw_device(
+                    painter, origin, p, device, *facing, below, value_at, compiled, values, screens,
+                );
+            }
+            Block::Cover { .. } => {}
         }
     }
 
-    /// A box inside cell `p`, `h` tall, inset by `m` on each side.
-    fn block(&mut self, p: Pos, m: f64, h: f64, c: Color32) {
-        let (x, y, z) = (p.x as f64, p.y as f64, p.z as f64);
-        self.cuboid(
-            corner(x + m, y + m, z),
-            corner(x + 1.0 - m, y + 1.0 - m, z + h),
-            c,
-        );
+    /// A short arrow-lead from the centre of a cell towards its edge `d`.
+    fn lead(&self, painter: &egui::Painter, c: Pos2, d: Dir, color: Color32) {
+        let z = self.zoom;
+        let (dx, dy) = d.delta();
+        let dir = vec2(dx as f32, dy as f32);
+        let side = vec2(-dir.y, dir.x);
+        let tip = c + dir * (CELL * z * 0.5);
+        let base = c + dir * (CELL * z * 0.3);
+        painter.add(Shape::convex_polygon(
+            vec![tip, base + side * 5.0 * z, base - side * 5.0 * z],
+            color,
+            Stroke::NONE,
+        ));
     }
 
-    /// A gate as its logic symbol, raised into a slab: AND's round front,
-    /// OR's pointed one, NOT's triangle, the bubble of NOT and NAND, XOR's
-    /// extra back line. Legs show where wires go: inputs from the sides it
-    /// reads (`inputs`, with their values' colours), the output in front.
-    fn gate(&mut self, p: Pos, gate: Gate, facing: Dir, inputs: &[(Dir, Color32)], out: Color32) {
+    /// A gate as its logic symbol, turned to face `facing`, with leads on
+    /// the sides it reads (coloured with the wires there) and in front.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_gate(
+        &self,
+        painter: &egui::Painter,
+        origin: Pos2,
+        p: Pos,
+        gate: Gate,
+        facing: Dir,
+        below: bool,
+        value_at: &dyn Fn(Pos, Lane) -> Option<bool>,
+    ) {
+        let z = self.zoom;
+        let fade = |c: Color32| faded(c, below);
+        let c = self.cell_rect(origin, p.x as f32, p.y as f32).center();
+        let s = CELL * z;
+        // Local frame: u along the facing, v to its right; units of a cell.
+        let (fx, fy) = facing.delta();
+        let (sx, sy) = facing.cw().delta();
+        let at = |u: f32, v: f32| {
+            c + vec2(u * fx as f32 + v * sx as f32, u * fy as f32 + v * sy as f32) * s
+        };
         let symbol = match gate {
             Gate::Not => Symbol::Not,
             Gate::And => Symbol::And,
@@ -217,771 +315,156 @@ impl Builder {
             Gate::Xor => Symbol::Xor,
         };
         let bubble = matches!(gate, Gate::Not | Gate::Nand | Gate::Nor);
-        let (cx, cy, z) = (p.x as f64 + 0.5, p.y as f64 + 0.5, p.z as f64);
-        // Local axes: u along the facing (front +), v across.
-        let (fx, fy) = facing.delta();
-        let (sx, sy) = facing.cw().delta();
-        let at = |u: f64, v: f64, h: f64| {
-            corner(
-                cx + u * fx as f64 + v * sx as f64,
-                cy + u * fy as f64 + v * sy as f64,
-                z + h,
-            )
+        let (u0, u1, half) = (-0.3, if bubble { 0.2 } else { 0.28 }, 0.3);
+
+        // Leads: the wire values reaching each input, and the output.
+        let wire = |d: Dir| {
+            let n = p.step(d);
+            let on =
+                self.world.accepts_wire(n, d.opposite()) && value_at(n, Lane::Main) == Some(true);
+            fade(if on { WIRE_ON } else { WIRE_OFF })
         };
-        // The body spans u in -0.32..0.24 (the bubble and lead beyond).
-        let (u0, u1, half) = (-0.32f32, if bubble { 0.18f32 } else { 0.26 }, 0.3f32);
-        let outline = gate_outline(symbol, u0, u1, -half, half);
-        let pts: Vec<(f64, f64)> = outline.iter().map(|q| (q.x as f64, q.y as f64)).collect();
-        let (lo, hi) = (0.06, GATE_H);
-        // The top: a fan from a point inside the body.
-        let mid = ((u0 + u1) as f64 / 2.0 - 0.04, 0.0);
-        let n = pts.len();
-        for i in 0..n {
-            let (a, b2) = (pts[i], pts[(i + 1) % n]);
-            self.triangle(
-                [at(mid.0, mid.1, hi), at(a.0, a.1, hi), at(b2.0, b2.1, hi)],
-                GATE,
-            );
-            // Sides, shaded by which way they face.
-            let (dx, dy) = (b2.0 - a.0, b2.1 - a.1);
-            let normal = at(dy, -dx, 0.0) - at(0.0, 0.0, 0.0);
-            let light = 0.62
-                + 0.2
-                    * (normal
-                        .normalize_or_zero()
-                        .dot(corner(0.3, 0.6, 0.0).normalize()))
-                    .abs();
-            self.quad(
-                [
-                    at(a.0, a.1, lo),
-                    at(b2.0, b2.1, lo),
-                    at(b2.0, b2.1, hi),
-                    at(a.0, a.1, hi),
-                ],
-                shade(GATE, light as f32),
-            );
-        }
-        // A dark base plate under the symbol.
-        self.cuboid(
-            at(-0.42, -0.42, 0.0).min(at(0.42, 0.42, 0.0)),
-            at(-0.42, -0.42, 0.06).max(at(0.42, 0.42, 0.06)),
-            Color32::from_rgb(52, 56, 66),
-        );
-        // XOR: a second curve behind the body, a thin curved wall.
-        if gate == Gate::Xor {
-            let w = (u1 - u0) as f64;
-            let curve: Vec<(f64, f64)> = (0..=12)
-                .map(|k| {
-                    let t = k as f64 / 12.0;
-                    let v = -half as f64 + 2.0 * half as f64 * t;
-                    (u0 as f64 - 0.09 + 4.0 * t * (1.0 - t) * w * 0.22, v)
-                })
-                .collect();
-            let t = 0.025;
-            for pair in curve.windows(2) {
-                let (a, b2) = (pair[0], pair[1]);
-                let (ai, ao) = (at(a.0 - t, a.1, hi), at(a.0 + t, a.1, hi));
-                let (bi, bo) = (at(b2.0 - t, b2.1, hi), at(b2.0 + t, b2.1, hi));
-                self.quad([ai, ao, bo, bi], GATE);
-                let dn = DVec3::Z * (hi - lo);
-                self.quad([ai - dn, bi - dn, bi, ai], shade(GATE, 0.7));
-                self.quad([ao - dn, bo - dn, bo, ao], shade(GATE, 0.7));
-            }
-        }
-        // The bubble: a small cylinder in front.
-        let front = if bubble {
-            let r = 0.055;
-            let c = u1 as f64 + r;
-            let ring: Vec<DVec3> = (0..12)
-                .map(|k| {
-                    let a = k as f64 / 12.0 * std::f64::consts::TAU;
-                    at(c + a.cos() * r, a.sin() * r, 0.0)
-                })
-                .collect();
-            for k in 0..12 {
-                let (a, b2) = (ring[k], ring[(k + 1) % 12]);
-                let up = DVec3::Z * hi;
-                let dn = DVec3::Z * lo;
-                self.triangle([at(c, 0.0, hi), a + up, b2 + up], GATE);
-                self.quad([a + dn, b2 + dn, b2 + up, a + up], shade(GATE, 0.7));
-            }
-            c + r
+        let stroke = |col| Stroke::new(3.0 * z, col);
+        let out = fade(match value_at(p, Lane::Main) {
+            Some(true) => WIRE_ON,
+            _ => WIRE_OFF,
+        });
+        painter.line_segment([at(u1, 0.0), at(0.5, 0.0)], stroke(out));
+        if gate.inputs() == 1 {
+            let d = facing.opposite();
+            painter.line_segment([at(-0.5, 0.0), at(u0, 0.0)], stroke(wire(d)));
         } else {
-            u1 as f64
-        };
-        // Legs: low bars from the cell's edges to the body.
-        let leg_h = (0.0, 0.1);
-        let leg = |s: &mut Self, from: (f64, f64), to: (f64, f64), c: Color32| {
-            let (a, b2) = (at(from.0, from.1, leg_h.0), at(to.0, to.1, leg_h.1));
-            s.cuboid(
-                a.min(b2) - DVec3::new(0.05, 0.05, 0.0).abs() * 0.0,
-                a.max(b2),
-                c,
-            );
-        };
-        let w = 0.05;
-        // Output: in front.
-        leg(self, (front, -w), (0.5, w), out);
-        for &(d, c) in inputs {
-            if d == facing.opposite() {
-                leg(self, (-0.5, -w), (u0 as f64, w), c);
-            } else {
-                // From the side edge to the body's back half.
-                let v = if d == facing.cw() { 1.0 } else { -1.0 };
-                let back = u0 as f64 + 0.12;
-                leg(self, (back - w, v * 0.5), (back + w, v * 0.18), c);
-                leg(
-                    self,
-                    (u0 as f64 - 0.02, v * 0.18 - w),
-                    (back + w, v * 0.18 + w),
-                    c,
-                );
-            }
-        }
-    }
-
-    /// An arrow lying on top of cell `p` at height `h`, pointing `d`.
-    fn arrow(&mut self, p: Pos, h: f64, d: Dir, c: Color32) {
-        let (dx, dy) = d.delta();
-        let (dx, dy) = (dx as f64, dy as f64);
-        let (cx, cy, z) = (p.x as f64 + 0.5, p.y as f64 + 0.5, p.z as f64 + h + 0.01);
-        let at = |u: f64, v: f64| corner(cx + dx * u - dy * v, cy + dy * u + dx * v, z);
-        self.triangle([at(0.40, 0.0), at(0.16, 0.18), at(0.16, -0.18)], c);
-    }
-}
-
-/// Text to draw over the scene at a world point, sized in cells.
-struct Label {
-    at: DVec3,
-    text: String,
-    size: f64,
-    color: Color32,
-    monospace: bool,
-}
-
-impl WorldView {
-    /// Put the eye where the whole world shows (or above the floor if the
-    /// world is empty).
-    pub(super) fn fit_camera(&mut self) {
-        match self.world.bounds() {
-            Some((lo, hi)) => {
-                let lo = corner(lo.x as f64, lo.y as f64, lo.z as f64);
-                let hi = corner(hi.x as f64 + 1.0, hi.y as f64 + 1.0, hi.z as f64 + 1.0);
-                self.camera.fit(lo, hi);
-            }
-            None => {
-                let o = corner(0.5, 0.5, self.layer as f64);
-                self.camera.look_from(o + corner(-6.0, -6.0, 7.0), o);
-            }
-        }
-    }
-
-    /// Put the eye where the whole world shows, at the next frame.
-    pub fn refit(&mut self) {
-        self.fit = true;
-    }
-
-    pub(super) fn draw(
-        &self,
-        painter: &egui::Painter,
-        rect: Rect,
-        screens: &HashMap<Pos, Vec<bool>>,
-    ) {
-        let cam = &self.camera;
-        let mut b = Builder {
-            mesh: Mesh::default(),
-            origin: cam.origin(),
-        };
-        let mut labels = Vec::new();
-        self.build_floor(&mut b);
-        self.build_blocks(&mut b, &mut labels, screens);
-        self.build_overlays(&mut b, &mut labels);
-
-        let ppp = painter.ctx().pixels_per_point();
-        let size = [
-            (rect.width() * ppp).round().max(1.0) as u32,
-            (rect.height() * ppp).round().max(1.0) as u32,
-        ];
-        Scene {
-            mesh: Arc::new(b.mesh),
-            view_proj: cam.view_proj((rect.width() / rect.height()) as f64),
-            eye: cam.eye_rel(),
-            fog: VIEW_DIST as f32,
-            background: BG,
-            size,
-            target: gpu::target_format(painter.ctx()),
-        }
-        .paint(painter, rect);
-
-        // Names and numbers over the scene, scaled with distance.
-        let px_per_cell = |w: DVec3| rect.height() as f64 / (1.4 * (cam.eye - w).length().max(0.1));
-        let eye = cam.eye;
-        for l in labels {
-            // Labels lie on top faces: hidden when looking from below.
-            if eye.z < l.at.z {
-                continue;
-            }
-            let px = (l.size * px_per_cell(l.at)) as f32;
-            if px < 7.0 {
-                continue;
-            }
-            if let Some(at) = cam.project(rect, l.at).filter(|p| rect.contains(*p)) {
-                let font = if l.monospace {
-                    FontId::monospace(px.min(40.0))
-                } else {
-                    FontId::proportional(px.min(40.0))
-                };
-                painter.text(at, Align2::CENTER_CENTER, l.text, font, l.color);
-            }
-        }
-    }
-
-    /// Grid lines on the floor layer, around the eye.
-    fn build_floor(&self, b: &mut Builder) {
-        let cam = &self.camera;
-        let z = self.layer as f64 + 0.002;
-        let height = (cam.eye.z - z).abs();
-        let r = (height * 3.0 + 24.0).min(64.0).floor();
-        let (cx, cy) = (cam.eye.x.floor(), cam.eye.y.floor());
-        let (x0, x1, y0, y1) = (cx - r, cx + r, cy - r, cy + r);
-        for i in 0..=(2.0 * r) as i32 {
-            let k = i as f64;
-            b.floor_line(corner(x0 + k, y0, z), corner(x0 + k, y1, z), GRID);
-            b.floor_line(corner(x0, y0 + k, z), corner(x1, y0 + k, z), GRID);
-        }
-    }
-
-    /// Every block near the eye.
-    fn build_blocks(
-        &self,
-        b: &mut Builder,
-        labels: &mut Vec<Label>,
-        screens: &HashMap<Pos, Vec<bool>>,
-    ) {
-        let cam = &self.camera;
-        let compiled = self.sim.compiled();
-        let values = self.sim.values();
-        let value_at = |p: Pos, lane: Lane| -> Option<bool> {
-            let o = compiled?.output_at(p, lane)?;
-            self.sim.output(o)
-        };
-        let lit = |p: Pos, lane: Lane| {
-            if value_at(p, lane) == Some(true) {
-                WIRE_ON
-            } else {
-                WIRE_OFF
-            }
-        };
-        let r = VIEW_DIST as i32;
-        let e = cam.eye.floor();
-        let (ex, ey, ez) = (e.x as i32, e.y as i32, e.z as i32);
-        let lo = Pos::new(ex - r, ey - r, ez - r);
-        let hi = Pos::new(ex + r, ey + r, ez + r);
-        let ahead = cam.forward();
-
-        for (p, block) in self.world.blocks_in(lo, hi) {
-            let centre = corner(p.x as f64 + 0.5, p.y as f64 + 0.5, p.z as f64 + 0.5);
-            let to = centre - cam.eye;
-            let far = to.length();
-            // Too far, or well behind the eye.
-            if far > VIEW_DIST || (far > 8.0 && to.dot(ahead) < -0.2 * far) {
-                continue;
-            }
-            let tint = |c: Color32| c;
-            let labelled = far < 24.0;
-            let (x, y, z) = (p.x as f64, p.y as f64, p.z as f64);
-            match block {
-                Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via => {
-                    let t = 0.11;
-                    let h = 0.1;
-                    for d in Dir::ALL {
-                        if !(self.world.accepts_wire(p, d)
-                            && self.world.accepts_wire(p.step(d), d.opposite()))
-                        {
-                            continue;
-                        }
-                        let lane = if matches!(block, Block::Cross) && !d.is_horizontal() {
-                            Lane::Cross
-                        } else {
-                            Lane::Main
-                        };
-                        // Crossing wires: the second lane runs over the first.
-                        let lift = if lane == Lane::Cross { 0.12 } else { 0.0 };
-                        let (dx, dy) = d.delta();
-                        let (ex, ey) = (x + 0.5 + dx as f64 * 0.5, y + 0.5 + dy as f64 * 0.5);
-                        let (ax, bx) = (ex.min(x + 0.5 - t), ex.max(x + 0.5 + t));
-                        let (ay, by) = (ey.min(y + 0.5 - t), ey.max(y + 0.5 + t));
-                        b.cuboid(
-                            corner(ax, ay, z + lift),
-                            corner(bx, by, z + h + lift),
-                            tint(lit(p, lane)),
-                        );
-                    }
-                    match block {
-                        Block::Via => {
-                            // A post; it reaches the via above, if any.
-                            let up = matches!(self.world.get(p.up()), Some(Block::Via));
-                            b.block(p, 0.32, if up { 1.0 } else { 0.35 }, tint(VIA));
-                        }
-                        Block::Cross => b.block(p, 0.36, 0.26, tint(BASE)),
-                        _ => b.block(p, 0.5 - t - 0.02, h + 0.02, tint(lit(p, Lane::Main))),
-                    }
-                }
-                Block::Gate { gate, facing } => {
-                    // The value each input reads: the wire on that side.
-                    let side = |d: Dir| {
-                        let n = p.step(d);
-                        let on = self.world.accepts_wire(n, d.opposite())
-                            && compiled
-                                .and_then(|c| c.output_at(n, Lane::Main))
-                                .and_then(|o| self.sim.output(o))
-                                == Some(true);
-                        if on {
-                            WIRE_ON
-                        } else {
-                            WIRE_OFF
-                        }
-                    };
-                    let inputs: Vec<(Dir, Color32)> = match gate.inputs() {
-                        1 => vec![(facing.opposite(), side(facing.opposite()))],
-                        _ => vec![
-                            (facing.ccw(), side(facing.ccw())),
-                            (facing.cw(), side(facing.cw())),
-                        ],
-                    };
-                    b.gate(p, *gate, *facing, &inputs, lit(p, Lane::Main));
-                    if labelled {
-                        labels.push(Label {
-                            at: corner(x + 0.5, y + 0.5, z + GATE_H),
-                            text: gate.name().into(),
-                            size: 0.17,
-                            color: Color32::from_rgb(30, 32, 38),
-                            monospace: false,
-                        });
-                    }
-                }
-                Block::Switch { on, facing } => {
-                    b.block(p, 0.1, 0.15, tint(BASE));
-                    b.block(p, 0.22, 0.3, tint(if *on { WIRE_ON } else { SWITCH_OFF }));
-                    b.arrow(p, 0.3, *facing, tint(Color32::WHITE));
-                }
-                Block::Lamp => {
-                    let on = self.sim.lamp_lit(p);
-                    b.block(p, 0.12, 0.75, tint(if on { LAMP_ON } else { LAMP_OFF }));
-                    if on {
-                        b.block(p, -0.08, 0.95, with_alpha(LAMP_ON, 45));
-                    }
-                }
-                Block::Clock { facing, .. } => {
-                    let on = value_at(p, Lane::Main) == Some(true);
-                    let c = if on {
-                        Color32::from_rgb(230, 160, 80)
-                    } else {
-                        Color32::from_rgb(120, 90, 60)
-                    };
-                    b.block(p, 0.1, 0.5, tint(c));
-                    b.arrow(p, 0.5, *facing, tint(Color32::WHITE));
-                }
-                Block::Port { name, facing, .. } => {
-                    b.block(p, 0.1, 0.4, tint(PORT));
-                    b.arrow(p, 0.4, *facing, tint(Color32::from_rgb(30, 32, 38)));
-                    if labelled {
-                        labels.push(Label {
-                            at: corner(x + 0.5, y + 0.5, z + 0.4),
-                            text: name.clone(),
-                            size: 0.26,
-                            color: Color32::from_rgb(20, 40, 30),
-                            monospace: false,
-                        });
-                    }
-                }
-                Block::Device { device, facing } => {
-                    self.build_device(
-                        b, labels, p, device, *facing, &tint, &lit, labelled, compiled, values,
-                        screens,
-                    );
-                }
-                Block::Cover { .. } => {}
-            }
-        }
-    }
-
-    /// A device: one box over all its cells, pins along its edges and its
-    /// face (screen pixels, a number, a name) on top.
-    #[allow(clippy::too_many_arguments)]
-    fn build_device(
-        &self,
-        b: &mut Builder,
-        labels: &mut Vec<Label>,
-        anchor: Pos,
-        d: &Device,
-        facing: Dir,
-        tint: &dyn Fn(Color32) -> Color32,
-        lit: &dyn Fn(Pos, Lane) -> Color32,
-        labelled: bool,
-        compiled: Option<&Compiled>,
-        values: &[u64],
-        screens: &HashMap<Pos, Vec<bool>>,
-    ) {
-        let (x0, y0, x1, y1) = extent(d, anchor, facing);
-        let h = 0.5;
-        let z = anchor.z as f64;
-        let body = match d {
-            Device::Ram { .. } => Color32::from_rgb(70, 110, 170),
-            Device::Rom { .. } => Color32::from_rgb(120, 90, 160),
-            Device::Screen { .. } => Color32::from_rgb(40, 44, 52),
-            Device::Keyboard => Color32::from_rgb(150, 150, 160),
-            Device::Display { .. } => Color32::from_rgb(40, 60, 50),
-            Device::Chip { .. } => Color32::from_rgb(55, 58, 66),
-        };
-        b.cuboid(
-            corner(x0 + 0.08, y0 + 0.08, z),
-            corner(x1 - 0.08, y1 - 0.08, z + h),
-            tint(body),
-        );
-        let top = z + h + 0.005;
-
-        // Local axes: u along the facing, v across (to its right).
-        let (fx, fy) = facing.delta();
-        let (sx, sy) = facing.cw().delta();
-        let local = |u: f64, v: f64| {
-            let (ax, ay) = (anchor.x as f64 + 0.5, anchor.y as f64 + 0.5);
-            corner(
-                ax + u * fx as f64 + v * sx as f64,
-                ay + u * fy as f64 + v * sy as f64,
-                top,
-            )
-        };
-        let (len, wide) = d.size();
-        let middle = local((len as f64 - 1.0) / 2.0, (wide as f64 - 1.0) / 2.0);
-
-        match d {
-            Device::Screen { bits } => {
-                let n = 1usize << bits;
-                let px = screens.get(&anchor);
-                // The screen fills the top, minus a border.
-                let cell = (len as f64 - 1.0) / n as f64;
-                for py in 0..n {
-                    for pxi in 0..n {
-                        let on = px.is_some_and(|p| p[py * n + pxi]);
-                        // Pixel x runs across (v), y along the facing (u).
-                        let (u0, v0) = (py as f64 * cell, pxi as f64 * cell);
-                        let c = if on {
-                            Color32::from_rgb(140, 255, 160)
-                        } else {
-                            Color32::from_rgb(25, 30, 28)
-                        };
-                        b.quad(
-                            [
-                                local(u0, v0),
-                                local(u0 + cell, v0),
-                                local(u0 + cell, v0 + cell),
-                                local(u0, v0 + cell),
-                            ],
-                            tint(c),
-                        );
-                    }
-                }
-            }
-            Device::Display { .. } => {
-                let v = compiled
-                    .and_then(|c| c.devices.iter().find(|i| i.anchor == anchor))
-                    .map(|i| {
-                        i.inputs
-                            .iter()
-                            .enumerate()
-                            .map(|(bit, o)| {
-                                let on = o.is_some_and(|o| values.get(o) == Some(&1));
-                                (on as u64) << bit
-                            })
-                            .sum::<u64>()
-                    })
-                    .unwrap_or(0);
-                if labelled {
-                    labels.push(Label {
-                        at: middle,
-                        text: format!("0x{v:X}\n{v}"),
-                        size: 0.42,
-                        color: Color32::from_rgb(120, 255, 150),
-                        monospace: true,
-                    });
-                }
-            }
-            _ => {
-                if labelled {
-                    let text = match d {
-                        Device::Ram { addr, data } | Device::Rom { addr, data, .. } => {
-                            format!("{}\n{}×{}", d.name(), 1u32 << addr, data)
-                        }
-                        _ => d.name().to_string(),
-                    };
-                    labels.push(Label {
-                        at: middle,
-                        text,
-                        size: 0.36,
-                        color: TEXT,
-                        monospace: false,
-                    });
-                }
+            for (d, v) in [(facing.ccw(), -1.0), (facing.cw(), 1.0)] {
+                // From the side edge round into the back of the body.
+                let k = v * 0.17;
+                let back = u0 - 0.08;
+                painter.line_segment([at(back, v * 0.5), at(back, k)], stroke(wire(d)));
+                painter.line_segment([at(back, k), at(u0 + 0.06, k)], stroke(wire(d)));
             }
         }
 
-        // Pins: a small block per pin on the edge, lit with its value.
-        let pins = device::layout(d, anchor, facing);
-        let sides = pins
-            .inputs
-            .iter()
-            .map(|p| (p, -0.36))
-            .chain(pins.outputs.iter().map(|p| (p, 0.36)));
-        for (&(cell, _), off) in sides {
-            let (x, y) = (
-                cell.x as f64 + 0.5 + off * fx as f64,
-                cell.y as f64 + 0.5 + off * fy as f64,
-            );
-            b.cuboid(
-                corner(x - 0.09, y - 0.09, top - 0.01),
-                corner(x + 0.09, y + 0.09, top + 0.06),
-                tint(lit(cell, Lane::Main)),
+        // The body, in the local frame then turned onto the cell.
+        let outline: Vec<Pos2> = gate_outline(symbol, u0, u1, -half, half)
+            .into_iter()
+            .map(|q| at(q.x, q.y))
+            .collect();
+        let line = Stroke::new(2.0 * z.max(0.6), fade(GATE_LINE));
+        if gate == Gate::Xor {
+            let pts: Vec<Pos2> = (0..=10)
+                .map(|k| {
+                    let t = k as f32 / 10.0;
+                    let v = -half + 2.0 * half * t;
+                    at(u0 - 0.09 + 4.0 * t * (1.0 - t) * (u1 - u0) * 0.2, v)
+                })
+                .collect();
+            painter.add(Shape::line(pts, line));
+        }
+        // Concave outlines (OR) cannot use a convex fill: fan from inside.
+        let mid = at((u0 + u1) / 2.0, 0.0);
+        let mut mesh = egui::Mesh::default();
+        let fill = fade(GATE_FILL);
+        mesh.colored_vertex(mid, fill);
+        for q in &outline {
+            mesh.colored_vertex(*q, fill);
+        }
+        let n = outline.len() as u32;
+        for i in 0..n {
+            mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+        }
+        painter.add(Shape::mesh(mesh));
+        painter.add(Shape::closed_line(outline, line));
+        if bubble {
+            painter.circle(at(u1 + 0.06, 0.0), 0.06 * s, fill, line);
+        }
+        if z > 0.8 && !below {
+            painter.text(
+                at((u0 + u1) / 2.0 - 0.02, 0.0),
+                Align2::CENTER_CENTER,
+                gate.name(),
+                FontId::proportional(7.5 * z),
+                TEXT,
             );
         }
     }
 
-    /// The cursor, the selection, blocks being pasted, other players and
-    /// short circuits.
-    fn build_overlays(&self, b: &mut Builder, labels: &mut Vec<Label>) {
-        let cell_box = |p: Pos, grow: f64, h: f64| {
-            (
-                corner(p.x as f64 - grow, p.y as f64 - grow, p.z as f64),
-                corner(
-                    p.x as f64 + 1.0 + grow,
-                    p.y as f64 + 1.0 + grow,
-                    p.z as f64 + h,
-                ),
-            )
-        };
-        // The block looked at, outlined thinly; the cell a block would go
-        // into, shaded (with the way the block would face).
-        if let Some(t) = self.target {
-            let (lo, hi) = cell_box(t, 0.01, 1.0);
-            b.thin_box(lo, hi, Color32::from_black_alpha(200));
-        }
-        if let Some(cell) = self
-            .hover
-            .filter(|c| self.pasting.is_none() && Some(*c) != self.target)
-        {
-            let (lo, hi) = cell_box(cell, -0.02, 0.0);
-            b.quad(
-                [
-                    corner(lo.x, lo.y, lo.z + 0.006),
-                    corner(hi.x, lo.y, lo.z + 0.006),
-                    corner(hi.x, hi.y, lo.z + 0.006),
-                    corner(lo.x, hi.y, lo.z + 0.006),
-                ],
-                Color32::from_white_alpha(40),
+    /// The cursor, the selection, blocks being pasted, the selected
+    /// device, other players and short circuits.
+    fn draw_overlays(&self, painter: &egui::Painter, origin: Pos2) {
+        let z = self.zoom;
+        if let Some(cell) = self.hover.filter(|_| self.pasting.is_none()) {
+            let r = self.cell_rect(origin, cell.x as f32, cell.y as f32);
+            painter.rect_stroke(
+                r,
+                2.0,
+                Stroke::new(2.0, Color32::from_white_alpha(170)),
+                egui::StrokeKind::Inside,
             );
             if self
                 .brush
                 .as_ref()
                 .is_some_and(|b| b.block.facing().is_some())
             {
-                b.arrow(cell, 0.0, self.facing, Color32::from_white_alpha(150));
-            }
-        }
-
-        // The selection spans every layer of its rectangle: show it around
-        // its blocks (or on the floor).
-        if let Some(r) = self.selection {
-            let zs: Vec<i32> = r.blocks(&self.world).iter().map(|(p, _)| p.z).collect();
-            let bottom = zs.iter().copied().min().unwrap_or(self.layer);
-            let top = zs.iter().copied().max().unwrap_or(self.layer);
-            let lo = corner(r.x0 as f64, r.y0 as f64, bottom as f64);
-            let hi = corner(r.x1 as f64 + 1.0, r.y1 as f64 + 1.0, top as f64 + 1.0);
-            b.cuboid(lo, hi, with_alpha(SELECT, 30));
-            b.wire_box(lo, hi, SELECT);
-        }
-
-        if let (Some(clip), Some(at)) = (&self.pasting, self.hover) {
-            for (p, _) in &clip.blocks {
-                let cell = Pos::new(at.x + p.x, at.y + p.y, at.z + p.z);
-                let (lo, hi) = cell_box(cell, -0.05, 0.6);
-                b.cuboid(lo, hi, with_alpha(PASTE, 70));
-            }
-        }
-
-        for (name, color, p) in &self.others {
-            let (lo, hi) = cell_box(*p, 0.02, 1.0);
-            b.cuboid(lo, hi, with_alpha(*color, 50));
-            b.wire_box(lo, hi, *color);
-            labels.push(Label {
-                at: corner(p.x as f64 + 0.5, p.y as f64 + 0.5, p.z as f64 + 1.4),
-                text: name.clone(),
-                size: 0.4,
-                color: *color,
-                monospace: false,
-            });
-        }
-
-        if let Some((anchor, d, f)) = self.selected_device() {
-            let (x0, y0, x1, y1) = extent(&d, anchor, f);
-            let z = anchor.z as f64;
-            b.wire_box(
-                corner(x0, y0, z),
-                corner(x1, y1, z + 0.62),
-                Color32::from_rgb(120, 200, 255),
-            );
-        }
-
-        if let Some(SimError::Compile(CompileError::ShortCircuit(ps))) = self.sim.error() {
-            for p in ps {
-                let (lo, hi) = cell_box(p, 0.08, 1.1);
-                b.cuboid(lo, hi, with_alpha(ERROR, 80));
-                b.wire_box(lo, hi, ERROR);
-            }
-        }
-    }
-
-    /// The crosshair and the hotbar: the palette along the bottom, the
-    /// block in hand raised.
-    pub(super) fn draw_hud(&self, painter: &egui::Painter, rect: Rect) {
-        use egui::{pos2, vec2, CornerRadius, Stroke, StrokeKind};
-        // Top left: the floor, and where the shortcuts are.
-        let corner_text = format!("Zemin: {}  (Q/E, F, G)\nKısayollar: H", self.layer);
-        let at = rect.left_top() + vec2(10.0, 8.0);
-        let galley = painter.layout_no_wrap(
-            corner_text,
-            FontId::proportional(13.0),
-            Color32::from_white_alpha(220),
-        );
-        painter.rect_filled(
-            Rect::from_min_size(at, galley.size()).expand(5.0),
-            CornerRadius::same(4),
-            Color32::from_black_alpha(140),
-        );
-        painter.galley(at, galley, Color32::WHITE);
-        if self.help {
-            self.draw_help(painter, rect);
-        }
-        if !self.locked {
-            painter.text(
-                rect.center(),
-                Align2::CENTER_CENTER,
-                "Dünyaya girmek için tıkla",
-                FontId::proportional(18.0),
-                Color32::from_white_alpha(200),
-            );
-            return;
-        }
-        let c = rect.center();
-        let cross = Stroke::new(2.0, Color32::from_white_alpha(220));
-        let shadow = Stroke::new(4.0, Color32::from_black_alpha(120));
-        for s in [shadow, cross] {
-            painter.line_segment([c - vec2(9.0, 0.0), c + vec2(9.0, 0.0)], s);
-            painter.line_segment([c - vec2(0.0, 9.0), c + vec2(0.0, 9.0)], s);
-        }
-
-        let items = super::palette();
-        let hand = self.hotbar_index();
-        let gap = 3.0;
-        let n = items.len() as f32;
-        let size = ((rect.width() - 16.0 - gap * (n - 1.0)) / n).clamp(30.0, 46.0);
-        let width = items.len() as f32 * (size + gap) - gap;
-        let y = rect.bottom() - size - 12.0;
-        let x0 = rect.center().x - width / 2.0;
-        for (i, (name, block, _)) in items.iter().enumerate() {
-            let chosen = hand == Some(i);
-            let r = Rect::from_min_size(
-                pos2(
-                    x0 + i as f32 * (size + gap),
-                    y - if chosen { 6.0 } else { 0.0 },
-                ),
-                vec2(size, size),
-            );
-            painter.rect_filled(r, CornerRadius::same(5), Color32::from_black_alpha(170));
-            painter.rect_stroke(
-                r,
-                CornerRadius::same(5),
-                if chosen {
-                    Stroke::new(2.5, Color32::WHITE)
-                } else {
-                    Stroke::new(1.0, Color32::from_white_alpha(60))
-                },
-                StrokeKind::Inside,
-            );
-            let sw = size * 0.35;
-            painter.rect_filled(
-                Rect::from_center_size(r.center() - vec2(0.0, size * 0.12), vec2(sw, sw)),
-                CornerRadius::same(3),
-                swatch(block),
-            );
-            painter.text(
-                r.center_bottom() - vec2(0.0, 3.0),
-                Align2::CENTER_BOTTOM,
-                *name,
-                FontId::proportional((size * 0.2).min(9.0)),
-                Color32::from_white_alpha(if chosen { 255 } else { 170 }),
-            );
-            if i < 9 {
-                painter.text(
-                    r.left_top() + vec2(4.0, 2.0),
-                    Align2::LEFT_TOP,
-                    format!("{}", i + 1),
-                    FontId::proportional(9.0),
+                self.lead(
+                    painter,
+                    r.center(),
+                    self.facing,
                     Color32::from_white_alpha(120),
                 );
             }
         }
-        // Something else in hand (a device, a chip, the select tool).
-        let other = match &self.brush {
-            None => Some("Seç aracı".to_string()),
-            Some(b) if hand.is_none() => Some(b.block.label()),
-            _ => None,
-        };
-        if let Some(text) = other {
-            painter.text(
-                pos2(rect.center().x, y - 14.0),
-                Align2::CENTER_BOTTOM,
-                format!("Elinde: {text}"),
-                FontId::proportional(14.0),
-                Color32::WHITE,
+        if let Some(r) = self.selection {
+            let rect = Rect::from_min_max(
+                self.to_screen(origin, r.x0 as f32, r.y0 as f32),
+                self.to_screen(origin, r.x1 as f32 + 1.0, r.y1 as f32 + 1.0),
+            );
+            painter.rect_filled(rect, 0.0, SELECT.gamma_multiply(0.1));
+            painter.rect_stroke(
+                rect,
+                0.0,
+                Stroke::new(2.0, SELECT),
+                egui::StrokeKind::Inside,
             );
         }
-    }
-
-    /// The shortcut list, over the right side of the view.
-    fn draw_help(&self, painter: &egui::Painter, rect: Rect) {
-        use egui::{vec2, CornerRadius};
-        let font = FontId::proportional(13.0);
-        let rows: Vec<_> = super::SHORTCUTS
-            .iter()
-            .map(|(k, what)| {
-                (
-                    painter.layout_no_wrap(
-                        k.to_string(),
-                        font.clone(),
-                        Color32::from_rgb(255, 210, 80),
-                    ),
-                    painter.layout_no_wrap(what.to_string(), font.clone(), Color32::WHITE),
-                )
-            })
-            .collect();
-        let key_w = rows.iter().map(|(k, _)| k.size().x).fold(0.0, f32::max);
-        let what_w = rows.iter().map(|(_, w)| w.size().x).fold(0.0, f32::max);
-        let line = 18.0;
-        let size = vec2(key_w + what_w + 16.0, rows.len() as f32 * line + 26.0);
-        let at = rect.right_top() + vec2(-size.x - 18.0, 10.0);
-        let bg = Rect::from_min_size(at, size).expand(8.0);
-        painter.rect_filled(bg, CornerRadius::same(6), Color32::from_black_alpha(200));
-        painter.text(
-            at,
-            Align2::LEFT_TOP,
-            "Kısayollar (H: kapat)",
-            FontId::proportional(14.0),
-            Color32::WHITE,
-        );
-        for (i, (k, w)) in rows.into_iter().enumerate() {
-            let y = at.y + 24.0 + i as f32 * line;
-            painter.galley(egui::pos2(at.x, y), k, Color32::WHITE);
-            painter.galley(egui::pos2(at.x + key_w + 16.0, y), w, Color32::WHITE);
+        if let (Some(clip), Some(at)) = (&self.pasting, self.hover) {
+            for (p, _) in &clip.blocks {
+                let r = self.cell_rect(origin, (at.x + p.x) as f32, (at.y + p.y) as f32);
+                painter.rect_filled(r.shrink(1.0), 2.0, PASTE.gamma_multiply(0.3));
+            }
+        }
+        if let Some((anchor, d, f)) = self.selected_device() {
+            let (x0, y0, x1, y1) = extent(&d, anchor, f);
+            let rect = Rect::from_min_max(
+                self.to_screen(origin, x0, y0),
+                self.to_screen(origin, x1, y1),
+            );
+            painter.rect_stroke(
+                rect,
+                3.0,
+                Stroke::new(2.5, Color32::from_rgb(120, 200, 255)),
+                egui::StrokeKind::Outside,
+            );
+        }
+        for (name, color, p) in &self.others {
+            let r = self.cell_rect(origin, p.x as f32, p.y as f32);
+            painter.rect_stroke(r, 2.0, Stroke::new(2.5, *color), egui::StrokeKind::Outside);
+            let label = if p.z == self.layer {
+                name.clone()
+            } else {
+                format!("{name} (katman {})", p.z)
+            };
+            painter.text(
+                r.center_top() - vec2(0.0, 2.0),
+                Align2::CENTER_BOTTOM,
+                label,
+                FontId::proportional(12.0),
+                *color,
+            );
+        }
+        if let Some(SimError::Compile(CompileError::ShortCircuit(ps))) = self.sim.error() {
+            for p in ps.iter().filter(|p| p.z == self.layer) {
+                let c = self.cell_rect(origin, p.x as f32, p.y as f32).center();
+                painter.circle_stroke(c, 0.6 * CELL * z, Stroke::new(3.0, ERROR));
+            }
         }
     }
 
@@ -1004,19 +487,155 @@ impl WorldView {
             .filter_map(|(a, n)| Some((a, device::screen(sim, &n)?)))
             .collect()
     }
-}
 
-/// The colour a palette block shows in the hotbar.
-fn swatch(b: &Block) -> Color32 {
-    match b {
-        Block::Wire | Block::Straight { .. } => WIRE_ON,
-        Block::Cross => BASE,
-        Block::Via => VIA,
-        Block::Gate { .. } => GATE,
-        Block::Switch { .. } => SWITCH_OFF,
-        Block::Lamp => LAMP_ON,
-        Block::Clock { .. } => Color32::from_rgb(230, 160, 80),
-        Block::Port { .. } => PORT,
-        Block::Device { .. } | Block::Cover { .. } => Color32::from_rgb(70, 110, 170),
+    /// A device: one rectangle over all its cells, pins along its edges and
+    /// its face (screen pixels, a number, a name) inside.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_device(
+        &self,
+        painter: &egui::Painter,
+        origin: Pos2,
+        anchor: Pos,
+        d: &Device,
+        facing: Dir,
+        below: bool,
+        value_at: &dyn Fn(Pos, Lane) -> Option<bool>,
+        compiled: Option<&Compiled>,
+        values: &[u64],
+        screens: &HashMap<Pos, Vec<bool>>,
+    ) {
+        let fade = |c: Color32| faded(c, below);
+        let z = self.zoom;
+        let (x0, y0, x1, y1) = extent(d, anchor, facing);
+        let body = match d {
+            Device::Ram { .. } => Color32::from_rgb(70, 110, 170),
+            Device::Rom { .. } => Color32::from_rgb(120, 90, 160),
+            Device::Screen { .. } => Color32::from_rgb(40, 44, 52),
+            Device::Keyboard => Color32::from_rgb(150, 150, 160),
+            Device::Display { .. } => Color32::from_rgb(40, 60, 50),
+            Device::Chip { .. } => Color32::from_rgb(55, 58, 66),
+        };
+        let rect = Rect::from_min_max(
+            self.to_screen(origin, x0 + 0.08, y0 + 0.08),
+            self.to_screen(origin, x1 - 0.08, y1 - 0.08),
+        );
+        painter.rect_filled(rect, 4.0 * z, fade(body));
+        painter.rect_stroke(
+            rect,
+            4.0 * z,
+            Stroke::new(1.5, fade(body.gamma_multiply(1.6))),
+            egui::StrokeKind::Inside,
+        );
+
+        // Local axes: u along the facing, v across (to its right).
+        let (fx, fy) = facing.delta();
+        let (sx, sy) = facing.cw().delta();
+        let local = |u: f32, v: f32| {
+            let (ax, ay) = (anchor.x as f32 + 0.5, anchor.y as f32 + 0.5);
+            self.to_screen(
+                origin,
+                ax + u * fx as f32 + v * sx as f32,
+                ay + u * fy as f32 + v * sy as f32,
+            )
+        };
+        let (len, wide) = d.size();
+        let middle = local((len as f32 - 1.0) / 2.0, (wide as f32 - 1.0) / 2.0);
+
+        match d {
+            Device::Screen { bits } => {
+                let n = 1usize << bits;
+                let px = screens.get(&anchor);
+                let cell = (len as f32 - 1.0) / n as f32;
+                for py in 0..n {
+                    for pxi in 0..n {
+                        let on = px.is_some_and(|p| p[py * n + pxi]);
+                        // Seen from above, facing east: pixel x along the
+                        // facing (u), y across it (v).
+                        let (u0, v0) = (pxi as f32 * cell, py as f32 * cell);
+                        let r = Rect::from_points(&[local(u0, v0), local(u0 + cell, v0 + cell)]);
+                        let c = if on {
+                            Color32::from_rgb(140, 255, 160)
+                        } else {
+                            Color32::from_rgb(25, 30, 28)
+                        };
+                        painter.rect_filled(r, 0.0, fade(c));
+                    }
+                }
+            }
+            Device::Display { .. } => {
+                let v = compiled
+                    .and_then(|c| c.devices.iter().find(|i| i.anchor == anchor))
+                    .map(|i| {
+                        i.inputs
+                            .iter()
+                            .enumerate()
+                            .map(|(b, o)| {
+                                let on = o.is_some_and(|o| values.get(o) == Some(&1));
+                                (on as u64) << b
+                            })
+                            .sum::<u64>()
+                    })
+                    .unwrap_or(0);
+                painter.text(
+                    middle,
+                    Align2::CENTER_CENTER,
+                    format!("0x{v:X}\n{v}"),
+                    FontId::monospace(14.0 * z),
+                    fade(Color32::from_rgb(120, 255, 150)),
+                );
+            }
+            _ => {
+                let label = match d {
+                    Device::Ram { addr, data } | Device::Rom { addr, data, .. } => {
+                        format!("{}\n{}×{}", d.name(), 1u32 << addr, data)
+                    }
+                    _ => d.name().to_string(),
+                };
+                painter.text(
+                    middle,
+                    Align2::CENTER_CENTER,
+                    label,
+                    FontId::proportional(12.0 * z),
+                    fade(Color32::WHITE),
+                );
+            }
+        }
+
+        // Pins: a dot per pin on its edge, lit with its value, and the
+        // pin's name when zoomed in.
+        let pins = device::layout(d, anchor, facing);
+        let names = d.inputs().into_iter().chain(d.outputs());
+        let sides = pins
+            .inputs
+            .iter()
+            .map(|p| (p, -0.36))
+            .chain(pins.outputs.iter().map(|p| (p, 0.36)));
+        for ((&(cell, _), off), name) in sides.zip(names) {
+            let at = self.to_screen(
+                origin,
+                cell.x as f32 + 0.5 + off * fx as f32,
+                cell.y as f32 + 0.5 + off * fy as f32,
+            );
+            let c = match value_at(cell, Lane::Main) {
+                Some(true) => WIRE_ON,
+                _ => WIRE_OFF,
+            };
+            painter.circle_filled(at, 3.5 * z, fade(c));
+            if z > 1.2 && !below {
+                let inward = vec2(fx as f32, fy as f32) * (-off.signum() * 9.0 * z);
+                painter.text(
+                    at + inward,
+                    Align2::CENTER_CENTER,
+                    name,
+                    FontId::proportional(7.0 * z),
+                    Color32::from_white_alpha(170),
+                );
+            }
+        }
+    }
+
+    /// Fit the camera to the world at the next frame.
+    pub fn refit(&mut self) {
+        self.fit = true;
     }
 }

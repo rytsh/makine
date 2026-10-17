@@ -1,24 +1,17 @@
-//! The 3D world view: draws the block world and lets the player fly
-//! through it and build, like Minecraft's creative mode.
+//! The world view: the block world seen from above, one layer at a time,
+//! and building in it.
 //!
-//! Clicking the view takes the mouse: moving it looks around, and the
-//! crosshair in the middle aims. WASD or the arrow keys fly, Space rises,
-//! Shift sinks, Ctrl goes faster. Left click breaks the block aimed at,
-//! right click builds against the face aimed at (or uses a switch, clock,
-//! port or device; Shift+right click builds on it anyway), middle click
-//! takes the block aimed at in hand. Holding a button repeats it. 1–9 and
-//! the wheel choose the block in hand; placed blocks face the way the
-//! player looks. Esc gives the mouse back, for the side panels.
+//! The world has no edges, in height either. The player edits one layer;
+//! the one below shows through faintly, so they see what they build on.
 //!
-//! With the select tool, left click marks one corner of a region and right
-//! click the other (Ctrl+C/X/V, Alt+arrows move it, Del deletes). While
-//! pasting, right click puts the blocks down and R turns them.
-//!
-//! The world has no edges. The floor layer is an invisible ground (with a
-//! grid) to build on in empty space. Every key is listed in [`SHORTCUTS`],
-//! which the view shows with H and the side panel lists.
+//! Controls: left click places the selected block (drag to paint) or, on a
+//! device, selects it; right click removes; R turns the block being placed
+//! (or the blocks being pasted); Q/E or Page Up/Down change layer;
+//! middle-drag or Space+drag pans; the wheel zooms. With the select tool,
+//! dragging selects a region (Ctrl+C/X/V, arrows move it, Del deletes).
+//! Every key is listed in [`SHORTCUTS`], shown in the side panel.
 
-use egui::{Color32, Key, PointerButton, Rect, Sense, Ui, Vec2, ViewportCommand};
+use egui::{vec2, Color32, Sense, Ui, Vec2};
 use makine_sim::Library;
 use makine_world::block::{Block, Dir};
 use makine_world::device::{self, Device};
@@ -28,44 +21,37 @@ use makine_world::{Change, Edit, Pos, World};
 
 use crate::worldsim::WorldSim;
 
-mod aim;
-mod camera;
-pub mod gpu;
 mod panels;
 mod render;
 #[cfg(test)]
 mod tests;
 
-pub use camera::Camera;
 pub use panels::palette;
+use render::BG;
 
-/// Every key of the world view: (keys, what they do). Shown in the view
-/// (H) and in the side panel.
+/// Every key of the world view: (keys, what they do), for the side panel.
 pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("Tıkla", "dünyaya gir (fare kilitlenir)"),
-    ("Esc", "fareyi bırak"),
-    ("Fare", "etrafa bak"),
-    ("WASD / yön tuşları", "uç"),
-    ("Boşluk / Shift", "yüksel / alçal"),
-    ("Ctrl", "hızlı uç"),
-    ("Sol tık", "kır"),
-    ("Sağ tık", "koy (baktığın yüzün önüne); anahtarı aç/kapa"),
-    ("Shift+sağ tık", "anahtarın, cihazın önüne yine de koy"),
-    ("Orta tık", "baktığın bloğu eline al"),
-    ("1–9 / tekerlek", "blok seç"),
-    ("Q / E", "zemini bir kat indir / çıkar"),
-    ("F", "zemini baktığın bloğun katına getir"),
-    ("G", "zemini ayağının altına getir"),
-    ("V", "seç aracı (sol tık: köşe, sağ tık: öbür köşe)"),
+    (
+        "Sol tık",
+        "koy (sürükleyerek boya); anahtarı aç/kapa; cihazı seç",
+    ),
+    ("Sağ tık", "sil (sürükleyerek de)"),
+    ("R / Shift+R", "döndür (koyulacak blok ya da yapıştırılan)"),
+    ("Q / E", "bir katman aşağı / yukarı"),
+    ("Page Down / Up", "bir katman aşağı / yukarı"),
+    ("1–9", "blok seç"),
+    ("V", "seç aracı"),
+    ("Shift+sürükle", "blok tutarken alan seç"),
     ("Ctrl+C / X / V", "kopyala / kes / yapıştır"),
-    ("Alt+yön tuşları", "seçimi taşı"),
+    ("Yön tuşları", "seçimi taşı"),
     ("Delete", "seçimi sil"),
-    ("R", "yapıştırılanı döndür"),
+    ("Esc", "yapıştırmayı ya da seçimi bırak"),
     ("Ctrl+Z / Ctrl+Y", "geri al / yinele"),
+    ("Tekerlek", "yakınlaştır"),
+    ("Orta tuş / Boşluk+sürükle", "kaydır"),
     ("P", "saatleri durdur / başlat"),
     ("N", "durmuşken bir adım ilerlet"),
     ("Home", "bütün dünyayı göster"),
-    ("H", "bu listeyi aç / kapa"),
 ];
 
 /// The block the player is placing.
@@ -76,27 +62,13 @@ pub struct Brush {
 
 pub struct WorldView {
     pub world: World,
-    /// The floor: an invisible ground at this layer, to build on in empty
-    /// space.
+    /// Layer being edited.
     pub layer: i32,
     pub brush: Option<Brush>,
-    /// Facing applied to placed blocks: the way the player looks.
+    /// Facing applied to placed blocks; R rotates it.
     pub facing: Dir,
-    pub camera: Camera,
-    /// Whether the view has the mouse (looking around, crosshair aiming).
-    pub locked: bool,
-    /// Raw mouse movement has been seen (else pointer movement is used).
-    raw_mouse: bool,
-    /// The cursor was just moved back to the middle: ignore its jump.
-    warped: bool,
-    /// A held mouse button and when it acts again.
-    repeat: Option<(PointerButton, f64)>,
-    /// The shortcut list is shown over the view.
-    pub help: bool,
-    /// The tool before V switched to selecting, to switch back.
-    last_brush: Option<Brush>,
-    /// Where the view was drawn last frame.
-    rect: Rect,
+    pan: Vec2,
+    zoom: f32,
     /// This player's changes, newest last. Undo only takes back cells
     /// nobody else has changed since.
     undo: Vec<Change>,
@@ -105,12 +77,15 @@ pub struct WorldView {
     pub sim: WorldSim,
     /// Rebuilding the circuit waits for the end of a drag (large worlds).
     defer: bool,
-    /// Cell under the pointer last frame: where a block would go.
+    /// Cell under the pointer last frame.
     hover: Option<Pos>,
-    /// The block under the pointer last frame, when building.
-    target: Option<Pos>,
+    /// The last cell painted in the current drag, so dragging does not
+    /// repaint the same cell every frame.
+    painted: Option<Pos>,
     /// Centre the camera on the world at the next frame.
     fit: bool,
+    /// The tool before V switched to selecting, to switch back.
+    last_brush: Option<Brush>,
     /// Anchor of the selected device.
     pub selected: Option<Pos>,
     /// A selected clock or port, for its settings.
@@ -120,7 +95,7 @@ pub struct WorldView {
     /// ROM contents being edited: device anchor, text in the box, the
     /// contents the text was made from, parse error.
     rom_text: Option<(Pos, String, Option<String>, Option<String>)>,
-    /// Selected region, and its first corner.
+    /// Selected region, and the corner where a selection drag started.
     pub selection: Option<Region>,
     sel_start: Option<Pos>,
     /// Blocks being pasted: they follow the pointer until clicked down.
@@ -160,21 +135,16 @@ impl WorldView {
             layer: 0,
             brush: Some(Brush { block: Block::Wire }),
             facing: Dir::East,
-            camera: Camera::default(),
-            locked: false,
-            raw_mouse: false,
-            warped: false,
-            repeat: None,
-            help: false,
-            last_brush: None,
-            rect: Rect::NOTHING,
+            pan: vec2(0.0, 0.0),
+            zoom: 1.0,
             undo: Vec::new(),
             redo: Vec::new(),
             sim: WorldSim::default(),
             defer: false,
             hover: None,
-            target: None,
+            painted: None,
             fit: true,
+            last_brush: None,
             selected: None,
             selected_block: None,
             status: None,
@@ -418,68 +388,229 @@ impl WorldView {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
-        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click());
+        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
-        self.rect = rect;
+        let origin = rect.center_top() + vec2(0.0, 80.0);
+        painter.rect_filled(rect, 0.0, BG);
         if std::mem::take(&mut self.fit) {
-            self.fit_camera();
+            self.fit_to(rect, origin);
         }
-        let ctx = ui.ctx().clone();
-        // A click takes the mouse (and does nothing else); leaving the
-        // window gives it back.
-        if !self.locked && response.clicked() {
-            self.lock(&ctx);
-        } else if self.locked && !ui.input(|i| i.focused) {
-            self.release(&ctx);
-        }
-        let keyboard = !ctx.egui_wants_keyboard_input();
-        if self.typing() {
-            self.type_keys(ui);
-        } else if keyboard && (self.locked || response.hovered()) {
-            self.keys(ui);
-        }
-        if self.locked {
-            self.look(ui);
-            if keyboard && !self.typing() && self.fly(ui) {
-                ui.ctx().request_repaint();
+
+        // Camera: wheel zooms around the pointer, middle-drag or Space+drag
+        // pans.
+        if let Some(hp) = response.hover_pos() {
+            let (scroll, zd) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            let f = zd * (scroll * 0.0015).exp();
+            if f != 1.0 {
+                let new = (self.zoom * f).clamp(0.3, 3.0);
+                let anchor = hp - origin - self.pan;
+                self.pan += anchor - anchor * (new / self.zoom);
+                self.zoom = new;
             }
-            self.keep_pointer(ui, rect);
-            self.facing = self.camera.facing();
+        }
+        let space = ui.input(|i| i.key_down(egui::Key::Space));
+        if response.dragged_by(egui::PointerButton::Middle)
+            || (space && response.dragged_by(egui::PointerButton::Primary))
+        {
+            self.pan += response.drag_delta();
         }
 
-        // What the crosshair aims at.
-        let aimed = self
-            .locked
-            .then(|| {
-                aim::aim(
-                    &self.world,
-                    &self.camera.ray(rect, rect.center()),
-                    self.layer,
+        // Keys. While a keyboard device is selected, typing goes to it.
+        if self.typing() {
+            let keys: Vec<u8> = ui.input(|i| {
+                let mut out = Vec::new();
+                for e in &i.events {
+                    match e {
+                        egui::Event::Text(t) => {
+                            out.extend(t.chars().filter(char::is_ascii).map(|c| c as u8))
+                        }
+                        egui::Event::Key {
+                            key, pressed: true, ..
+                        } => match key {
+                            egui::Key::Enter => out.push(b'\n'),
+                            egui::Key::Backspace => out.push(8),
+                            egui::Key::Escape => out.push(27),
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+                out
+            });
+            if keys.contains(&27) {
+                self.selected = None;
+            } else {
+                if let Some(anchor) = self.selected {
+                    for k in keys {
+                        self.sim.press(anchor, k);
+                    }
+                }
+            }
+        } else if response.hovered() || response.has_focus() {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if self.pasting.take().is_some() {
+                    self.status = None;
+                } else if self.selected.take().is_none() && self.selected_block.take().is_none() {
+                    self.selection = None;
+                }
+            }
+            // Clipboard: egui turns Ctrl+C/X/V into these events.
+            let events = ui.input(|i| i.events.clone());
+            for e in events {
+                match e {
+                    egui::Event::Copy => {
+                        if let Some(t) = self.copy() {
+                            ui.ctx().copy_text(t);
+                        }
+                    }
+                    egui::Event::Cut => {
+                        if let Some(t) = self.cut() {
+                            ui.ctx().copy_text(t);
+                        }
+                    }
+                    egui::Event::Paste(t) => self.start_paste(Some(&t)),
+                    _ => {}
+                }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                self.delete_selection();
+            }
+            if self.selection.is_some() && self.pasting.is_none() {
+                let step = ui.input(|i| {
+                    let mut d = (0, 0);
+                    if i.key_pressed(egui::Key::ArrowRight) {
+                        d.0 += 1
+                    }
+                    if i.key_pressed(egui::Key::ArrowLeft) {
+                        d.0 -= 1
+                    }
+                    if i.key_pressed(egui::Key::ArrowDown) {
+                        d.1 += 1
+                    }
+                    if i.key_pressed(egui::Key::ArrowUp) {
+                        d.1 -= 1
+                    }
+                    d
+                });
+                if step != (0, 0) {
+                    self.move_selection(step.0, step.1);
+                }
+            }
+            let (rotate, back) = ui.input(|i| (i.key_pressed(egui::Key::R), i.modifiers.shift));
+            if rotate {
+                match &mut self.pasting {
+                    // Three turns clockwise are one counter-clockwise.
+                    Some(c) => {
+                        for _ in 0..if back { 3 } else { 1 } {
+                            *c = c.rotated();
+                        }
+                    }
+                    None if back => self.facing = self.facing.ccw(),
+                    None => self.facing = self.facing.cw(),
+                }
+            }
+            self.shortcut_keys(ui);
+            let (undo, redo) = ui.input(|i| {
+                let cmd = i.modifiers.command;
+                (
+                    cmd && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
+                    cmd && (i.key_pressed(egui::Key::Y)
+                        || (i.modifiers.shift && i.key_pressed(egui::Key::Z))),
                 )
-            })
-            .flatten();
-        self.hover = aimed.map(|a| a.place);
-        self.target = aimed.and_then(|a| a.target);
-        if self.locked {
-            self.buttons(ui, aimed);
+            });
+            if undo {
+                self.undo();
+            }
+            if redo {
+                self.redo();
+            }
         }
 
-        // Large worlds recompile only when no button is held, so building
-        // stays smooth.
+        // Pointer: which cell?
+        self.hover = response
+            .hover_pos()
+            .map(|p| self.pick(origin, p, self.layer));
+
+        // Pasting: a click puts the blocks down; right click stops.
+        let shift = ui.input(|i| i.modifiers.shift);
+        if self.pasting.is_some() && !space {
+            if let (true, Some(cell)) = (response.clicked(), self.hover) {
+                self.paste_at(cell);
+            }
+            if response.secondary_clicked() {
+                self.pasting = None;
+                self.status = None;
+            }
+        } else if (self.selecting() || shift) && !space {
+            // Selecting: drag a rectangle; a click selects one cell (and the
+            // device there).
+            if response.drag_started_by(egui::PointerButton::Primary) {
+                let press = ui.input(|i| i.pointer.press_origin());
+                self.sel_start = press.map(|p| self.pick(origin, p, self.layer));
+            }
+            if let (Some(a), Some(b)) = (self.sel_start, self.hover) {
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    self.selection = Some(Region::between(a, b));
+                }
+            }
+            if response.drag_stopped() {
+                self.sel_start = None;
+            }
+            if let (true, Some(cell)) = (response.clicked(), self.hover) {
+                self.selection = Some(Region::between(cell, cell));
+                self.selected = self.world.device_at(cell).map(|d| d.0);
+            }
+            if response.secondary_clicked() {
+                self.selection = None;
+            }
+        } else if !space {
+            // A drag is only recognized once the pointer has moved; paint the
+            // cell where the press started too.
+            if response.drag_started() {
+                self.painted = None;
+                let press = ui.input(|i| i.pointer.press_origin());
+                if let Some(start) = press.map(|p| self.pick(origin, p, self.layer)) {
+                    if response.dragged_by(egui::PointerButton::Primary) {
+                        self.painted = Some(start);
+                        self.place(start, false);
+                    } else if response.dragged_by(egui::PointerButton::Secondary) {
+                        self.painted = Some(start);
+                        self.erase(start);
+                    }
+                }
+            }
+            if let Some(cell) = self.hover {
+                let primary =
+                    response.clicked() || response.dragged_by(egui::PointerButton::Primary);
+                let secondary = response.secondary_clicked()
+                    || response.dragged_by(egui::PointerButton::Secondary);
+                if response.clicked() || response.secondary_clicked() {
+                    self.painted = None;
+                }
+                if primary && self.painted != Some(cell) {
+                    self.painted = Some(cell);
+                    self.place(cell, response.clicked());
+                } else if secondary && self.painted != Some(cell) {
+                    self.painted = Some(cell);
+                    self.erase(cell);
+                }
+            }
+        }
+
+        // Large worlds recompile only when the pointer is released, so
+        // painting stays smooth.
         let held = ui.input(|i| i.pointer.any_down());
         self.defer = held && self.sim.slow();
 
         // Simulate and draw.
         self.sim.run_frame(&self.world, self.defer);
         let screens = self.screens();
-        self.draw(&painter, rect, &screens);
-        self.draw_hud(&painter, rect);
-        if self.repeat.is_some()
-            || self.sim.running
-                && self
-                    .world
-                    .blocks()
-                    .any(|(_, b)| matches!(b, Block::Clock { .. }))
+        self.draw(&painter, origin, rect, &screens);
+        if self.sim.running
+            && self
+                .world
+                .blocks()
+                .any(|(_, b)| matches!(b, Block::Clock { .. }))
             || self.typing()
             || self.defer
         {
@@ -487,219 +618,43 @@ impl WorldView {
         }
     }
 
-    /// Take the mouse: hide it and keep it in the window.
-    fn lock(&mut self, ctx: &egui::Context) {
-        self.locked = true;
-        // Locked where supported (Wayland, macOS), else confined (X11,
-        // Windows), where the pointer is also put back in the middle.
-        ctx.send_viewport_cmd(ViewportCommand::CursorGrab(egui::CursorGrab::Confined));
-        ctx.send_viewport_cmd(ViewportCommand::CursorGrab(egui::CursorGrab::Locked));
-        ctx.send_viewport_cmd(ViewportCommand::CursorVisible(false));
-    }
-
-    /// Give the mouse back (Esc, leaving the window or the world view).
-    pub fn release(&mut self, ctx: &egui::Context) {
-        if std::mem::take(&mut self.locked) {
-            ctx.send_viewport_cmd(ViewportCommand::CursorGrab(egui::CursorGrab::None));
-            ctx.send_viewport_cmd(ViewportCommand::CursorVisible(true));
-        }
-        self.repeat = None;
-    }
-
-    /// Where the pointer can still move, keep it in the middle of the view,
-    /// so clicks land here and it never reaches an edge.
-    fn keep_pointer(&mut self, ui: &Ui, rect: Rect) {
-        let p = ui.input(|i| i.pointer.latest_pos());
-        if p.is_some_and(|p| (p - rect.center()).length() > rect.width().min(rect.height()) / 4.0) {
-            ui.ctx()
-                .send_viewport_cmd(ViewportCommand::CursorPosition(rect.center()));
-            self.warped = true;
-        }
-    }
-
-    /// The mouse turns the eye.
-    fn look(&mut self, ui: &Ui) {
-        let (raw, moved) = ui.input(|i| {
-            let raw = i.events.iter().fold(Vec2::ZERO, |sum, e| match e {
-                egui::Event::MouseMoved(d) => sum + *d,
-                _ => sum,
-            });
-            (raw, i.pointer.delta())
-        });
-        if raw != Vec2::ZERO {
-            self.raw_mouse = true;
-        }
-        let d = if self.raw_mouse {
-            raw
-        } else if std::mem::take(&mut self.warped) {
-            Vec2::ZERO
-        } else {
-            moved
-        };
-        self.camera.turn(d.x, d.y);
-    }
-
-    /// WASD or the arrows fly along the ground, Space and Shift up and
-    /// down, Ctrl faster. (Alt+arrows move the selection instead.) Returns
-    /// whether a key is held.
-    fn fly(&mut self, ui: &Ui) -> bool {
-        let (f, r, u, fast, dt) = ui.input(|i| {
-            let k = |a: Key, b: Key| (i.key_down(a) || i.key_down(b)) as i32 as f64;
-            let arrows = !i.modifiers.alt;
-            let a = |key: Key| (arrows && i.key_down(key)) as i32 as f64;
-            let f =
-                k(Key::W, Key::W).max(a(Key::ArrowUp)) - k(Key::S, Key::S).max(a(Key::ArrowDown));
-            let r = k(Key::D, Key::D).max(a(Key::ArrowRight))
-                - k(Key::A, Key::A).max(a(Key::ArrowLeft));
-            let u = k(Key::Space, Key::Space) - i.modifiers.shift as i32 as f64;
-            (f, r, u, i.modifiers.ctrl, i.stable_dt.min(0.1) as f64)
-        });
-        let speed = camera::FLY_SPEED * if fast { 3.0 } else { 1.0 };
-        self.camera.fly(f, r, u, speed * dt);
-        f != 0.0 || r != 0.0 || u != 0.0
-    }
-
-    /// Keys typed while a keyboard device is selected go to it; Esc leaves.
-    fn type_keys(&mut self, ui: &Ui) {
-        let keys: Vec<u8> = ui.input(|i| {
-            let mut out = Vec::new();
-            for e in &i.events {
-                match e {
-                    egui::Event::Text(t) => {
-                        out.extend(t.chars().filter(char::is_ascii).map(|c| c as u8))
-                    }
-                    egui::Event::Key {
-                        key, pressed: true, ..
-                    } => match key {
-                        Key::Enter => out.push(b'\n'),
-                        Key::Backspace => out.push(8),
-                        Key::Escape => out.push(27),
-                        _ => {}
-                    },
-                    _ => {}
-                }
-            }
-            out
-        });
-        if keys.contains(&27) {
-            self.selected = None;
-        } else if let Some(anchor) = self.selected {
-            for k in keys {
-                self.sim.press(anchor, k);
-            }
-        }
-    }
-
-    /// Keyboard commands: Esc, the clipboard, Delete, moving the selection,
-    /// turning a paste, the floor, undo, the block in hand.
-    fn keys(&mut self, ui: &Ui) {
-        let ctx = ui.ctx().clone();
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
-            if self.pasting.take().is_some() {
-                self.status = None;
-            } else if self.locked {
-                self.release(&ctx);
-            } else if self.selected.take().is_none() && self.selected_block.take().is_none() {
-                self.selection = None;
-            }
-        }
-        // Clipboard: egui turns Ctrl+C/X/V into these events.
-        let events = ui.input(|i| i.events.clone());
-        for e in &events {
-            match e {
-                egui::Event::Copy => {
-                    if let Some(t) = self.copy() {
-                        ctx.copy_text(t);
-                    }
-                }
-                egui::Event::Cut => {
-                    if let Some(t) = self.cut() {
-                        ctx.copy_text(t);
-                    }
-                }
-                egui::Event::Paste(t) => self.start_paste(Some(t)),
-                _ => {}
-            }
-        }
-        if ui.input(|i| i.key_pressed(Key::Delete)) {
-            self.delete_selection();
-        }
-        if self.selection.is_some() && self.pasting.is_none() {
-            let step = ui.input(|i| {
-                if !i.modifiers.alt {
-                    return (0, 0);
-                }
-                let k = |key| i.key_pressed(key) as i32;
-                (
-                    k(Key::ArrowRight) - k(Key::ArrowLeft),
-                    k(Key::ArrowDown) - k(Key::ArrowUp),
-                )
-            });
-            if step != (0, 0) {
-                self.move_selection(step.0, step.1);
-            }
-        }
-        let (rotate, back) = ui.input(|i| (i.key_pressed(Key::R), i.modifiers.shift));
-        if let (true, Some(c)) = (rotate, &mut self.pasting) {
-            // Three turns clockwise are one counter-clockwise.
-            for _ in 0..if back { 3 } else { 1 } {
-                *c = c.rotated();
-            }
-        }
-        self.floor_keys(ui);
-        self.tool_keys(ui);
-        let (undo, redo) = ui.input(|i| {
-            let cmd = i.modifiers.command;
-            (
-                cmd && !i.modifiers.shift && i.key_pressed(Key::Z),
-                cmd && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z))),
-            )
-        });
-        if undo {
-            self.undo();
-        }
-        if redo {
-            self.redo();
-        }
-        self.hotbar_keys(ui);
-    }
-
-    /// Q/E or Page Up/Down move the floor a layer; F brings it to the block
-    /// looked at, G under the eye.
-    fn floor_keys(&mut self, ui: &Ui) {
-        // Not with modifiers: Ctrl+E and such belong to others.
-        let (step, to_target, to_feet) = ui.input(|i| {
-            let plain = !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt;
-            let k = |key| (plain && i.key_pressed(key)) as i32;
-            (
-                k(Key::E) + k(Key::PageUp) - k(Key::Q) - k(Key::PageDown),
-                k(Key::F) == 1,
-                k(Key::G) == 1,
-            )
-        });
-        if step != 0 {
-            self.set_layer(self.layer + step);
-        }
-        if to_target {
-            match self.target {
-                Some(t) => self.set_layer(t.z),
-                None => self.status = Some("F: önce bir bloğa bak".into()),
-            }
-        }
-        if to_feet {
-            // The eye is about 1.6 cells above the feet, like a player.
-            self.set_layer((self.camera.eye.z - 1.6).floor() as i32);
-        }
-    }
-
-    /// V switches the select tool, P pauses the clocks, N steps once,
-    /// Home shows the whole world, H the shortcut list.
-    fn tool_keys(&mut self, ui: &Ui) {
-        let (select, pause, step, home, help) = ui.input(|i| {
+    /// Layers (Q/E, Page Up/Down), the palette (1–9), the select tool (V),
+    /// the clocks (P, N) and the whole world (Home). Not with Ctrl, Alt or
+    /// Cmd held: those keys belong to other shortcuts.
+    fn shortcut_keys(&mut self, ui: &Ui) {
+        use egui::Key;
+        const DIGITS: [Key; 9] = [
+            Key::Num1,
+            Key::Num2,
+            Key::Num3,
+            Key::Num4,
+            Key::Num5,
+            Key::Num6,
+            Key::Num7,
+            Key::Num8,
+            Key::Num9,
+        ];
+        let (layer, digit, select, pause, step, home) = ui.input(|i| {
             let plain = !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt;
             let k = |key| plain && i.key_pressed(key);
-            (k(Key::V), k(Key::P), k(Key::N), k(Key::Home), k(Key::H))
+            (
+                k(Key::E) as i32 + k(Key::PageUp) as i32
+                    - k(Key::Q) as i32
+                    - k(Key::PageDown) as i32,
+                DIGITS.iter().position(|d| k(*d)),
+                k(Key::V),
+                k(Key::P),
+                k(Key::N),
+                k(Key::Home),
+            )
         });
+        if layer != 0 {
+            self.set_layer(self.layer + layer);
+        }
+        if let Some((_, b, _)) = digit.and_then(|d| palette().into_iter().nth(d)) {
+            self.brush = Some(Brush { block: b });
+            self.pasting = None;
+        }
         if select {
             if self.selecting() {
                 self.brush = self
@@ -720,159 +675,9 @@ impl WorldView {
         if home {
             self.refit();
         }
-        if help {
-            self.help = !self.help;
-        }
     }
 
-    /// 1–9 take a block of the palette in hand; the wheel (while flying)
-    /// goes through all of them.
-    fn hotbar_keys(&mut self, ui: &Ui) {
-        const DIGITS: [Key; 9] = [
-            Key::Num1,
-            Key::Num2,
-            Key::Num3,
-            Key::Num4,
-            Key::Num5,
-            Key::Num6,
-            Key::Num7,
-            Key::Num8,
-            Key::Num9,
-        ];
-        let blocks: Vec<Block> = palette().into_iter().map(|(_, b, _)| b).collect();
-        let (digit, wheel) = ui.input(|i| {
-            let digit = DIGITS.iter().position(|k| i.key_pressed(*k));
-            let wheel = i.events.iter().fold(0.0, |sum, e| match e {
-                egui::Event::MouseWheel { delta, .. } => sum + delta.y,
-                _ => sum,
-            });
-            (digit, wheel)
-        });
-        let pick = match (digit, self.locked && wheel != 0.0) {
-            (Some(d), _) => Some(d),
-            (None, true) => {
-                let n = blocks.len() as i32;
-                let now = self.hotbar_index().map_or(-1, |i| i as i32);
-                // Wheel down goes to the next block.
-                let step = if wheel < 0.0 { 1 } else { -1 };
-                Some((now + step).rem_euclid(n) as usize)
-            }
-            _ => None,
-        };
-        if let Some(b) = pick.and_then(|i| blocks.get(i)) {
-            self.brush = Some(Brush { block: b.clone() });
-            self.pasting = None;
-        }
-    }
-
-    /// Where the block in hand is in the palette.
-    pub fn hotbar_index(&self) -> Option<usize> {
-        let hand = &self.brush.as_ref()?.block;
-        palette().iter().position(|(_, b, _)| same_kind(b, hand))
-    }
-
-    /// Mouse buttons while flying. Holding left or right repeats it.
-    fn buttons(&mut self, ui: &Ui, aimed: Option<aim::Aim>) {
-        use PointerButton::{Middle, Primary, Secondary};
-        let (now, pressed, down, shift) = ui.input(|i| {
-            (
-                i.time,
-                [Primary, Secondary, Middle].map(|b| i.pointer.button_pressed(b)),
-                [Primary, Secondary].map(|b| i.pointer.button_down(b)),
-                i.modifiers.shift,
-            )
-        });
-        let mut act = None;
-        if let Some(b) = [Primary, Secondary, Middle]
-            .into_iter()
-            .zip(pressed)
-            .find_map(|(b, p)| p.then_some(b))
-        {
-            act = Some(b);
-            self.repeat = (b != Middle).then_some((b, now + 0.3));
-        } else if let Some((b, at)) = self.repeat {
-            let held = if b == Primary { down[0] } else { down[1] };
-            if !held {
-                self.repeat = None;
-            } else if now >= at {
-                act = Some(b);
-                self.repeat = Some((b, now + 0.2));
-            }
-        }
-        let (Some(button), Some(a)) = (act, aimed) else {
-            return;
-        };
-        match button {
-            Primary => self.primary(a),
-            Secondary => self.secondary(a, shift),
-            _ => self.pick_block(a),
-        }
-    }
-
-    /// Left click: break the block aimed at. With the select tool, mark a
-    /// region's first corner; while pasting, stop.
-    fn primary(&mut self, a: aim::Aim) {
-        if self.pasting.take().is_some() {
-            self.status = None;
-            return;
-        }
-        if self.selecting() {
-            let p = a.target.unwrap_or(a.place);
-            self.sel_start = Some(p);
-            self.selection = Some(Region::between(p, p));
-            self.selected = self.world.device_at(p).map(|d| d.0);
-            return;
-        }
-        if let Some(t) = a.target {
-            self.erase(t);
-        }
-    }
-
-    /// Right click: build against the face aimed at, or use what is there
-    /// (`force`: build anyway). With the select tool, mark the second
-    /// corner; while pasting, put the blocks down.
-    fn secondary(&mut self, a: aim::Aim, force: bool) {
-        if self.pasting.is_some() {
-            self.paste_at(a.place);
-            return;
-        }
-        if self.selecting() {
-            let p = a.target.unwrap_or(a.place);
-            let start = *self.sel_start.get_or_insert(p);
-            self.selection = Some(Region::between(start, p));
-            return;
-        }
-        if let Some(t) = a.target {
-            let used = self.world.get(t).is_some_and(aim::interactive);
-            if used && !force {
-                self.place(t, true);
-                return;
-            }
-        }
-        // Devices are never painted over: building against one goes beside.
-        if self.world.device_at(a.place).is_none() {
-            self.place(a.place, true);
-        }
-    }
-
-    /// Middle click: take the block aimed at in hand.
-    fn pick_block(&mut self, a: aim::Aim) {
-        let Some(t) = a.target else { return };
-        let block = match self.world.device_at(t) {
-            Some((_, d, f)) => Block::Device {
-                device: d.clone(),
-                facing: f,
-            },
-            None => match self.world.get(t) {
-                Some(b) => b.clone(),
-                None => return,
-            },
-        };
-        self.brush = Some(Brush { block });
-        self.pasting = None;
-    }
-
-    /// Move the floor to layer `z`.
+    /// Edit layer `z`. There is no limit, up or down.
     pub fn set_layer(&mut self, z: i32) {
         let lim = makine_world::world::MAX_COORD;
         self.layer = z.clamp(-lim, lim);
@@ -952,15 +757,5 @@ impl WorldView {
                 block: Some(block),
             });
         }
-    }
-}
-
-/// Whether two blocks are the same palette entry (whatever their facing,
-/// state or name).
-fn same_kind(a: &Block, b: &Block) -> bool {
-    match (a, b) {
-        (Block::Gate { gate: x, .. }, Block::Gate { gate: y, .. }) => x == y,
-        (Block::Port { output: x, .. }, Block::Port { output: y, .. }) => x == y,
-        _ => std::mem::discriminant(a) == std::mem::discriminant(b),
     }
 }

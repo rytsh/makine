@@ -344,14 +344,6 @@ impl App {
         self.network_section(ui);
         ui.separator();
         let Some(w) = &mut self.world else { return };
-        ui.label(
-            RichText::new(if w.locked {
-                "Fare dünyada. Esc: fareyi bırak (paneller için)."
-            } else {
-                "Dünyaya tıkla, içine gir."
-            })
-            .strong(),
-        );
         egui::CollapsingHeader::new(RichText::new("⌨ Kısayollar").strong())
             .id_salt("world-shortcuts")
             .show(ui, |ui| {
@@ -365,7 +357,6 @@ impl App {
                             ui.end_row();
                         }
                     });
-                ui.checkbox(&mut w.help, "Listeyi dünyada da göster (H)");
             });
         ui.add_space(6.0);
         ui.label(RichText::new("Bloklar").strong());
@@ -455,34 +446,30 @@ impl App {
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label(format!("Zemin katmanı: {}", w.layer));
-            if ui
-                .small_button("▼")
-                .on_hover_text("Q ya da Page Down")
-                .clicked()
-            {
+            ui.label("Yön:");
+            let arrow = match w.facing {
+                makine_world::Dir::East => "→ doğu",
+                makine_world::Dir::South => "↓ güney",
+                makine_world::Dir::West => "← batı",
+                makine_world::Dir::North => "↑ kuzey",
+            };
+            if ui.button(arrow).on_hover_text("R ile de döner").clicked() {
+                w.facing = w.facing.cw();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Katman: {}", w.layer)).strong());
+            if ui.small_button("▼").on_hover_text("Q").clicked() {
                 w.set_layer(w.layer - 1);
             }
-            if ui
-                .small_button("▲")
-                .on_hover_text("E ya da Page Up")
-                .clicked()
-            {
+            if ui.small_button("▲").on_hover_text("E").clicked() {
                 w.set_layer(w.layer + 1);
-            }
-            if ui
-                .small_button("Ayağımın altı")
-                .on_hover_text("G: zemini olduğun yerin altına getir")
-                .clicked()
-            {
-                w.set_layer((w.camera.eye.z - 1.6).floor() as i32);
             }
         });
         ui.label(
             RichText::new(
-                "Dünyanın sınırı yok, yukarı da aşağı da. Zemin, boşlukta blok koyabilmen \
-                 için görünmez bir tabandır (ızgara). Katmanlar arası bağlantı için üst üste \
-                 'Geçiş' koy.",
+                "Katman sınırı yok, yukarı da aşağı da. Bir alttaki katman soluk görünür. \
+                 Katmanlar arası bağlantı için iki katmana da üst üste 'Geçiş' koy.",
             )
             .weak()
             .small(),

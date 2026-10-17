@@ -204,40 +204,6 @@ mod editor {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world.png")).unwrap();
 
-        // Inside the world, flying: crosshair and hotbar.
-        {
-            let mut a = app.borrow_mut();
-            let w = a.world.as_mut().unwrap();
-            w.locked = true;
-            w.help = true;
-            w.camera.look_from(
-                glam::DVec3::new(7.5, 6.0, 2.2),
-                glam::DVec3::new(5.5, 1.5, 0.3),
-            );
-        }
-        harness.run_steps(2);
-        let img = harness.render().unwrap();
-        img.save(format!("{dir}/makine-world-play.png")).unwrap();
-        // Close up on the gates.
-        {
-            let mut a = app.borrow_mut();
-            let w = a.world.as_mut().unwrap();
-            w.help = false;
-            w.camera.look_from(
-                glam::DVec3::new(7.6, 3.0, 2.6),
-                glam::DVec3::new(5.0, 3.0, 0.0),
-            );
-        }
-        harness.run_steps(2);
-        let img = harness.render().unwrap();
-        img.save(format!("{dir}/makine-world-gates.png")).unwrap();
-        {
-            let mut a = app.borrow_mut();
-            let w = a.world.as_mut().unwrap();
-            w.locked = false;
-            w.help = false;
-        }
-
         // Devices: a keyboard into a display, and a screen with a pattern.
         {
             use makine_world::device::Device;
@@ -511,9 +477,6 @@ mod glyph_tests {
             include_str!("../worldview/mod.rs"),
             include_str!("../worldview/panels.rs"),
             include_str!("../worldview/render.rs"),
-            include_str!("../worldview/camera.rs"),
-            include_str!("../worldview/gpu.rs"),
-            include_str!("../worldview/aim.rs"),
             include_str!("../worldsim.rs"),
             include_str!("../session.rs"),
             include_str!("../worlds.rs"),

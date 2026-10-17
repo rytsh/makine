@@ -1,24 +1,65 @@
 //! Tests of the world view: projection, editing, devices, selection and
 //! settings panels, driven through egui like a player would.
 
+use egui::Pos2;
 use makine_world::block::Gate;
 
 mod basics {
     use crate::worldview::*;
 
-    /// The floor layer has no limit, nor have blocks.
+    use egui::pos2;
+    use makine_world::block::Gate;
+
     #[test]
-    fn layers_have_no_limit() {
-        let mut v = WorldView::default();
-        v.set_layer(20);
-        assert_eq!(v.layer, 20);
-        v.set_layer(-5);
-        assert_eq!(v.layer, -5);
-        v.edit(Edit::Set {
-            pos: Pos::new(0, 0, -5),
-            block: Some(Block::Wire),
-        });
-        assert_eq!(v.world.len(), 1);
+    fn pick_inverts_projection() {
+        let v = WorldView::default();
+        let origin = pos2(400.0, 100.0);
+        for (x, y, z) in [(0, 0, 0), (3, -2, 0), (-5, 7, 2), (10, 10, -40)] {
+            let c = v.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5);
+            assert_eq!(v.pick(origin, c, z), Pos::new(x, y, z));
+        }
+    }
+
+    /// Layers have no limit; Q/E change them, 1–9 pick a block, V the
+    /// select tool and back, P pauses the clocks.
+    #[test]
+    fn shortcut_keys() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(600.0, 400.0))
+            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), WorldView::default());
+        h.run();
+        h.hover_at(egui::pos2(300.0, 200.0));
+        h.run();
+        let key = |h: &mut egui_kittest::Harness<'_, WorldView>, k| {
+            h.key_press(k);
+            h.run();
+        };
+        for _ in 0..10 {
+            key(&mut h, egui::Key::E);
+        }
+        assert_eq!(h.state().layer, 10, "above the old limit of 7");
+        for _ in 0..13 {
+            key(&mut h, egui::Key::Q);
+        }
+        assert_eq!(h.state().layer, -3);
+        key(&mut h, egui::Key::Num6);
+        assert!(matches!(
+            h.state().brush,
+            Some(Brush {
+                block: Block::Gate {
+                    gate: Gate::And,
+                    ..
+                }
+            })
+        ));
+        let hand = h.state().brush.clone();
+        key(&mut h, egui::Key::V);
+        assert!(h.state().selecting());
+        key(&mut h, egui::Key::V);
+        assert_eq!(h.state().brush, hand);
+        let running = h.state().sim.running;
+        key(&mut h, egui::Key::P);
+        assert_eq!(h.state().sim.running, !running);
     }
 
     #[test]
@@ -65,211 +106,6 @@ mod basics {
         }
         // Steps 1..=8 with period 2: high on steps 2-3 and 6-7.
         assert_eq!(lit, vec![0, 1, 1, 0, 0, 1, 1, 0]);
-    }
-}
-
-/// Playing like in Minecraft: the harness clicks to take the mouse, the
-/// eye is put where it looks at a point, keys fly and buttons break, build
-/// and pick.
-pub(super) mod play {
-    use crate::worldview::*;
-    use egui::PointerButton;
-    use glam::DVec3;
-
-    pub type H = egui_kittest::Harness<'static, WorldView>;
-
-    pub fn harness(mut v: WorldView) -> H {
-        v.fit = false;
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(800.0, 600.0))
-            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), v);
-        h.run();
-        // A click takes the mouse.
-        let c = h.state().rect.center();
-        press(&mut h, c, PointerButton::Primary);
-        assert!(h.state().locked);
-        h
-    }
-
-    pub fn press(h: &mut H, p: egui::Pos2, button: PointerButton) {
-        h.event(egui::Event::PointerMoved(p));
-        for pressed in [true, false] {
-            h.event(egui::Event::PointerButton {
-                pos: p,
-                button,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            });
-        }
-        h.run();
-    }
-
-    /// Look at world point `at` from `from` and press `button`.
-    pub fn act(h: &mut H, from: DVec3, at: DVec3, button: PointerButton) {
-        h.state_mut().camera.look_from(from, at);
-        h.run();
-        let c = h.state().rect.center();
-        press(h, c, button);
-    }
-
-    fn above(x: f64, y: f64, z: f64) -> DVec3 {
-        DVec3::new(x - 2.0, y - 1.5, z + 5.0)
-    }
-
-    /// Right click builds against the face looked at: on the floor, on top
-    /// of a block, beside it, under it; left click breaks.
-    #[test]
-    fn build_and_break_with_the_crosshair() {
-        let mut v = WorldView::new(World::new("s"));
-        v.brush = Some(Brush { block: Block::Lamp });
-        let mut h = harness(v);
-        use PointerButton::{Primary, Secondary};
-        let floor = DVec3::new(0.5, 0.5, 0.0);
-        act(&mut h, above(0.5, 0.5, 0.0), floor, Secondary);
-        assert_eq!(h.state().world.get(Pos::new(0, 0, 0)), Some(&Block::Lamp));
-        // Its top (height 0.75): on top.
-        let top = DVec3::new(0.5, 0.5, 0.75);
-        act(&mut h, above(0.5, 0.5, 0.75), top, Secondary);
-        assert_eq!(h.state().world.get(Pos::new(0, 0, 1)), Some(&Block::Lamp));
-        // The east side of the bottom lamp, seen from the east: beside it.
-        let side = DVec3::new(0.88, 0.5, 0.3);
-        act(&mut h, DVec3::new(5.0, 0.5, 0.4), side, Secondary);
-        assert_eq!(h.state().world.get(Pos::new(1, 0, 0)), Some(&Block::Lamp));
-        // From underground, the bottom of the bottom lamp: under it.
-        let bottom = DVec3::new(0.5, 0.5, 0.0);
-        act(&mut h, DVec3::new(-1.5, -1.0, -5.0), bottom, Secondary);
-        assert_eq!(h.state().world.get(Pos::new(0, 0, -1)), Some(&Block::Lamp));
-        assert_eq!(h.state().world.len(), 4);
-        // Left click breaks the block looked at.
-        act(
-            &mut h,
-            DVec3::new(5.0, 0.5, 0.4),
-            DVec3::new(1.88, 0.5, 0.3),
-            Primary,
-        );
-        assert_eq!(h.state().world.get(Pos::new(1, 0, 0)), None);
-        assert_eq!(h.state().world.len(), 3);
-    }
-
-    /// Placed blocks face the way the player looks; middle click takes the
-    /// block looked at; number keys choose from the palette.
-    #[test]
-    fn facing_pick_and_hotbar() {
-        let mut v = WorldView::new(World::new("s"));
-        v.brush = Some(Brush {
-            block: Block::Gate {
-                gate: makine_world::block::Gate::And,
-                facing: Dir::East,
-            },
-        });
-        let mut h = harness(v);
-        // Looking north (towards -y) at the floor in front.
-        act(
-            &mut h,
-            DVec3::new(0.5, 3.5, 2.5),
-            DVec3::new(0.5, 0.5, 0.0),
-            PointerButton::Secondary,
-        );
-        assert!(matches!(
-            h.state().world.get(Pos::new(0, 0, 0)),
-            Some(Block::Gate {
-                facing: Dir::North,
-                ..
-            })
-        ));
-        // Key 1 takes a wire, middle click the gate back.
-        h.key_press(egui::Key::Num1);
-        h.run();
-        assert_eq!(h.state().brush, Some(Brush { block: Block::Wire }));
-        act(
-            &mut h,
-            DVec3::new(0.5, 3.5, 2.5),
-            DVec3::new(0.5, 0.5, 0.3),
-            PointerButton::Middle,
-        );
-        assert!(matches!(
-            h.state().brush,
-            Some(Brush {
-                block: Block::Gate { .. }
-            })
-        ));
-    }
-
-    /// Q/E move the floor, F brings it to the block looked at, G under
-    /// the eye; V switches the select tool and back; P pauses; H shows the
-    /// shortcuts.
-    #[test]
-    fn shortcut_keys() {
-        let mut w = World::new("k");
-        w.apply(Edit::Set {
-            pos: Pos::new(0, 0, 5),
-            block: Some(Block::Lamp),
-        });
-        let mut h = harness(WorldView::new(w));
-        let key = |h: &mut H, k| {
-            h.key_press(k);
-            h.run();
-        };
-        key(&mut h, egui::Key::E);
-        key(&mut h, egui::Key::E);
-        key(&mut h, egui::Key::Q);
-        assert_eq!(h.state().layer, 1);
-
-        // Look at the lamp on layer 5, F: the floor goes there.
-        h.state_mut()
-            .camera
-            .look_from(DVec3::new(-3.0, 0.5, 7.0), DVec3::new(0.5, 0.5, 5.4));
-        h.run();
-        assert_eq!(h.state().target, Some(Pos::new(0, 0, 5)));
-        key(&mut h, egui::Key::F);
-        assert_eq!(h.state().layer, 5);
-        // G: under the eye (at height 20.5, the feet at 18.9).
-        h.state_mut().camera.eye = DVec3::new(0.0, 0.0, 20.5);
-        key(&mut h, egui::Key::G);
-        assert_eq!(h.state().layer, 18);
-
-        let hand = h.state().brush.clone();
-        key(&mut h, egui::Key::V);
-        assert!(h.state().selecting());
-        key(&mut h, egui::Key::V);
-        assert_eq!(h.state().brush, hand, "V gives the block back");
-
-        let running = h.state().sim.running;
-        key(&mut h, egui::Key::P);
-        assert_eq!(h.state().sim.running, !running);
-        key(&mut h, egui::Key::H);
-        assert!(h.state().help);
-    }
-
-    /// Keys fly; Esc gives the mouse back.
-    #[test]
-    fn keys_fly_and_esc_releases() {
-        let mut h = harness(WorldView::new(World::new("f")));
-        h.state_mut()
-            .camera
-            .look_from(DVec3::ZERO, DVec3::new(10.0, 0.0, 0.0));
-        let start = h.state().camera.eye;
-        h.event(egui::Event::Key {
-            key: egui::Key::W,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        });
-        h.run_steps(10);
-        h.event(egui::Event::Key {
-            key: egui::Key::W,
-            physical_key: None,
-            pressed: false,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        });
-        h.run();
-        let moved = h.state().camera.eye - start;
-        assert!(moved.x > 0.1 && moved.y.abs() < 1e-6, "{moved:?}");
-        h.key_press(egui::Key::Escape);
-        h.run();
-        assert!(!h.state().locked);
     }
 }
 
@@ -331,49 +167,107 @@ mod history {
 }
 
 mod ui_tests {
-    use super::play::*;
+    use super::*;
     use crate::worldview::*;
-    use egui::PointerButton::{Primary, Secondary};
-    use glam::DVec3;
+    use std::{cell::RefCell, rc::Rc};
 
-    /// Lay a wire, break one, and turn a switch on by right clicking it.
+    /// Paint a wire by dragging across cells, erase one with right click,
+    /// and toggle a switch by clicking it.
     #[test]
-    fn build_break_toggle() {
-        let mut h = harness(WorldView::default());
-        let eye = DVec3::new(1.5, 4.0, 4.0);
-        for x in 0..4 {
-            act(&mut h, eye, DVec3::new(x as f64 + 0.5, 0.5, 0.0), Secondary);
+    fn paint_erase_toggle() {
+        let view = Rc::new(RefCell::new(WorldView::default()));
+        let v = view.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui(move |ui| v.borrow_mut().show(ui));
+        h.run();
+        // Screen centre of a cell on layer 0 (the camera was fitted on the
+        // first frame).
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let cell = |view: &WorldView, x: i32, y: i32| {
+            let origin = rect.center_top() + vec2(0.0, 80.0);
+            view.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5)
+        };
+        let path: Vec<Pos2> = (0..4).map(|x| cell(&view.borrow(), x, 0)).collect();
+        h.drag_at(path[0]);
+        h.run();
+        for p in &path[1..] {
+            h.hover_at(*p);
+            h.run();
         }
-        assert_eq!(h.state().world.len(), 4);
-        act(&mut h, eye, DVec3::new(2.5, 0.5, 0.05), Primary);
-        assert_eq!(h.state().world.len(), 3);
-        assert!(h.state().world.get(Pos::new(2, 0, 0)).is_none());
+        h.drop_at(path[3]);
+        h.run();
+        let wires: Vec<Pos> = view.borrow().world.blocks().map(|(p, _)| p).collect();
+        assert_eq!(wires.len(), 4, "{wires:?}");
 
-        h.state_mut().brush = Some(Brush {
+        // Right click erases.
+        let p = cell(&view.borrow(), 2, 0);
+        h.event(egui::Event::PointerMoved(p));
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Secondary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button: egui::PointerButton::Secondary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        assert_eq!(view.borrow().world.len(), 3);
+        assert!(view.borrow().world.get(Pos::new(2, 0, 0)).is_none());
+
+        // Place a switch, then click it to turn it on.
+        view.borrow_mut().brush = Some(Brush {
             block: Block::Switch {
                 on: false,
                 facing: Dir::East,
             },
         });
-        let at = DVec3::new(0.5, 2.5, 0.0);
-        act(&mut h, eye, at, Secondary);
-        let off = Block::Switch {
-            on: false,
-            facing: Dir::North,
+        let p = cell(&view.borrow(), 0, 2);
+        let click = |h: &mut egui_kittest::Harness| {
+            h.event(egui::Event::PointerMoved(p));
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.run();
         };
-        assert_eq!(h.state().world.get(Pos::new(0, 2, 0)), Some(&off));
-        // Right clicking a switch turns it on.
-        act(&mut h, eye, DVec3::new(0.5, 2.5, 0.25), Secondary);
+        click(&mut h);
         assert_eq!(
-            h.state().world.get(Pos::new(0, 2, 0)),
+            view.borrow().world.get(Pos::new(0, 2, 0)),
+            Some(&Block::Switch {
+                on: false,
+                facing: Dir::East
+            })
+        );
+        click(&mut h);
+        assert_eq!(
+            view.borrow().world.get(Pos::new(0, 2, 0)),
             Some(&Block::Switch {
                 on: true,
-                facing: Dir::North
+                facing: Dir::East
             })
         );
         // Undo turns it off again.
-        h.state_mut().undo();
-        assert_eq!(h.state().world.get(Pos::new(0, 2, 0)), Some(&off));
+        view.borrow_mut().undo();
+        assert_eq!(
+            view.borrow().world.get(Pos::new(0, 2, 0)),
+            Some(&Block::Switch {
+                on: false,
+                facing: Dir::East
+            })
+        );
     }
 }
 
@@ -487,13 +381,20 @@ mod device_tests {
 }
 
 mod selection_tests {
-    use super::play::*;
+    use super::*;
     use crate::worldview::*;
-    use egui::PointerButton::{Primary, Secondary};
-    use glam::DVec3;
+    use std::{cell::RefCell, rc::Rc};
 
-    /// Select with left and right click, copy, paste somewhere else, move
-    /// with Alt+arrows, delete.
+    fn press(h: &mut egui_kittest::Harness, p: Pos2, button: egui::PointerButton, down: bool) {
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button,
+            pressed: down,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+
+    /// Drag-select, copy, paste somewhere else, move with arrows, delete.
     #[test]
     fn select_copy_paste_move() {
         let mut w = World::new("s");
@@ -509,41 +410,73 @@ mod selection_tests {
         });
         let mut v = WorldView::new(w);
         v.brush = None;
-        let mut h = harness(v);
-        let eye = DVec3::new(1.5, 6.0, 6.0);
-        let floor = |x: i32, y: i32| DVec3::new(x as f64 + 0.5, y as f64 + 0.5, 0.0);
+        let view = Rc::new(RefCell::new(v));
+        let vv = view.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui(move |ui| vv.borrow_mut().show(ui));
+        h.run();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let origin = rect.center_top() + vec2(0.0, 80.0);
+        let cell =
+            |v: &WorldView, x: i32, y: i32| v.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5);
 
-        // Corners (0,0) and (2,1).
-        act(&mut h, eye, floor(0, 0), Primary);
-        act(&mut h, eye, floor(2, 1), Secondary);
-        let sel = h.state().selection.unwrap();
+        // Drag from (0,0) to (2,1).
+        let (a, b) = (cell(&view.borrow(), 0, 0), cell(&view.borrow(), 2, 1));
+        h.event(egui::Event::PointerMoved(a));
+        press(&mut h, a, egui::PointerButton::Primary, true);
+        h.run();
+        for t in 1..=4 {
+            h.event(egui::Event::PointerMoved(a + (b - a) * (t as f32 / 4.0)));
+            h.run();
+        }
+        press(&mut h, b, egui::PointerButton::Primary, false);
+        h.run();
+        let sel = view.borrow().selection.unwrap();
         assert_eq!(sel, Region::between(Pos::new(0, 0, 0), Pos::new(2, 1, 0)));
-        assert_eq!(sel.blocks(&h.state().world).len(), 4, "all layers");
+        assert_eq!(sel.blocks(&view.borrow().world).len(), 4, "all layers");
 
-        // Copy, then paste at (0, 5) by right clicking there.
+        // Copy, then paste at (0, 5) by clicking there.
         h.event(egui::Event::Copy);
         h.run();
-        assert!(h.state().clipboard.is_some());
-        let text = h.state().clipboard.as_ref().unwrap().to_json();
+        assert!(view.borrow().clipboard.is_some());
+        let text = view.borrow().clipboard.as_ref().unwrap().to_json();
         h.event(egui::Event::Paste(text));
         h.run();
-        assert!(h.state().pasting.is_some());
-        act(&mut h, eye, floor(0, 5), Secondary);
-        assert_eq!(h.state().world.len(), 8);
-        assert_eq!(h.state().world.get(Pos::new(1, 6, 1)), Some(&Block::Lamp));
-
-        // The pasted copy is selected: move it right with Alt+arrow.
-        h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::ArrowRight);
+        assert!(view.borrow().pasting.is_some());
+        let p = cell(&view.borrow(), 0, 5);
+        h.event(egui::Event::PointerMoved(p));
         h.run();
-        assert_eq!(h.state().world.get(Pos::new(2, 6, 1)), Some(&Block::Lamp));
-        assert!(h.state().world.get(Pos::new(0, 5, 0)).is_none());
+        press(&mut h, p, egui::PointerButton::Primary, true);
+        press(&mut h, p, egui::PointerButton::Primary, false);
+        h.run();
+        let v = view.borrow();
+        assert_eq!(v.world.len(), 8);
+        assert_eq!(v.world.get(Pos::new(1, 6, 1)), Some(&Block::Lamp));
+        drop(v);
 
-        // Delete removes it; undo brings it back in one step.
+        // The pasted copy is selected: move it right with the arrow key.
+        h.key_press(egui::Key::ArrowRight);
+        h.run();
+        let v = view.borrow();
+        assert_eq!(
+            v.world.get(Pos::new(2, 6, 1)),
+            Some(&Block::Lamp),
+            "sel={:?} status={:?} blocks={:?}",
+            v.selection,
+            v.status,
+            v.world.blocks().map(|(p, _)| p).collect::<Vec<_>>()
+        );
+        assert!(v.world.get(Pos::new(0, 5, 0)).is_none());
+        drop(v);
+
+        // Delete removes it.
         h.key_press(egui::Key::Delete);
         h.run();
-        assert_eq!(h.state().world.len(), 4);
-        h.state_mut().undo();
-        assert_eq!(h.state().world.len(), 8);
+        assert_eq!(view.borrow().world.len(), 4);
+        // Undo brings it back in one step.
+        view.borrow_mut().undo();
+        assert_eq!(view.borrow().world.len(), 8);
     }
 }
 

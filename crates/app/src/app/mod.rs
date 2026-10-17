@@ -49,7 +49,7 @@ enum View {
     Play,
     /// The built-in wiki.
     Wiki,
-    /// The 3D block world.
+    /// The block world, seen from above layer by layer.
     World,
 }
 
@@ -346,7 +346,7 @@ impl App {
                 self.view == View::World,
                 "🌍  Dünya",
             ))
-            .on_hover_text("Blokları yerleştirerek kendi devreni kur (3D, sınırsız)")
+            .on_hover_text("Blokları yerleştirerek kendi devreni kur (katman katman)")
             .clicked()
         {
             self.open_world();
@@ -630,10 +630,6 @@ impl App {
             self.wiki_installed = true;
         }
         self.save_if_due(&ctx);
-        // The world keeps the mouse only while it is shown.
-        if let (false, Some(w)) = (self.view == View::World, &mut self.world) {
-            w.release(&ctx);
-        }
         if self.session.is_some() {
             self.net_tick();
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
