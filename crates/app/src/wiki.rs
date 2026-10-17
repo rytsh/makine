@@ -205,6 +205,41 @@ impl Wiki {
     pub fn show(&mut self, ui: &mut Ui) -> Option<&'static str> {
         let page = self.current;
         let mut go_level = None;
+        centered(ui, |ui| self.header(ui, page, &mut go_level));
+        ui.separator();
+
+        // Links to other pages are hooks; everything else opens normally.
+        for p in PAGES {
+            self.cache.add_link_hook(format!("{}.md", p.slug));
+        }
+        // The scroll area fills the panel, so its bar sits at the right edge;
+        // the page is a centred column inside it.
+        let mut scroll = egui::ScrollArea::vertical()
+            .id_salt(("wiki", page.slug))
+            .auto_shrink([false, false]);
+        if std::mem::take(&mut self.scroll_to_top) {
+            scroll = scroll.vertical_scroll_offset(0.0);
+        }
+        scroll.show(ui, |ui| {
+            centered(ui, |ui| {
+                CommonMarkViewer::new()
+                    .default_implicit_uri_scheme(IMAGE_SCHEME)
+                    .max_image_width(Some(PAGE_WIDTH as usize))
+                    .show(ui, &mut self.cache, page.body());
+                ui.add_space(40.0);
+            });
+        });
+        let clicked = PAGES
+            .iter()
+            .find(|p| self.cache.get_link_hook(&format!("{}.md", p.slug)) == Some(true));
+        if let Some(p) = clicked {
+            self.open(p);
+        }
+        go_level
+    }
+
+    /// Back and next buttons, and links to the page's levels.
+    fn header(&mut self, ui: &mut Ui, page: &'static Page, go_level: &mut Option<&'static str>) {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(!self.history.is_empty(), egui::Button::new("◀ Geri"))
@@ -229,37 +264,28 @@ impl Wiki {
                 for l in levels {
                     let title = makine_levels::find(l).map_or(l, |lv| lv.title);
                     if ui.link(title).clicked() {
-                        go_level = Some(l);
+                        *go_level = Some(l);
                     }
                 }
             });
         }
-        ui.separator();
-
-        // Links to other pages are hooks; everything else opens normally.
-        for p in PAGES {
-            self.cache.add_link_hook(format!("{}.md", p.slug));
-        }
-        let mut scroll = egui::ScrollArea::vertical().id_salt(("wiki", page.slug));
-        if std::mem::take(&mut self.scroll_to_top) {
-            scroll = scroll.vertical_scroll_offset(0.0);
-        }
-        scroll.show(ui, |ui| {
-            ui.set_max_width(820.0);
-            CommonMarkViewer::new()
-                .default_implicit_uri_scheme(IMAGE_SCHEME)
-                .max_image_width(Some(820))
-                .show(ui, &mut self.cache, page.body());
-            ui.add_space(40.0);
-        });
-        let clicked = PAGES
-            .iter()
-            .find(|p| self.cache.get_link_hook(&format!("{}.md", p.slug)) == Some(true));
-        if let Some(p) = clicked {
-            self.open(p);
-        }
-        go_level
     }
+}
+
+/// Widest a wiki page gets; wider windows centre it.
+const PAGE_WIDTH: f32 = 820.0;
+
+/// Lay `add` out in a column at most [`PAGE_WIDTH`] wide, centred in `ui`.
+fn centered(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let width = ui.available_width();
+    let column = width.min(PAGE_WIDTH);
+    ui.horizontal_top(|ui| {
+        ui.add_space((width - column) / 2.0);
+        ui.vertical(|ui| {
+            ui.set_width(column);
+            add(ui);
+        });
+    });
 }
 
 #[cfg(test)]

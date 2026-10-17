@@ -10,6 +10,7 @@ use crate::design::Design;
 pub(super) enum MenuTarget {
     None,
     Sink(Sink),
+    Wire(usize),
     Part(PartId),
     Ports,
 }

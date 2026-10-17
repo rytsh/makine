@@ -359,6 +359,11 @@ mod editor {
             let img = harness.render().unwrap();
             img.save(format!("{dir}/makine-wiki-{slug}.png")).unwrap();
         }
+        // A wide window: the page stays centred, the scroll bar at the edge.
+        harness.set_size(egui::vec2(1920.0, 900.0));
+        harness.run_steps(4);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-wiki-wide.png")).unwrap();
     }
 
     /// Solve the first level with the mouse only: drag a NAND from the
@@ -423,6 +428,23 @@ mod editor {
         );
         let wires = app.borrow_mut().design().def.wires.clone();
         assert_eq!(wires.len(), 3, "{wires:?}");
+
+        // Cut the output wire: Delete over its middle (the curve is
+        // symmetric, so the middle is halfway between its ends).
+        let (gate_out, chip_out) = (screen(at + g.outputs[0]), screen(out_rect.left_center()));
+        let mid = gate_out + (chip_out - gate_out) / 2.0;
+        h.hover_at(mid);
+        h.run();
+        h.key_press(egui::Key::Delete);
+        h.run();
+        assert_eq!(app.borrow_mut().design().def.wires.len(), 2, "Delete cuts");
+        drag(&mut h, gate_out, chip_out);
+        assert_eq!(app.borrow_mut().design().def.wires.len(), 3);
+        // Pull it off the output's end onto empty space: cut again.
+        drag(&mut h, chip_out, egui::pos2(400.0, 650.0));
+        assert_eq!(app.borrow_mut().design().def.wires.len(), 2, "pulled off");
+        drag(&mut h, gate_out, chip_out);
+        assert_eq!(app.borrow_mut().design().def.wires.len(), 3);
 
         h.get_by_label_contains("Test et").click();
         h.run();

@@ -65,6 +65,15 @@ struct Hover {
     input: Option<usize>,
     /// Any input or output box.
     port: Option<Port>,
+    /// A wire (index into the design's wires), when nothing else is.
+    wire: Option<usize>,
+}
+
+impl Hover {
+    /// Whether the pointer is on a pin, part or box (which win over wires).
+    fn on_something(&self) -> bool {
+        self.source.is_some() || self.sink.is_some() || self.part.is_some() || self.port.is_some()
+    }
 }
 
 /// What the canvas draws besides the design: the live simulation.
@@ -116,7 +125,7 @@ impl Canvas {
         self.origin = layout.origin;
         let painter = painter.with_clip_rect(screen);
         let pointer = ui.ctx().pointer_interact_pos();
-        let hover = pointer.map_or_else(Hover::default, |p| layout.hover(p, self.pin_hit()));
+        let hover = pointer.map_or_else(Hover::default, |p| self.hover(design, &layout, p));
 
         self.draw_background(&painter, screen, &layout);
         self.draw_design(&painter, design, &layout, &live, &hover);
@@ -130,6 +139,7 @@ impl Canvas {
             &mut result,
         );
         self.toggle_input(&response, design, &live, &hover, &mut result);
+        Self::cut_with_key(ui, &response, design, &hover, &mut result);
         Self::context_menu(ui, &response, design, lib, &hover, &mut result);
 
         // Parts dropped from the side panel.
@@ -140,6 +150,32 @@ impl Canvas {
         }
         self.set_cursor(ui, &hover);
         result
+    }
+
+    /// What is under screen point `p`, wires included.
+    fn hover(&self, design: &Design, layout: &Layout, p: Pos2) -> Hover {
+        let mut h = layout.hover(p, self.pin_hit());
+        if !h.on_something() && self.drag_wire.is_none() {
+            h.wire = layout.wire_at(design, p, 6.0 * self.zoom.max(0.8));
+        }
+        h
+    }
+
+    /// The Delete key cuts the wire under the pointer.
+    fn cut_with_key(
+        ui: &Ui,
+        response: &egui::Response,
+        design: &mut Design,
+        hover: &Hover,
+        result: &mut CanvasOutput,
+    ) {
+        let Some(wi) = hover.wire else { return };
+        let pressed =
+            ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
+        if pressed && response.hovered() && !ui.ctx().egui_wants_keyboard_input() {
+            design.def.wires.remove(wi);
+            result.changed = true;
+        }
     }
 
     /// How close the pointer must be to a pin to grab it, in screen points.
@@ -196,8 +232,13 @@ impl Canvas {
         let wires = design.def.wires.iter().enumerate().filter_map(|(wi, w)| {
             let (a, b) = (layout.source_pos(w.from)?, layout.sink_pos(w.to)?);
             let width = layout.source_width(design, w.from);
-            let color = draw::wire_color(width, live.sim.map(|s| s.wire(wi)));
-            let thick = if width > 1 { 4.0 } else { 2.5 } * z;
+            let mut color = draw::wire_color(width, live.sim.map(|s| s.wire(wi)));
+            let mut thick = if width > 1 { 4.0 } else { 2.5 } * z;
+            if hover.wire == Some(wi) {
+                // The wire a right click or Delete would cut.
+                color = draw::WIRE_HOVER;
+                thick += 2.0 * z;
+            }
             Some(bezier(
                 a,
                 b,
@@ -359,8 +400,14 @@ impl Canvas {
                 .input(|i| i.pointer.press_origin())
                 .or(ui.ctx().pointer_interact_pos());
             let at = press.map_or_else(Hover::default, |p| layout.hover(p, self.pin_hit()));
+            let held = at.sink.and_then(|(sink, _)| design.def.wire_into(sink));
             if let Some((s, _)) = at.source {
                 self.drag_wire = Some(s);
+            } else if let Some(wi) = held {
+                // Pulling a wire off an input: drop it on another input to
+                // move it, or on empty space to cut it.
+                self.drag_wire = Some(design.def.wires.remove(wi).from);
+                result.changed = true;
             } else if let Some(port) = at.port {
                 self.drag_port = Some(port);
                 self.port_moved = false;
@@ -452,7 +499,7 @@ impl Canvas {
                 (Some((sink, _)), _, _) => MenuTarget::Sink(sink),
                 (None, Some(i), _) => MenuTarget::Part(i),
                 (None, None, Some(_)) => MenuTarget::Ports,
-                _ => MenuTarget::None,
+                _ => hover.wire.map_or(MenuTarget::None, MenuTarget::Wire),
             };
             ui.ctx().data_mut(|d| d.insert_temp(menu_id, target));
         }
@@ -462,8 +509,15 @@ impl Canvas {
                 .data(|d| d.get_temp::<MenuTarget>(menu_id))
                 .unwrap_or(MenuTarget::None);
             match target {
+                MenuTarget::Wire(wi) if wi < design.def.wires.len() => {
+                    if ui.button("✂ Kabloyu kes").clicked() {
+                        design.def.wires.remove(wi);
+                        result.changed = true;
+                        ui.close();
+                    }
+                }
                 MenuTarget::Sink(sink) => {
-                    if ui.button("Bağlantıyı kopar").clicked() {
+                    if ui.button("✂ Kabloyu kes").clicked() {
                         design.def.wires.retain(|w| w.to != sink);
                         result.changed = true;
                         ui.close();
@@ -481,6 +535,14 @@ impl Canvas {
                 }
                 _ => {
                     ui.label("Parça eklemek için soldaki listeden sürükle.");
+                    ui.label(
+                        egui::RichText::new(
+                            "Kablo kesmek için: kablonun üstüne sağ tıkla, ya da üstüne \
+                             gelip Delete'e bas, ya da girişteki ucunu tutup boşluğa çek.",
+                        )
+                        .weak()
+                        .small(),
+                    );
                 }
             }
         });
@@ -491,7 +553,7 @@ impl Canvas {
             egui::CursorIcon::Grabbing
         } else if hover.source.is_some() || hover.sink.is_some() {
             egui::CursorIcon::Crosshair
-        } else if hover.input.is_some() {
+        } else if hover.input.is_some() || hover.wire.is_some() {
             egui::CursorIcon::PointingHand
         } else if hover.part.is_some() || hover.port.is_some() {
             egui::CursorIcon::Grab

@@ -35,6 +35,9 @@ izler.
   tel çek.
 - Soldaki giriş kutularına **tıklayarak** 0 ile 1 arasında değiştir. Teller
   canlı olarak yanar: **yeşil = 1**, gri = 0, mavi = çok bitli bus.
+- Bir kabloyu kesmek için üstüne **sağ tıkla → Kabloyu kes**, ya da üstüne
+  gelip **Delete**'e bas. Girişe takılı ucunu tutup boşluğa çekmek de keser;
+  başka bir girişe bırakırsan kablo oraya taşınır.
 - Giriş/çıkış kutularını da sürükleyerek istediğin yere taşıyabilirsin.
 - **Test et**'e bas. Geçersen çipin bir sonraki seviyede parça olarak açılır.
 

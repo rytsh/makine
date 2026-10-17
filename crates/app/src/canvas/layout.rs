@@ -3,6 +3,7 @@
 use egui::{vec2, Pos2, Rect, Vec2};
 use makine_sim::{Library, PartId, PartKind, PartPins, Pin, Sink, Source};
 
+use super::draw::{bezier_distance, bezier_points};
 use super::Hover;
 use crate::design::{geometry, Design, Geometry, Port};
 
@@ -65,7 +66,25 @@ impl Layout {
             port: input
                 .map(Port::Input)
                 .or_else(|| in_rect(&self.outputs).map(Port::Output)),
+            wire: None,
         }
+    }
+
+    /// The wire (index into the design's wires) passing within `hit` of
+    /// screen point `p`; the closest one if several do.
+    pub fn wire_at(&self, design: &Design, p: Pos2, hit: f32) -> Option<usize> {
+        design
+            .def
+            .wires
+            .iter()
+            .enumerate()
+            .filter_map(|(i, w)| {
+                let (a, b) = (self.source_pos(w.from)?, self.sink_pos(w.to)?);
+                let d = bezier_distance(bezier_points(a, b, self.sink_dir(w.to)), p);
+                (d < hit).then_some((i, d))
+            })
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(i, _)| i)
     }
 
     /// Whether a wire from `from` may go into `to`: same width, or a

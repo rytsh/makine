@@ -21,6 +21,7 @@ pub(super) const TEXT: Color32 = Color32::from_rgb(220, 224, 230);
 pub(super) const DIM: Color32 = Color32::from_rgb(140, 146, 158);
 pub const ON: Color32 = Color32::from_rgb(90, 220, 120);
 pub const OFF: Color32 = Color32::from_rgb(90, 96, 108);
+pub(super) const WIRE_HOVER: Color32 = Color32::from_rgb(240, 160, 80);
 pub(super) const BUS: Color32 = Color32::from_rgb(110, 170, 240);
 pub(super) const ERR: Color32 = Color32::from_rgb(230, 90, 90);
 
@@ -80,6 +81,18 @@ pub(super) fn port(painter: &egui::Painter, r: Rect, p: &Pin, v: u64, z: f32, ho
 /// A wire from source `a` (leaving to the right) to sink `b`, arriving from
 /// direction `dir` (pointing away from the sink, towards the wire).
 pub(super) fn bezier(a: Pos2, b: Pos2, dir: Vec2, stroke: Stroke) -> Shape {
+    CubicBezierShape::from_points_stroke(
+        bezier_points(a, b, dir),
+        false,
+        Color32::TRANSPARENT,
+        stroke,
+    )
+    .into()
+}
+
+/// Control points of the wire from `a` (leaving to the right) into `b`
+/// (entered against `dir`).
+pub(super) fn bezier_points(a: Pos2, b: Pos2, dir: Vec2) -> [Pos2; 4] {
     let d = ((b.x - a.x).abs() * 0.5).max(40.0);
     let end = if dir.y != 0.0 {
         let dy = ((b.y - a.y).abs() * 0.5).max(40.0);
@@ -87,13 +100,31 @@ pub(super) fn bezier(a: Pos2, b: Pos2, dir: Vec2, stroke: Stroke) -> Shape {
     } else {
         b + dir * d
     };
-    CubicBezierShape::from_points_stroke(
-        [a, a + vec2(d, 0.0), end, b],
-        false,
-        Color32::TRANSPARENT,
-        stroke,
-    )
-    .into()
+    [a, a + vec2(d, 0.0), end, b]
+}
+
+/// Distance from `p` to the wire curve `c`.
+pub(super) fn bezier_distance(c: [Pos2; 4], p: Pos2) -> f32 {
+    let at = |t: f32| {
+        let u = 1.0 - t;
+        (c[0].to_vec2() * (u * u * u)
+            + c[1].to_vec2() * (3.0 * u * u * t)
+            + c[2].to_vec2() * (3.0 * u * t * t)
+            + c[3].to_vec2() * (t * t * t))
+            .to_pos2()
+    };
+    const STEPS: usize = 32;
+    (0..STEPS)
+        .map(|k| {
+            let (a, b) = (
+                at(k as f32 / STEPS as f32),
+                at((k + 1) as f32 / STEPS as f32),
+            );
+            let ab = b - a;
+            let t = ((p - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+            p.distance(a + ab * t)
+        })
+        .fold(f32::INFINITY, f32::min)
 }
 
 /// A part drawn as a labelled box with a coloured header.
