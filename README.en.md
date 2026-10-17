@@ -1,5 +1,25 @@
 # makine
 
+## Processor workshop
+
+The **World** is a live circuit workbench with nested, collapsible modules,
+named buses, manual wire waypoints, alignment, a navigable overview map and
+a per-simulation-step logic analyser (16 probes, 256 samples per probe).
+Modules preserve the actual gates, wiring and layout; closing a module does
+not replace it with an emulator. Modules and routes are shared over LAN;
+open/closed views and probes are local to each player.
+
+**World → Örnek projeler → 4004 atölyesi aç** creates a separate example
+world with a gate-built 4-bit arithmetic/control core and an editable 4 KiB
+program ROM. Registers and ROM are storage primitives, not an opcode
+interpreter. This is **not a complete or timing-accurate 4004/MCS-4**: SRC,
+DCL and external memory/I/O instructions are not implemented; unsupported
+opcodes assert a fault and hold PC. See [the scope and example program
+(Turkish)](docs/wiki/4004.md).
+
+Four new exercises cover a 4-bit multiplexer, carry adder, register and
+12-bit program counter. The existing RISC-V / Doom path is unchanged.
+
 *[Türkçe](README.md)*
 
 An educational tool where you build a computer yourself, starting from a single NAND

@@ -112,13 +112,20 @@ pub fn find(chip: &str) -> Option<&'static Level> {
 /// Every level, in order.
 pub fn levels() -> &'static [&'static Level] {
     static ALL: std::sync::OnceLock<Vec<&'static Level>> = std::sync::OnceLock::new();
-    ALL.get_or_init(|| BASIC.iter().chain(cpu::LEVELS).collect())
+    ALL.get_or_init(|| {
+        BASIC
+            .iter()
+            .chain(cpu::LEVELS)
+            .chain(workshop::LEVELS)
+            .collect()
+    })
 }
 
 pub mod cpu;
 pub mod fast;
 pub mod reference;
 mod reference_cpu;
+pub mod workshop;
 
 const LOGIC: &str = "1. Mantık";
 const ARITH: &str = "2. Aritmetik";

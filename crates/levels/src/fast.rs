@@ -33,7 +33,7 @@ pub fn model(chip: &str) -> Option<NativeDef> {
             },
         ),
         "DFF" => NativeDef::clocked(ins, outs, &[], 0u64, |q, i| *q = i[0], |q, _, o| o[0] = *q),
-        "Bit" | "Register32" => NativeDef::clocked(
+        "Bit" | "Register4" | "Register32" => NativeDef::clocked(
             ins,
             outs,
             &[],
@@ -42,6 +42,22 @@ pub fn model(chip: &str) -> Option<NativeDef> {
                 if i[1] & 1 == 1 {
                     *q = i[0]
                 }
+            },
+            |q, _, o| o[0] = *q,
+        ),
+        "Counter12" => NativeDef::clocked(
+            ins,
+            outs,
+            &[],
+            0u64,
+            |q, i| {
+                *q = if i[3] == 1 {
+                    0
+                } else if i[1] == 1 {
+                    i[0]
+                } else {
+                    (*q + i[2]) & 4095
+                };
             },
             |q, _, o| o[0] = *q,
         ),

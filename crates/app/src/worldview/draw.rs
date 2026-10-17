@@ -17,13 +17,46 @@ use crate::theme;
 impl WorldView {
     pub(super) fn draw(&self, painter: &egui::Painter, board: Rect, l: &Layout, hover: &Hover) {
         self.draw_board(painter, board, l);
+        for m in &l.modules {
+            let r = l.rect(m.rect);
+            if !board.intersects(r) {
+                continue;
+            }
+            if !m.closed {
+                painter.rect_filled(r, 6.0, Color32::from_black_alpha(24));
+            }
+            painter.rect_stroke(r, 6.0, Stroke::new(1.0, theme::COPPER), StrokeKind::Inside);
+            let head = Rect::from_min_size(r.min, vec2(r.width(), 28.0 * self.zoom));
+            painter.rect_filled(head, 4.0, theme::RAISED);
+            painter.text(
+                head.left_center() + vec2(10.0 * self.zoom, 0.0),
+                Align2::LEFT_CENTER,
+                format!("{} {}", if m.closed { "+" } else { "−" }, m.name),
+                FontId::proportional((14.0 * self.zoom).max(9.0)),
+                theme::COPPER_BRIGHT,
+            );
+        }
         self.draw_wires(painter, l, hover);
         for (id, at, shape) in &l.parts {
+            if !l.visible(*id) {
+                continue;
+            }
+            if l.part_rect(*id)
+                .is_some_and(|r| !board.intersects(l.rect(r).expand(8.0)))
+            {
+                continue;
+            }
             let Some(p) = self.world.part(*id) else {
                 continue;
             };
             let selected = self.selected.contains(id);
             let hl = selected || hover.part == Some(*id);
+            if self.zoom < 0.35 {
+                if let Some(r) = l.part_rect(*id) {
+                    painter.rect_filled(l.rect(r), 1.0, theme::RAISED_HOVER);
+                }
+                continue;
+            }
             match shape {
                 Some(s) => self.draw_part(painter, l, *id, &p.kind, *at, s, hl, hover),
                 None => {
@@ -47,6 +80,44 @@ impl WorldView {
                         Stroke::new(1.5, theme::COPPER),
                         StrokeKind::Outside,
                     );
+                }
+            }
+        }
+        for m in l.modules.iter().filter(|m| m.closed) {
+            for (output, list) in [(false, &m.inputs), (true, &m.outputs)] {
+                for (end, name, width) in list {
+                    let p = if output {
+                        l.source_pos(*end)
+                    } else {
+                        l.sink_pos(*end)
+                    };
+                    if let Some(p) = p {
+                        let value = if output {
+                            self.sim.value(*end)
+                        } else {
+                            self.sim.input_value(&self.world, *end)
+                        };
+                        let col = wire_color(*width, value);
+                        painter.circle_filled(p, 4.0 * self.zoom, col);
+                        if self.zoom > 0.45 {
+                            let text = format!(
+                                "{} {}",
+                                name,
+                                value.map_or("?".into(), |v| format!("{v:X}"))
+                            );
+                            painter.text(
+                                p + vec2(if output { -9.0 } else { 9.0 } * self.zoom, 0.0),
+                                if output {
+                                    Align2::RIGHT_CENTER
+                                } else {
+                                    Align2::LEFT_CENTER
+                                },
+                                text,
+                                FontId::proportional(10.0 * self.zoom),
+                                theme::INK_DIM,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -74,10 +145,23 @@ impl WorldView {
     fn draw_wires(&self, painter: &egui::Painter, l: &Layout, hover: &Hover) {
         let z = self.zoom;
         let mut shapes = Vec::new();
+        let mut drawn = std::collections::HashSet::new();
         for (from, to) in self.world.wires() {
+            if !l.wire_visible(from, to) {
+                continue;
+            }
             let (Some(a), Some(b)) = (l.source_pos(from), l.sink_pos(to)) else {
                 continue;
             };
+            if !drawn.insert((
+                from,
+                (a.x * 4.0) as i32,
+                (a.y * 4.0) as i32,
+                (b.x * 4.0) as i32,
+                (b.y * 4.0) as i32,
+            )) {
+                continue;
+            }
             let width = l.output_pin(from).map_or(1, |p| p.width);
             let bad = l
                 .input_pin(to)
@@ -92,7 +176,39 @@ impl WorldView {
                 color = WIRE_HOVER;
                 thick += 2.0 * z;
             }
-            shapes.push(bezier(a, b, l.sink_dir(to), Stroke::new(thick, color)));
+            // Bezier control points may lie outside the endpoint rectangle.
+            // Use their hull for conservative culling, or the full manual route.
+            let manual = super::routing::points(&self.world, l, from, to);
+            let hull = match &manual {
+                Some(pts) => Rect::from_points(pts),
+                None => {
+                    Rect::from_points(&crate::canvas::draw::bezier_points(a, b, l.sink_dir(to)))
+                }
+            };
+            if !painter.clip_rect().intersects(hull.expand(thick + 8.0)) {
+                continue;
+            }
+            let label_at = manual
+                .as_ref()
+                .and_then(|p| p.get(p.len() / 2))
+                .copied()
+                .unwrap_or(a + (b - a) * 0.5);
+            if let Some(pts) = manual {
+                shapes.push(egui::Shape::line(pts, Stroke::new(thick, color)));
+            } else {
+                shapes.push(bezier(a, b, l.sink_dir(to), Stroke::new(thick, color)));
+            }
+            if z > 0.5 {
+                if let Some(s) = self.world.wire_style(to).filter(|s| !s.name.is_empty()) {
+                    painter.text(
+                        label_at - vec2(0.0, 4.0),
+                        Align2::CENTER_BOTTOM,
+                        &s.name,
+                        FontId::monospace(11.0 * z),
+                        theme::BUS,
+                    );
+                }
+            }
         }
         painter.extend(shapes);
     }

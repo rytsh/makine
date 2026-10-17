@@ -127,6 +127,28 @@ fn players_converge() {
     assert_eq!(cells(&a.world), cells(&hw));
     assert_eq!(cells(&b.world), cells(&hw));
 
+    // Presentation metadata uses exactly the same ordered edit stream.
+    // No player may lose a module name or a manual route to a late echo.
+    a.edit(Edit::Module {
+        id: 999,
+        module: Some(makine_world::Module {
+            name: "ALU".into(),
+            members: vec![1],
+        }),
+    });
+    b.edit(Edit::Style {
+        to: makine_world::End::new(1, 0),
+        style: Some(makine_world::WireStyle {
+            name: "data".into(),
+            points: vec![Pos::new(40.0, 80.0)],
+        }),
+    });
+    settle(&mut host, &mut hw, &mut [&mut a, &mut b], |hw, p| {
+        hw.module(999).is_some()
+            && hw.wire_style(makine_world::End::new(1, 0)).is_some()
+            && p.iter().all(|p| p.world.to_json() == hw.to_json())
+    });
+
     // Cursors reach the others.
     a.client.send_cursor(Some(Pos::new(3.0, 4.0)));
     let aid = a.client.id().unwrap();

@@ -21,7 +21,8 @@ koyabilirsin.
 - **Giriş / Çıkış**: adı olan uçlar. Tıklayınca girişin değeri değişir.
   Çip yaparken bunlar çipin uçları olur.
 - **Sabit, Böl, Birleştir**: seviyelerdeki gibi, bus'larla çalışmak için.
-- **Cihazlar**: RAM, ROM, ekran, klavye ve sayı göstergesi.
+- **Cihazlar**: RAM, ROM, yazmaç, 4096 baytlık Program ROM, ekran, klavye
+  ve sayı göstergesi.
 - **Çiplerin**: çözdüğün her seviye ve yaptığın her serbest çip.
 
 ## Tel çekmek
@@ -35,6 +36,10 @@ tel girer.
   boşluğa bırakırsan kesilir.
 - Tellerin rengi değerini gösterir: yanan tel **1**, sönük tel **0**. Mavi
   teller birden çok bit taşıyan bus'lardır.
+- Telin üstüne sağ tıkla, **Tel adı / yolunu düzenle** seç: sağ panelde
+  bus'a bir ad ver. **Dirsek ekle** ile tahtaya tıklayarak yolu belirle;
+  Enter ya da Esc ile bitir. **Otomatik yol** eğri tele döndürür. Telin
+  adını değiştirmek bağlantısını değiştirmez.
 
 ## Seçmek ve taşımak
 
@@ -42,6 +47,30 @@ tel girer.
 - **Shift+sürükle** ile bir alandaki bütün parçaları seçersin.
 - Seçiliyken **Ctrl+C / Ctrl+V** kopyalar, **Ctrl+D** çoğaltır, **Delete**
   siler. Kopyalanan parçaların aralarındaki teller de gelir.
+- **Üstten hizala / Soldan hizala** seçilen parçaları aynı çizgiye getirir.
+- **Küçük harita** büyük bir devrede kaybolmanı önler; haritaya tıklayarak
+  başka bir bölgeye gidersin. **Home / Ortala** bütün devreyi gösterir.
+
+## Modüller ve sinyal izleme
+
+Bir alanı seçip sağ panelde ad vererek **Modül yap**. Başlığına çift
+tıklayınca içi açılır; tekrar çift tıklayınca kapanır. Kapalı modülün
+uçları içindeki gerçek bağlantılara gider. Parçaların konumları ve
+simülasyon durumu korunur. Modüller iç içe olabilir.
+
+Bir telin üstüne sağ tıklayıp **Sinyali izle** seç. Sinyal geçmişi, son
+256 simülasyon adımını gösterir. **Değişince dur**, o sinyal değiştiğinde
+simülasyonu durdurur. **Bir adım** saati tek adım ilerletir; **Saat çevrimi**
+ilk saatin bir sonraki yükselen kenarına kadar ilerler.
+
+Ayrıntılar: [Modüller](moduller.md), [Sinyal izleme](sinyaller.md).
+
+## 4004 atölyesini dene
+
+Sağ panelde **Örnek projeler → 4004 atölyesi aç**. Mevcut dünyan kalır,
+örnek yeni bir dünyada açılır. Bu, gerçek kapılardan oluşan bir aritmetik
+ve kontrol çekirdeğidir; tam bir MCS-4 sistemi değildir.
+[Nelerin çalıştığını ve örnek programı oku](4004.md).
 
 ## Çip yapmak
 
@@ -58,4 +87,6 @@ başka bir dünyada tek bir parça olarak da kullanabilirsin.
 ## Birlikte kurmak
 
 **Birlikte kur** kısmından dünyanı aynı ağdaki arkadaşlarınla paylaşabilirsin.
-Herkes aynı tahtada çalışır ve birbirinin farenin nerede olduğunu görür.
+Herkes aynı tahtada çalışır ve birbirinin fare imlecini görür. Modül adları,
+üyeleri ve tel yolları paylaşılır; bir modülü açık mı kapalı mı gördüğün
+ve hangi sinyalleri izlediğin yalnızca senin görünümüne aittir.

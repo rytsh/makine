@@ -4,6 +4,7 @@
 //! part is only moved or a switch flipped), keeping what devices hold
 //! (memory, screen, keys).
 
+use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use makine_sim::{Circuit, Library};
@@ -52,6 +53,9 @@ pub struct WorldSim {
     oscillating: bool,
     /// Keys to deliver to a keyboard device: (native name, key).
     keys: Vec<(String, u8)>,
+    pub traces: BTreeMap<End, VecDeque<(u64, Option<u64>)>>,
+    pub break_on_change: Option<End>,
+    cycle_target: Option<u64>,
 }
 
 impl Default for WorldSim {
@@ -69,11 +73,66 @@ impl Default for WorldSim {
             values: Vec::new(),
             oscillating: false,
             keys: Vec::new(),
+            traces: BTreeMap::new(),
+            break_on_change: None,
+            cycle_target: None,
         }
     }
 }
 
 impl WorldSim {
+    /// At most sixteen probes, each holding the latest 256 simulation
+    /// steps. Samples are taken per evaluation, not per rendered frame.
+    pub fn watch(&mut self, end: End) {
+        if self.traces.len() < 16 {
+            self.traces.entry(end).or_default();
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.circuit = None;
+        self.revision = u64::MAX;
+        self.tick = 0;
+        self.values.clear();
+        self.keys.clear();
+        self.oscillating = false;
+        self.rate = 0.0;
+        self.rate_window = (Instant::now(), 0);
+        self.step_once = false;
+        self.cycle_target = None;
+        for t in self.traces.values_mut() {
+            t.clear();
+        }
+    }
+
+    fn sample(&mut self) -> bool {
+        let mut hit = false;
+        let readings: Vec<_> = self.traces.keys().map(|e| (*e, self.value(*e))).collect();
+        for (end, value) in readings {
+            let trace = self.traces.get_mut(&end).unwrap();
+            if let Some((tick, old)) = trace.back() {
+                if self.break_on_change == Some(end)
+                    && *tick != self.tick
+                    && old.is_some()
+                    && value.is_some()
+                    && *old != value
+                {
+                    hit = true;
+                }
+                if *tick == self.tick {
+                    trace.pop_back();
+                }
+            }
+            trace.push_back((self.tick, value));
+            if trace.len() > 256 {
+                trace.pop_front();
+            }
+        }
+        if hit {
+            self.running = false;
+        }
+        hit
+    }
     pub fn set_library(&mut self, lib: Library) {
         self.lib = lib;
         self.revision = u64::MAX;
@@ -94,6 +153,13 @@ impl WorldSim {
                 Circuit::compile_def(&c.library_with(&self.lib), &c.def)
                     .map_err(|e| SimError::Build(e.to_string()))
                     .map(|mut sim| {
+                        // Establish the current clock phase before restoring
+                        // device state. A layout-independent rebuild while
+                        // the clock is high must not invent a rising edge.
+                        for (i, (id, src)) in c.inputs.iter().enumerate() {
+                            sim.set_input(i, input_value(world, *id, src, self.tick));
+                        }
+                        let _ = sim.eval();
                         for (name, s) in saved {
                             device::restore(&mut sim, &name, s);
                         }
@@ -165,24 +231,65 @@ impl WorldSim {
         self.step_once = true;
     }
 
+    /// Pause and run to the next rising edge of the first clock. Long
+    /// periods are advanced across frames within the usual time budget.
+    pub fn clock_cycle(&mut self, world: &World) -> bool {
+        let Some(period) = world.parts().find_map(|(_, p)| match p.kind {
+            Kind::Clock { period } => Some(u64::from(period.max(1))),
+            _ => None,
+        }) else {
+            return false;
+        };
+        let phases = if (self.tick / period).is_multiple_of(2) {
+            1
+        } else {
+            2
+        };
+        self.running = false;
+        self.cycle_target = Some(self.tick + phases * period - self.tick % period);
+        true
+    }
+
+    pub fn advancing_cycle(&self) -> bool {
+        self.cycle_target.is_some()
+    }
+
     /// Run this frame's steps: `speed` of them, or as many as fit in a few
     /// milliseconds. While paused the circuit is still evaluated (so
     /// switches respond) without advancing the clock.
     pub fn run_frame(&mut self, world: &World) {
-        let advance = self.running || std::mem::take(&mut self.step_once);
+        let advance =
+            self.running || std::mem::take(&mut self.step_once) || self.cycle_target.is_some();
         if !advance {
             self.step(world, false);
+            self.sample();
             return;
         }
         let start = Instant::now();
         let budget = Duration::from_millis(8);
-        let n = if self.running { self.speed } else { 1 };
+        let n = if self.cycle_target.is_some() {
+            0
+        } else if self.running {
+            self.speed
+        } else {
+            1
+        };
         let mut done = 0u64;
         loop {
             if !self.step(world, true) {
+                self.sample();
+                self.cycle_target = None;
                 break;
             }
             done += 1;
+            if self.sample() {
+                self.cycle_target = None;
+                break;
+            }
+            if self.cycle_target.is_some_and(|target| self.tick >= target) {
+                self.cycle_target = None;
+                break;
+            }
             let more = if n == 0 {
                 start.elapsed() < budget
             } else {
@@ -222,12 +329,7 @@ impl WorldSim {
             device::press(sim, &name, key);
         }
         for (i, (id, src)) in c.inputs.iter().enumerate() {
-            let v = match (src, world.part(*id).map(|p| &p.kind)) {
-                (InputSource::Clock { period }, _) => (tick / u64::from((*period).max(1))) % 2,
-                (_, Some(Kind::Switch { on })) => *on as u64,
-                (_, Some(Kind::Input { value, .. })) => *value,
-                _ => 0,
-            };
+            let v = input_value(world, *id, src, tick);
             sim.set_input(i, v);
         }
         self.oscillating = sim.eval().is_err();
@@ -238,6 +340,15 @@ impl WorldSim {
         self.values
             .extend((0..c.def.outputs.len()).map(|o| sim.output(o)));
         true
+    }
+}
+
+fn input_value(world: &World, id: Id, src: &InputSource, tick: u64) -> u64 {
+    match (src, world.part(id).map(|p| &p.kind)) {
+        (InputSource::Clock { period }, _) => (tick / u64::from((*period).max(1))) % 2,
+        (_, Some(Kind::Switch { on })) => *on as u64,
+        (_, Some(Kind::Input { value, .. })) => *value,
+        _ => 0,
     }
 }
 
@@ -326,5 +437,63 @@ mod tests {
         wire(&mut w, not, not);
         s.run_frame(&w);
         assert_eq!(s.error(), Some(SimError::Oscillates));
+    }
+
+    #[test]
+    fn probes_sample_each_step_and_trigger_stops_fast_run() {
+        let mut w = World::new("scope");
+        let clk = put(&mut w, Kind::Clock { period: 2 });
+        let mut sim = WorldSim::default();
+        let end = End::new(clk, 0);
+        sim.watch(end);
+        sim.speed = 10;
+        sim.run_frame(&w);
+        assert_eq!(sim.traces[&end].len(), 10);
+        assert_eq!(sim.traces[&end][0], (1, Some(0)));
+        assert_eq!(sim.traces[&end][1], (2, Some(1)));
+        sim.break_on_change = Some(end);
+        sim.run_frame(&w);
+        assert!(!sim.running);
+        assert_eq!(sim.tick, 12);
+        sim.run_frame(&w);
+        assert_eq!(
+            sim.traces[&end].len(),
+            12,
+            "paused frames replace the sample"
+        );
+        sim.break_on_change = None;
+        sim.running = true;
+        sim.speed = 1000;
+        sim.run_frame(&w);
+        assert_eq!(sim.traces[&end].len(), 256);
+        sim.reset();
+        assert_eq!(sim.tick, 0);
+        assert!(sim.traces[&end].is_empty());
+    }
+
+    #[test]
+    fn workshop_cycles_and_live_edit_keep_storage() {
+        let project = makine_world::projects::mcs4::project(makine_world::projects::mcs4::DEMO);
+        let mut world = project.world;
+        let a = project.watches[0];
+        let pc = project.watches[2];
+        let mut sim = WorldSim {
+            running: false,
+            ..Default::default()
+        };
+        sim.run_frame(&world);
+        assert_eq!(sim.value(pc), Some(0));
+        for (want_pc, want_a) in [(1, 0), (2, 0), (3, 3), (4, 3), (5, 3), (6, 3), (2, 3)] {
+            assert!(sim.clock_cycle(&world));
+            sim.run_frame(&world);
+            assert_eq!(sim.value(pc), Some(want_pc));
+            assert_eq!(sim.value(a), Some(want_a));
+        }
+        // Rebuilding at a high clock level must not overwrite the saved
+        // registers with the new natives' initially empty input buffers.
+        put(&mut world, Kind::Lamp);
+        sim.run_frame(&world);
+        assert_eq!(sim.value(pc), Some(2));
+        assert_eq!(sim.value(a), Some(3));
     }
 }

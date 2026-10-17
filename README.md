@@ -3,7 +3,7 @@
 *[English](README.en.md)*
 
 NAND kapısından başlayıp çalışan bir bilgisayara kadar her şeyi kendin inşa ettiğin
-bir eğitim aracı. Son seviyede kendi yaptığın RISC-V işlemci gerçek programlar
+bir eğitim aracı. İşlemci bölümünde kendi yaptığın RISC-V işlemci gerçek programlar
 çalıştırıyor; derlenmiş C programları ve Doom dahil.
 
 ## Çalıştırma
@@ -80,6 +80,29 @@ Redistributable kurulu olmayan makinelerde de çalışır.
   ayar hatırlanır).
 - **Test et** çipini kontrol eder. Geçersen çip sonraki seviyelerde parça olarak açılır.
 
+## Dünya ve işlemci atölyesi
+
+**Dünya**, parçaları serbestçe yerleştirip uçtan uca tel çektiğin canlı bir
+elektronik tezgâhıdır. Shift+sürükle ile seç; **Modül yap** ile adlandır;
+başlığa çift tıklayarak içini aç/kapat. İç içe modüller özgün yerleşimi ve
+çalışan devreyi korur. Tel adları, elle eklenen dirsekler, hizalama ve
+tıklanabilir küçük harita büyük şemaları düzenlemeyi kolaylaştırır.
+
+Telde sağ tık → **Sinyali izle**: son 256 simülasyon adımını incele,
+**Değişince dur** ile bir değişimi yakala. **Saat çevrimi** ilk saatin sonraki
+yükselen kenarına ilerler. Bunlar kaydedilen devreyi değiştirmeyen yerel
+inceleme araçlarıdır. LAN üzerinden modüller ve teller birlikte düzenlenebilir.
+
+**Örnek projeler → 4004 atölyesi aç** kapılardan kurulmuş bir 4-bit
+aritmetik/kontrol çekirdeği açar. Akümülatör, taşıma, 16 yazmaç, 12-bit PC,
+üç dönüş adresi ve 4 KiB program ROM'u vardır. Örnek gerçek 4004 opcode'ları
+ile çalışır; işlem yürütme emülatörde saklı değildir. **Tam 4004/MCS-4
+uyumluluğu değildir:** SRC, DCL ve dış bellek/GÇ komutları henüz yoktur;
+saat ve dış bus sadeleştirilmiştir. [Kapsam ve örnek program](docs/wiki/4004.md).
+
+Yeni eğitim bölümünde 4-bit MUX, taşımalı toplayıcı, yazmaç ve 12-bit program
+sayacı alıştırmaları bulunur. RISC-V / Doom yolu korunmuştur.
+
 ## Wiki
 
 Soldaki **📖 Wiki** bölümü, her parçanın arkasındaki fikri anlatır:
@@ -107,7 +130,8 @@ fotoğraflar yapay zekâ ile üretilmiştir.
    program sayacı, 8 kelimelik RAM
 4. **ALU:** sıfır testi, karşılaştırıcı, sola/sağa kaydırıcı, ALU, register dosyası
 5. **İşlemci:** komut çözücü, kontrol birimi, dallanma, yükleme/saklama birimleri,
-   çarpma/bölme, ve hepsini birleştiren **RV32IM işlemci**
+    çarpma/bölme, ve hepsini birleştiren **RV32IM işlemci**
+6. **İşlemci atölyesi:** 4-bit seçici, taşımalı toplayıcı, yazmaç ve 12-bit program sayacı
 
 İşlemci testi, gerçek programları senin işlemcinde ve bir referans işlemcide yan yana
 çalıştırır ve her komuttan sonra karşılaştırır. Bir fark olursa hangi komutun, hangi

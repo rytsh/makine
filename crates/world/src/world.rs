@@ -53,6 +53,23 @@ pub struct End {
     pub pin: usize,
 }
 
+/// A live schematic module. Members keep their ids, positions and wires;
+/// collapsing is a local view preference, never a simulation change.
+/// Nested modules are represented by nested member sets.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Module {
+    pub name: String,
+    pub members: Vec<Id>,
+}
+
+/// Presentation of a wire, independent of its electrical connection.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WireStyle {
+    pub name: String,
+    /// Manual waypoints in world coordinates (empty: a curved wire).
+    pub points: Vec<Pos>,
+}
+
 impl End {
     pub const fn new(part: Id, pin: usize) -> Self {
         Self { part, pin }
@@ -67,9 +84,23 @@ impl End {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Edit {
     /// Put a part with this id (replacing it), or remove it with `None`.
-    Part { id: Id, part: Option<Placed> },
+    Part {
+        id: Id,
+        part: Option<Placed>,
+    },
     /// Wire output `from` into input `to`, or cut the wire into `to`.
-    Wire { to: End, from: Option<End> },
+    Wire {
+        to: End,
+        from: Option<End>,
+    },
+    Module {
+        id: Id,
+        module: Option<Module>,
+    },
+    Style {
+        to: End,
+        style: Option<WireStyle>,
+    },
     /// Several edits applied together, undone together.
     Batch(Vec<Edit>),
 }
@@ -79,12 +110,16 @@ pub enum Edit {
 enum Key {
     Part(Id),
     Wire(End),
+    Module(Id),
+    Style(End),
 }
 
 #[derive(Clone, Debug, PartialEq)]
 enum Value {
     Part(Placed),
     Wire(End),
+    Module(Module),
+    Style(WireStyle),
 }
 
 /// What an edit changed: (thing, before, after). Undoing it restores only
@@ -109,6 +144,10 @@ pub struct World {
     /// map keys must be strings).
     #[serde(with = "wire_list")]
     wires: BTreeMap<End, End>,
+    #[serde(default)]
+    modules: BTreeMap<Id, Module>,
+    #[serde(default, with = "style_list")]
+    styles: BTreeMap<End, WireStyle>,
     /// Bumped on every change, so views and compiled circuits know when to
     /// refresh.
     #[serde(skip)]
@@ -154,6 +193,18 @@ impl World {
         self.wires.get(&to).copied()
     }
 
+    pub fn modules(&self) -> impl Iterator<Item = (Id, &Module)> {
+        self.modules.iter().map(|(id, m)| (*id, m))
+    }
+
+    pub fn module(&self, id: Id) -> Option<&Module> {
+        self.modules.get(&id)
+    }
+
+    pub fn wire_style(&self, to: End) -> Option<&WireStyle> {
+        self.styles.get(&to)
+    }
+
     pub fn len(&self) -> usize {
         self.parts.len()
     }
@@ -171,7 +222,7 @@ impl World {
             h.write_usize(self.parts.len());
             // Small enough to be exact in JSON numbers everywhere.
             let id = h.finish() >> 11;
-            if id != 0 && !self.parts.contains_key(&id) {
+            if id != 0 && !self.parts.contains_key(&id) && !self.modules.contains_key(&id) {
                 return id;
             }
         }
@@ -187,6 +238,15 @@ impl World {
                 .map(|(to, _)| Edit::Wire {
                     to: *to,
                     from: None,
+                }),
+        );
+        v.extend(
+            self.wires
+                .iter()
+                .filter(|(to, from)| to.part == id || from.part == id)
+                .map(|(to, _)| Edit::Style {
+                    to: *to,
+                    style: None,
                 }),
         );
         Edit::Batch(v)
@@ -213,6 +273,8 @@ impl World {
         match key {
             Key::Part(id) => self.parts.get(&id).cloned().map(Value::Part),
             Key::Wire(to) => self.wires.get(&to).copied().map(Value::Wire),
+            Key::Module(id) => self.modules.get(&id).cloned().map(Value::Module),
+            Key::Style(to) => self.styles.get(&to).cloned().map(Value::Style),
         }
     }
 
@@ -225,6 +287,14 @@ impl World {
             Edit::Wire { to, from } => {
                 seen(Key::Wire(to), self.get(Key::Wire(to)));
                 self.put_wire(to, from);
+            }
+            Edit::Module { id, module } => {
+                seen(Key::Module(id), self.get(Key::Module(id)));
+                self.put_module(id, module);
+            }
+            Edit::Style { to, style } => {
+                seen(Key::Style(to), self.get(Key::Style(to)));
+                self.put_style(to, style);
             }
             Edit::Batch(edits) => {
                 for e in edits {
@@ -262,6 +332,20 @@ impl World {
                             _ => None,
                         },
                     },
+                    (Key::Module(id), v) => Edit::Module {
+                        id: *id,
+                        module: match v {
+                            Some(Value::Module(m)) => Some(m),
+                            _ => None,
+                        },
+                    },
+                    (Key::Style(to), v) => Edit::Style {
+                        to: *to,
+                        style: match v {
+                            Some(Value::Style(s)) => Some(s),
+                            _ => None,
+                        },
+                    },
                 })
             })
             .collect();
@@ -273,6 +357,8 @@ impl World {
         match edit {
             Edit::Part { id, part } => self.put_part(id, part),
             Edit::Wire { to, from } => self.put_wire(to, from),
+            Edit::Module { id, module } => self.put_module(id, module),
+            Edit::Style { to, style } => self.put_style(to, style),
             Edit::Batch(edits) => edits.into_iter().for_each(|e| self.apply(e)),
         }
     }
@@ -314,6 +400,58 @@ impl World {
         }
     }
 
+    fn put_module(&mut self, id: Id, module: Option<Module>) {
+        let module = module.map(|mut m| {
+            m.name = m
+                .name
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(48)
+                .collect();
+            m.members.sort_unstable();
+            m.members.dedup();
+            m
+        });
+        if module
+            .as_ref()
+            .is_some_and(|m| m.name.trim().is_empty() || m.members.len() > 100_000)
+        {
+            return;
+        }
+        let old = match &module {
+            Some(m) => self.modules.insert(id, m.clone()),
+            None => self.modules.remove(&id),
+        };
+        if old != module {
+            self.revision += 1;
+        }
+    }
+
+    fn put_style(&mut self, to: End, style: Option<WireStyle>) {
+        if style
+            .as_ref()
+            .is_some_and(|s| s.points.len() > 128 || s.points.iter().any(|p| !p.in_bounds()))
+        {
+            return;
+        }
+        let style = style.map(|mut s| {
+            s.name = s
+                .name
+                .chars()
+                .filter(|c| !c.is_control())
+                .take(48)
+                .collect();
+            s
+        });
+        let old = match &style {
+            Some(s) => self.styles.insert(to, s.clone()),
+            None => self.styles.remove(&to),
+        };
+        if old != style {
+            self.revision += 1;
+        }
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("worlds serialize")
     }
@@ -333,7 +471,29 @@ impl World {
         for (to, from) in self.wires {
             w.put_wire(to, Some(from));
         }
+        for (id, m) in self.modules {
+            w.put_module(id, Some(m));
+        }
+        for (to, s) in self.styles {
+            w.put_style(to, Some(s));
+        }
         w
+    }
+}
+
+mod style_list {
+    use super::{End, WireStyle};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::collections::BTreeMap;
+    pub fn serialize<S: Serializer>(m: &BTreeMap<End, WireStyle>, s: S) -> Result<S::Ok, S::Error> {
+        m.iter().collect::<Vec<_>>().serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<BTreeMap<End, WireStyle>, D::Error> {
+        Ok(Vec::<(End, WireStyle)>::deserialize(d)?
+            .into_iter()
+            .collect())
     }
 }
 
@@ -473,5 +633,36 @@ mod tests {
         assert_eq!(back.wire_into(End::new(l, 0)), Some(End::new(s, 0)));
         // Worlds from before (a grid of cells) are not read.
         assert!(World::from_json(r#"{"name":"eski","chunks":[]}"#).is_err());
+    }
+
+    #[test]
+    fn presentation_is_serialized_undoable_and_not_electrical() {
+        let mut w = World::new("w");
+        let a = put(&mut w, Kind::Lamp, 0.0);
+        let r = w.circuit_revision();
+        let change = w.apply_change(Edit::Batch(vec![
+            Edit::Module {
+                id: 99,
+                module: Some(Module {
+                    name: "ALU".into(),
+                    members: vec![a],
+                }),
+            },
+            Edit::Style {
+                to: End::new(a, 0),
+                style: Some(WireStyle {
+                    name: "data".into(),
+                    points: vec![Pos::new(10.0, 20.0)],
+                }),
+            },
+        ]));
+        assert_eq!(w.circuit_revision(), r);
+        let back = World::from_json(&w.to_json()).unwrap();
+        assert_eq!(back.module(99).unwrap().name, "ALU");
+        assert_eq!(back.wire_style(End::new(a, 0)).unwrap().points.len(), 1);
+        w.apply(w.revert(&change, true).unwrap());
+        assert!(w.module(99).is_none());
+        w.apply(w.revert(&change, false).unwrap());
+        assert_eq!(w.module(99).unwrap().name, "ALU");
     }
 }

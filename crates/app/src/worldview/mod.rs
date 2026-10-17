@@ -26,8 +26,11 @@ use crate::worldsim::WorldSim;
 mod draw;
 mod layout;
 mod panels;
+mod routing;
+mod scope;
 #[cfg(test)]
 mod tests;
+mod workbench;
 
 pub use layout::{label, shape, Layout};
 pub use panels::{device_palette, draggable, palette, PaletteItem};
@@ -62,6 +65,10 @@ pub struct Clip {
     pub parts: Vec<Placed>,
     /// (from part, from pin, to part, to pin), as indices into `parts`.
     pub wires: Vec<(usize, usize, usize, usize)>,
+    #[serde(default)]
+    modules: Vec<(String, Vec<usize>)>,
+    #[serde(default)]
+    styles: Vec<(usize, usize, makine_world::WireStyle)>,
 }
 
 const CLIP_FORMAT: &str = "makine-world-clip-2";
@@ -91,6 +98,13 @@ pub struct WorldView {
     pub sim: WorldSim,
     /// Selected parts.
     pub selected: BTreeSet<Id>,
+    pub selected_module: Option<Id>,
+    pub collapsed: BTreeSet<Id>,
+    module_name: String,
+    selected_wire: Option<End>,
+    routing: Option<End>,
+    pub minimap: bool,
+    scope_binary: bool,
     /// What is being dragged.
     drag: Drag,
     /// The world as it was when a move started, so the whole move is one
@@ -164,6 +178,7 @@ struct Hover {
 
 impl WorldView {
     pub fn new(world: World) -> Self {
+        let collapsed = world.modules().map(|(id, _)| id).collect();
         Self {
             world,
             placing: None,
@@ -174,6 +189,13 @@ impl WorldView {
             redo: Vec::new(),
             sim: WorldSim::default(),
             selected: BTreeSet::new(),
+            selected_module: None,
+            collapsed,
+            module_name: "Modül".into(),
+            selected_wire: None,
+            routing: None,
+            minimap: true,
+            scope_binary: false,
             drag: Drag::None,
             moving: None,
             fit: true,
@@ -203,6 +225,13 @@ impl WorldView {
     pub fn after_remote_edits(&mut self) {
         let w = &self.world;
         self.selected.retain(|id| w.part(*id).is_some());
+        self.collapsed.retain(|id| w.module(*id).is_some());
+        if self
+            .selected_module
+            .is_some_and(|id| w.module(id).is_none())
+        {
+            self.selected_module = None;
+        }
     }
 
     /// The pointer's world position, for other players.
@@ -340,8 +369,16 @@ impl WorldView {
         if ids.is_empty() {
             return;
         }
-        let edits = ids.iter().map(|id| self.world.remove(*id)).collect();
+        let mut edits: Vec<_> = ids.iter().map(|id| self.world.remove(*id)).collect();
+        let groups: Vec<_> = self
+            .world
+            .modules()
+            .filter(|(_, m)| m.members.iter().all(|id| ids.contains(id)))
+            .map(|(id, _)| Edit::Module { id, module: None })
+            .collect();
+        edits.extend(groups);
         self.edit(Edit::Batch(edits));
+        self.selected_module = None;
     }
 
     /// Copy the selected parts (and the wires between them); also returns
@@ -370,6 +407,29 @@ impl WorldView {
             format: CLIP_FORMAT.into(),
             parts,
             wires,
+            modules: self
+                .world
+                .modules()
+                .filter(|(_, m)| m.members.iter().all(|id| index(*id).is_some()))
+                .map(|(_, m)| {
+                    (
+                        m.name.clone(),
+                        m.members.iter().filter_map(|id| index(*id)).collect(),
+                    )
+                })
+                .collect(),
+            styles: self
+                .world
+                .wires()
+                .filter_map(|(_, to)| {
+                    let mut s = self.world.wire_style(to)?.clone();
+                    for p in &mut s.points {
+                        p.x -= first.x;
+                        p.y -= first.y;
+                    }
+                    Some((index(to.part)?, to.pin, s))
+                })
+                .collect(),
         };
         let text = serde_json::to_string(&clip).ok();
         self.clipboard = Some(clip);
@@ -416,8 +476,38 @@ impl WorldView {
                 });
             }
         }
+        for (name, members) in &clip.modules {
+            let id = scratch.new_id();
+            let e = Edit::Module {
+                id,
+                module: Some(makine_world::Module {
+                    name: name.clone(),
+                    members: members
+                        .iter()
+                        .filter_map(|i| ids.get(*i).copied())
+                        .collect(),
+                }),
+            };
+            scratch.apply(e.clone());
+            edits.push(e);
+        }
+        for (i, pin, style) in &clip.styles {
+            if let Some(id) = ids.get(*i) {
+                let mut style = style.clone();
+                // Coordinates are relative to the copied origin (see copy).
+                for p in &mut style.points {
+                    p.x += at.x;
+                    p.y += at.y;
+                }
+                edits.push(Edit::Style {
+                    to: End::new(*id, *pin),
+                    style: Some(style),
+                });
+            }
+        }
         self.edit(Edit::Batch(edits));
         self.selected = ids.into_iter().collect();
+        self.selected_module = None;
     }
 
     /// Copy and paste the selection a little lower and to the right.
@@ -498,6 +588,7 @@ impl WorldView {
             self.zoom,
             self.symbols,
         )
+        .project(&self.world, &self.collapsed)
     }
 
     fn fit_to(&mut self, board: Rect) {
@@ -510,7 +601,7 @@ impl WorldView {
         let b = b.expand(40.0);
         self.zoom = (board.width() / b.width())
             .min(board.height() / b.height())
-            .clamp(0.3, 1.5);
+            .clamp(0.03, 1.5);
         self.offset = board.size() / 2.0 - b.center().to_vec2() * self.zoom;
     }
 
@@ -541,10 +632,9 @@ impl WorldView {
     fn wire_at(&self, l: &Layout, p: Pos2, hit: f32) -> Option<End> {
         self.world
             .wires()
+            .filter(|(from, to)| l.wire_visible(*from, *to))
             .filter_map(|(from, to)| {
-                let (a, b) = (l.source_pos(from)?, l.sink_pos(to)?);
-                let pts = crate::canvas::draw::bezier_points(a, b, l.sink_dir(to));
-                let d = crate::canvas::draw::bezier_distance(pts, p);
+                let d = routing::wire_distance(&self.world, l, from, to, p)?;
                 (d < hit).then_some((to, d))
             })
             .min_by(|x, y| x.1.total_cmp(&y.1))
@@ -553,13 +643,16 @@ impl WorldView {
 
     /// Whether a wire may go from output `from` into input `to`.
     fn fits(&self, l: &Layout, from: End, to: End) -> bool {
-        match (l.output_pin(from), l.input_pin(to)) {
-            (Some(f), Some(t)) => makine_world::compile::fits(f.width, t.width),
-            _ => false,
-        }
+        l.sink_aliases(to)
+            .into_iter()
+            .all(|to| match (l.output_pin(from), l.input_pin(to)) {
+                (Some(f), Some(t)) => makine_world::compile::fits(f.width, t.width),
+                _ => false,
+            })
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
+        self.map_ui(ui);
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let board = response.rect;
         self.board = board;
@@ -588,6 +681,7 @@ impl WorldView {
         if let (Some(kind), Some(p)) = (response.dnd_release_payload::<PaletteItem>(), pointer) {
             let id = self.add(kind.0.clone(), l.to_world(p) - vec2(30.0, 20.0));
             self.selected = [id].into();
+            self.selected_module = None;
         }
 
         self.sim.run_frame(&self.world);
@@ -603,7 +697,7 @@ impl WorldView {
             .world
             .parts()
             .any(|(_, p)| matches!(p.kind, Kind::Clock { .. }));
-        if (self.sim.running && clocks) || self.typing() {
+        if (self.sim.running && clocks) || self.sim.advancing_cycle() || self.typing() {
             ui.ctx().request_repaint();
         }
     }
@@ -616,7 +710,7 @@ impl WorldView {
         let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
         let f = zoom * (scroll * 0.0015).exp();
         if f != 1.0 {
-            let new = (self.zoom * f).clamp(0.2, 3.0);
+            let new = (self.zoom * f).clamp(0.05, 3.0);
             let at = hp - response.rect.min;
             let world = (at - self.offset) / self.zoom;
             self.offset = at - world * new;
@@ -659,8 +753,15 @@ impl WorldView {
             return;
         }
         use egui::Key;
-        if ui.input(|i| i.key_pressed(Key::Escape)) && self.placing.take().is_none() {
+        if ui.input(|i| i.key_pressed(Key::Escape))
+            && self.routing.take().is_none()
+            && self.placing.take().is_none()
+        {
             self.selected.clear();
+            self.selected_module = None;
+        }
+        if ui.input(|i| i.key_pressed(Key::Enter)) {
+            self.routing = None;
         }
         let events = ui.input(|i| i.events.clone());
         for e in events {
@@ -686,7 +787,13 @@ impl WorldView {
             if !self.selected.is_empty() {
                 self.delete_selected();
             } else if let Some(to) = hover.wire {
-                self.edit(Edit::Wire { to, from: None });
+                let l = self.layout(self.origin);
+                self.edit(Edit::Batch(
+                    l.sink_aliases(to)
+                        .into_iter()
+                        .map(|to| Edit::Wire { to, from: None })
+                        .collect(),
+                ));
             }
         }
         let (undo, redo, dup, all) = ui.input(|i| {
@@ -758,14 +865,35 @@ impl WorldView {
             let held = at
                 .sink
                 .and_then(|(to, _)| Some((to, self.world.wire_into(to)?)));
+            let module = press.and_then(|p| l.module_at(p));
             self.drag = if let Some((from, _)) = at.source {
                 Drag::Wire(from)
             } else if let Some((to, from)) = held {
                 // Pulling a wire off an input: drop it on another input to
                 // move it, or on empty board to cut it.
-                self.edit(Edit::Wire { to, from: None });
+                self.edit(Edit::Batch(
+                    l.sink_aliases(to)
+                        .into_iter()
+                        .map(|to| Edit::Wire { to, from: None })
+                        .collect(),
+                ));
                 Drag::Wire(from)
+            } else if let Some(id) = module.filter(|_| !shift) {
+                self.selected_module = Some(id);
+                self.selected = self
+                    .world
+                    .module(id)
+                    .map(|m| m.members.iter().copied().collect())
+                    .unwrap_or_default();
+                self.moving = Some(
+                    self.selected
+                        .iter()
+                        .filter_map(|id| Some((*id, self.world.part(*id)?.pos)))
+                        .collect(),
+                );
+                Drag::Parts
             } else if let Some(id) = at.part.filter(|_| !shift) {
+                self.selected_module = None;
                 if !self.selected.contains(&id) {
                     self.selected = [id].into();
                 }
@@ -804,10 +932,21 @@ impl WorldView {
                             .parts
                             .iter()
                             .filter(|(id, _, _)| {
-                                l.part_rect(*id).is_some_and(|pr| r.intersects(pr))
+                                l.visible(*id)
+                                    && l.part_rect(*id).is_some_and(|pr| r.intersects(pr))
                             })
                             .map(|(id, _, _)| *id)
                             .collect();
+                        for m in l
+                            .modules
+                            .iter()
+                            .filter(|m| m.closed && r.intersects(m.rect))
+                        {
+                            if let Some(m) = self.world.module(m.id) {
+                                self.selected.extend(m.members.iter().copied());
+                            }
+                        }
+                        self.selected_module = None;
                     }
                 }
                 _ => {}
@@ -818,10 +957,15 @@ impl WorldView {
                 Drag::Wire(from) => {
                     if let Some((to, _)) = hover.sink {
                         if self.fits(l, from, to) {
-                            self.edit(Edit::Wire {
-                                to,
-                                from: Some(from),
-                            });
+                            self.edit(Edit::Batch(
+                                l.sink_aliases(to)
+                                    .into_iter()
+                                    .map(|to| Edit::Wire {
+                                        to,
+                                        from: Some(from),
+                                    })
+                                    .collect(),
+                            ));
                         } else {
                             self.status = Some("Bu iki ucun genişliği uymuyor.".into());
                         }
@@ -840,6 +984,14 @@ impl WorldView {
         let Some(start) = self.moving.take() else {
             return;
         };
+        let delta = start
+            .first()
+            .and_then(|(id, old)| {
+                let now = self.world.part(*id)?.pos;
+                Some(vec2(now.x.round() - old.x, now.y.round() - old.y))
+            })
+            .unwrap_or_default();
+        let moved: BTreeSet<_> = start.iter().map(|(id, _)| *id).collect();
         let mut edits = Vec::new();
         for (id, from) in start {
             let Some(mut p) = self.world.part(id).cloned() else {
@@ -856,23 +1008,73 @@ impl WorldView {
                 edits.push(Edit::Part { id, part: Some(p) });
             }
         }
+        // Routes entirely inside the moved group move with their parts.
+        // Boundary wires retain their external waypoints.
+        for (from, to) in self.world.wires() {
+            if moved.contains(&from.part) && moved.contains(&to.part) {
+                if let Some(mut style) = self
+                    .world
+                    .wire_style(to)
+                    .cloned()
+                    .filter(|s| !s.points.is_empty())
+                {
+                    for p in &mut style.points {
+                        p.x += delta.x;
+                        p.y += delta.y;
+                    }
+                    edits.push(Edit::Style {
+                        to,
+                        style: Some(style),
+                    });
+                }
+            }
+        }
         if !edits.is_empty() {
             self.edit(Edit::Batch(edits));
         }
     }
 
     fn clicks(&mut self, ui: &Ui, response: &egui::Response, hover: &Hover) {
+        if response.double_clicked() {
+            if let Some(p) = ui.ctx().pointer_interact_pos() {
+                if let Some(id) = self.layout(self.origin).module_at(p) {
+                    self.toggle_module(id);
+                    return;
+                }
+            }
+        }
         if !response.clicked() {
             return;
+        }
+        if let Some(to) = self.routing {
+            if let Some(p) = self.hover_pos {
+                let mut s = self.world.wire_style(to).cloned().unwrap_or_default();
+                s.points.push(Pos::new(p.x.round(), p.y.round()));
+                self.edit(Edit::Style { to, style: Some(s) });
+            }
+            return;
+        }
+        if let Some(p) = ui.ctx().pointer_interact_pos() {
+            if let Some(id) = self.layout(self.origin).module_at(p) {
+                self.selected_module = Some(id);
+                self.selected = self
+                    .world
+                    .module(id)
+                    .map(|m| m.members.iter().copied().collect())
+                    .unwrap_or_default();
+                return;
+            }
         }
         if let Some(kind) = self.placing.clone() {
             let at = self.drop_point() - vec2(30.0, 20.0);
             let id = self.add(kind, at);
             self.selected = [id].into();
+            self.selected_module = None;
             // Keep the part in hand to place more; Esc lets go.
             return;
         }
         let shift = ui.input(|i| i.modifiers.shift);
+        self.selected_module = None;
         let Some(id) = hover.part else {
             if !shift {
                 self.selected.clear();
@@ -936,8 +1138,24 @@ impl WorldView {
                 .unwrap_or(Menu::Board);
             match target {
                 Menu::Wire(to) => {
+                    if ui.button("Tel adı / yolunu düzenle").clicked() {
+                        self.selected_wire = Some(to);
+                        ui.close();
+                    }
+                    if ui.button("Sinyali izle").clicked() {
+                        if let Some(from) = self.world.wire_into(to) {
+                            self.sim.watch(from);
+                        }
+                        ui.close();
+                    }
                     if ui.button("✂ Kabloyu kes").clicked() {
-                        self.edit(Edit::Wire { to, from: None });
+                        let l = self.layout(self.origin);
+                        self.edit(Edit::Batch(
+                            l.sink_aliases(to)
+                                .into_iter()
+                                .map(|to| Edit::Wire { to, from: None })
+                                .collect(),
+                        ));
                         ui.close();
                     }
                 }

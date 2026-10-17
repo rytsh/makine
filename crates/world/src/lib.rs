@@ -14,9 +14,10 @@ pub mod chip;
 pub mod compile;
 pub mod device;
 pub mod part;
+pub mod projects;
 pub mod world;
 
 pub use compile::{compile, Compiled, InputSource, Problem};
 pub use device::Device;
 pub use part::{Gate, Kind};
-pub use world::{Change, Edit, End, Id, Placed, Pos, World};
+pub use world::{Change, Edit, End, Id, Module, Placed, Pos, WireStyle, World};

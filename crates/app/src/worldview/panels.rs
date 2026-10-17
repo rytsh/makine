@@ -80,6 +80,16 @@ pub fn device_palette() -> Vec<Entry> {
     };
     vec![
         e(
+            "Yazmaç",
+            Device::Register { bits: 4 },
+            "Yükselen saat kenarında veri saklar; sıfırlama girişli",
+        ),
+        e(
+            "Program ROM",
+            Device::ProgramRom { words: vec![0] },
+            "4096 bayt program belleği",
+        ),
+        e(
             "RAM",
             Device::Ram { addr: 4, data: 8 },
             "Okunup yazılabilen bellek",
@@ -526,7 +536,14 @@ impl WorldView {
                         words: words.clone(),
                     });
                 }
-                changed = changed.or_else(|| self.rom_editor(ui, id, *addr, *data, words));
+                changed = changed.or_else(|| {
+                    self.rom_editor(ui, id, *addr, *data, words)
+                        .map(|words| Device::Rom {
+                            addr: *addr,
+                            data: *data,
+                            words,
+                        })
+                });
             }
             Device::Screen { bits } => {
                 if let Some(b) = size(ui, "Boyut biti", *bits, 2, device::MAX_SCREEN_BITS) {
@@ -537,6 +554,18 @@ impl WorldView {
                 if let Some(b) = size(ui, "Bit sayısı", *bits, 1, device::MAX_DATA) {
                     changed = Some(Device::Display { bits: b });
                 }
+            }
+            Device::Register { bits } => {
+                if let Some(b) = size(ui, "Bit sayısı", *bits, 1, 64) {
+                    changed = Some(Device::Register { bits: b });
+                }
+                let value = self.sim.value(makine_world::End::new(id, 0));
+                ui.monospace(value.map_or("?".into(), |v| format!("0x{v:X} ({v})")));
+            }
+            Device::ProgramRom { words } => {
+                changed = self
+                    .rom_editor(ui, id, 12, 8, words)
+                    .map(|words| Device::ProgramRom { words });
             }
             Device::Keyboard => {
                 ui.colored_label(
@@ -556,7 +585,7 @@ impl WorldView {
         addr: u8,
         data: u8,
         words: &[u64],
-    ) -> Option<Device> {
+    ) -> Option<Vec<u64>> {
         // Refresh the text when another ROM is selected or its contents
         // changed (undo, another player).
         let fresh = device::words_text(words, data);
@@ -592,11 +621,7 @@ impl WorldView {
                 }
                 Ok(w) => {
                     *err = None;
-                    out = Some(Device::Rom {
-                        addr,
-                        data,
-                        words: w,
-                    });
+                    out = Some(w);
                 }
                 Err(e) => *err = Some(e),
             }

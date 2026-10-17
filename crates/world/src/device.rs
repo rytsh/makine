@@ -30,6 +30,12 @@ pub enum Device {
     Keyboard,
     /// Shows the number on its input in hexadecimal and decimal.
     Display { bits: u8 },
+    /// Edge-triggered storage. Arithmetic and instruction decoding remain
+    /// ordinary gates outside this primitive.
+    Register { bits: u8 },
+    /// 4 KiB program storage with two independent read addresses. `next`
+    /// reads (a+1) modulo 4096; `indirect` reads b (for table lookup).
+    ProgramRom { words: Vec<u64> },
 }
 
 fn pins(specs: &[(&str, u8)]) -> Vec<Pin> {
@@ -44,6 +50,8 @@ impl Device {
             Device::Screen { .. } => "Ekran".into(),
             Device::Keyboard => "Klavye".into(),
             Device::Display { .. } => "Gösterge".into(),
+            Device::Register { .. } => "Yazmaç".into(),
+            Device::ProgramRom { .. } => "Program ROM".into(),
         }
     }
 
@@ -64,6 +72,8 @@ impl Device {
                  kuyrukta tuş var. next 0'dan 1'e geçince sıradaki tuşa geçilir."
             }
             Device::Display { .. } => "n girişindeki sayıyı onaltılık ve onluk gösterir.",
+            Device::Register { .. } => "clk yükselen kenarında reset 1 ise sıfırlanır; değilse load 1 ise d saklanır. q saklanan değerdir.",
+            Device::ProgramRom { .. } => "4096 bayt program belleği. a: komut adresi, b: dolaylı adres. q: komut, next: sonraki bayt, indirect: b adresindeki bayt. Bu bellek işlemci değildir.",
         }
     }
 
@@ -75,6 +85,8 @@ impl Device {
             Device::Screen { .. } => "screen",
             Device::Keyboard => "kbd",
             Device::Display { .. } => "display",
+            Device::Register { .. } => "register",
+            Device::ProgramRom { .. } => "program",
         }
     }
 
@@ -100,6 +112,12 @@ impl Device {
             Device::Display { bits } => Device::Display {
                 bits: c(*bits, MAX_DATA),
             },
+            Device::Register { bits } => Device::Register {
+                bits: (*bits).clamp(1, 64),
+            },
+            Device::ProgramRom { words } => Device::ProgramRom {
+                words: words.iter().take(4096).map(|w| w & 255).collect(),
+            },
         }
     }
 
@@ -114,6 +132,10 @@ impl Device {
             }
             Device::Keyboard => pins(&[("next", 1)]),
             Device::Display { bits } => pins(&[("n", bits)]),
+            Device::Register { bits } => {
+                pins(&[("d", bits), ("load", 1), ("reset", 1), ("clk", 1)])
+            }
+            Device::ProgramRom { .. } => pins(&[("a", 12), ("b", 12)]),
         }
     }
 
@@ -122,6 +144,8 @@ impl Device {
             Device::Ram { data, .. } | Device::Rom { data, .. } => pins(&[("q", data)]),
             Device::Keyboard => pins(&[("k", 7), ("ready", 1)]),
             Device::Screen { .. } | Device::Display { .. } => Vec::new(),
+            Device::Register { bits } => pins(&[("q", bits)]),
+            Device::ProgramRom { .. } => pins(&[("q", 8), ("next", 8), ("indirect", 8)]),
         }
     }
 
@@ -171,6 +195,24 @@ impl Device {
                 Box::new(Keyboard::default())
             })),
             Device::Display { .. } => None,
+            Device::Register { bits } => Some(NativeDef::clocked(
+                &ins,
+                &outs,
+                &[],
+                RegisterState { bits, value: 0 },
+                |s, i| {
+                    if i[2] == 1 {
+                        s.value = 0;
+                    } else if i[1] == 1 {
+                        s.value = i[0] & makine_sim::mask(s.bits);
+                    }
+                },
+                |s, _, o| o[0] = s.value,
+            )),
+            Device::ProgramRom { words } => Some(NativeDef::function(&ins, &outs, move |i| {
+                let read = |a: u64| words.get((a & 4095) as usize).copied().unwrap_or(0);
+                vec![read(i[0]), read(i[0].wrapping_add(1)), read(i[1])]
+            })),
         }
     }
 
@@ -185,6 +227,12 @@ pub struct RamState {
     pub addr: u8,
     pub data: u8,
     pub words: Vec<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegisterState {
+    pub bits: u8,
+    pub value: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -227,10 +275,14 @@ pub enum Saved {
     Ram(RamState),
     Screen(ScreenState),
     Keys(VecDeque<u8>),
+    Register(RegisterState),
 }
 
 /// Contents of the device natively named `name` in `circuit`.
 pub fn save(circuit: &mut Circuit, name: &str) -> Option<Saved> {
+    if let Some(r) = circuit.native_mut::<Clocked<RegisterState>>(name) {
+        return Some(Saved::Register(r.state.clone()));
+    }
     if let Some(r) = circuit.native_mut::<Clocked<RamState>>(name) {
         return Some(Saved::Ram(r.state.clone()));
     }
@@ -244,6 +296,13 @@ pub fn save(circuit: &mut Circuit, name: &str) -> Option<Saved> {
 /// Put saved contents back, if the device still has the same shape.
 pub fn restore(circuit: &mut Circuit, name: &str, saved: Saved) {
     match saved {
+        Saved::Register(s) => {
+            if let Some(r) = circuit.native_mut::<Clocked<RegisterState>>(name) {
+                if r.state.bits == s.bits {
+                    r.state = s;
+                }
+            }
+        }
         Saved::Ram(s) => {
             if let Some(r) = circuit.native_mut::<Clocked<RamState>>(name) {
                 if (r.state.addr, r.state.data) == (s.addr, s.data) {

@@ -19,6 +19,7 @@ fn harness(v: WorldView) -> Harness {
 fn view(w: World) -> WorldView {
     let mut v = WorldView::new(w);
     v.fit = false;
+    v.minimap = false;
     v.zoom = 1.0;
     v.offset = Vec2::ZERO;
     v
@@ -400,4 +401,129 @@ fn undo_respects_other_players() {
     assert!(!v.can_undo());
     v.undo();
     assert_eq!(v.world.len(), 1);
+}
+
+#[test]
+fn modules_preserve_wires_state_layout_and_copy() {
+    let mut v = view(World::new("modules"));
+    let sw = v.add(Kind::Switch { on: true }, pos2(10.0, 60.0));
+    let n1 = v.add(Kind::Gate(Gate::Not), pos2(180.0, 60.0));
+    let n2 = v.add(Kind::Gate(Gate::Not), pos2(330.0, 60.0));
+    let lamp = v.add(Kind::Lamp, pos2(500.0, 60.0));
+    for (f, t) in [(sw, n1), (n1, n2), (n2, lamp)] {
+        v.edit(Edit::Wire {
+            to: End::new(t, 0),
+            from: Some(End::new(f, 0)),
+        });
+    }
+    v.selected = [n1, n2].into();
+    let revision = v.world.circuit_revision();
+    let m = v.group_selected("Tampon").unwrap();
+    assert_eq!(v.world.circuit_revision(), revision);
+    let l = v.layout(Pos2::ZERO);
+    assert!(!l.visible(n1));
+    assert!(l.sink_pos(End::new(n1, 0)).is_some());
+    assert!(l.source_pos(End::new(n2, 0)).is_some());
+    assert!(!l.wire_visible(End::new(n1, 0), End::new(n2, 0)));
+    v.sim.run_frame(&v.world);
+    assert!(lit(&v, lamp));
+    let before = v.world.part(n1).unwrap().pos;
+    v.toggle_module(m);
+    assert!(v.layout(Pos2::ZERO).visible(n1));
+    assert_eq!(v.world.part(n1).unwrap().pos, before);
+    assert_eq!(v.world.circuit_revision(), revision);
+    v.copy();
+    v.paste(None, pos2(100.0, 300.0));
+    assert_eq!(v.world.modules().count(), 2);
+    assert_eq!(v.world.wires().count(), 4);
+    v.undo();
+    assert_eq!(v.world.modules().count(), 1);
+    v.selected = [sw, n1, n2].into();
+    let outer = v.group_selected("Üst modül").unwrap();
+    assert_eq!(v.layout(Pos2::ZERO).modules.len(), 1);
+    v.toggle_module(outer);
+    assert_eq!(v.layout(Pos2::ZERO).modules.len(), 2);
+}
+
+#[test]
+fn collapsed_fanout_is_one_pin_and_reconnects_all_members() {
+    let mut v = view(World::new("fanout"));
+    let a = v.add(Kind::Switch { on: false }, pos2(20.0, 100.0));
+    let b = v.add(Kind::Switch { on: true }, pos2(20.0, 220.0));
+    let n = v.add(Kind::Gate(Gate::Not), pos2(250.0, 100.0));
+    let m = v.add(Kind::Gate(Gate::Not), pos2(400.0, 100.0));
+    for to in [n, m] {
+        v.edit(Edit::Wire {
+            to: End::new(to, 0),
+            from: Some(End::new(a, 0)),
+        });
+    }
+    v.selected = [n, m].into();
+    v.group_selected("Deux").unwrap();
+    let mut h = harness(v);
+    assert_eq!(
+        h.state().layout(h.state().origin).modules[0].inputs.len(),
+        1
+    );
+    let (from, to) = (out_pin(&h, b, 0), in_pin(&h, n, 0));
+    drag(&mut h, from, to);
+    for to in [n, m] {
+        assert_eq!(
+            h.state().world.wire_into(End::new(to, 0)),
+            Some(End::new(b, 0))
+        );
+    }
+}
+
+#[test]
+fn rectangle_selects_collapsed_members_not_their_hidden_coordinates() {
+    let mut v = view(World::new("selection"));
+    let a = v.add(Kind::Lamp, pos2(100.0, 100.0));
+    let b = v.add(Kind::Lamp, pos2(10000.0, 10000.0));
+    v.selected = [a, b].into();
+    v.group_selected("Together").unwrap();
+    v.selected.clear();
+    let mut h = harness(v);
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    drag(&mut h, pos2(80.0, 80.0), pos2(410.0, 210.0));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    assert_eq!(h.state().selected, [a, b].into());
+}
+
+#[test]
+fn manual_routes_are_hit_tested_and_copied_relative_to_the_selection() {
+    let mut v = view(World::new("routes"));
+    let a = v.add(Kind::Switch { on: true }, pos2(50.0, 100.0));
+    let b = v.add(Kind::Lamp, pos2(300.0, 100.0));
+    let to = End::new(b, 0);
+    v.edit(Edit::Wire {
+        to,
+        from: Some(End::new(a, 0)),
+    });
+    v.edit(Edit::Style {
+        to,
+        style: Some(makine_world::WireStyle {
+            name: "bus".into(),
+            points: vec![Pos::new(200.0, 250.0)],
+        }),
+    });
+    let l = v.layout(Pos2::ZERO);
+    assert!(
+        super::routing::wire_distance(&v.world, &l, End::new(a, 0), to, pos2(200.0, 200.0))
+            .unwrap()
+            < 1.0
+    );
+    v.selected = [a, b].into();
+    v.copy();
+    let first = v.world.part(*v.selected.first().unwrap()).unwrap().pos;
+    v.paste(None, pos2(first.x + 20.0, first.y + 40.0));
+    let copied = v
+        .world
+        .parts()
+        .find(|(id, p)| v.selected.contains(id) && matches!(p.kind, Kind::Lamp))
+        .unwrap()
+        .0;
+    let style = v.world.wire_style(End::new(copied, 0)).unwrap();
+    assert_eq!(style.name, "bus");
+    assert_eq!(style.points, [Pos::new(220.0, 290.0)]);
 }

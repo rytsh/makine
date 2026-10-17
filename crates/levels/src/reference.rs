@@ -51,9 +51,9 @@ pub fn reference(chip: &str) -> ChipDef {
             b.output("a", x);
             b.output("b", y);
         }
-        "Mux32" => {
+        "Mux4" | "Mux32" => {
             let ins = [b.input("a"), b.input("b"), b.input("sel")];
-            let m = b.chip_n("Mux", 32, &ins);
+            let m = b.chip_n("Mux", if chip == "Mux4" { 4 } else { 32 }, &ins);
             b.output("out", out(m, 0));
         }
         "HalfAdder" => {
@@ -72,6 +72,7 @@ pub fn reference(chip: &str) -> ChipDef {
             b.output("carry", k);
         }
         "Adder8" => ripple(&mut b, "FullAdder", 8, 1),
+        "Adder4" => ripple(&mut b, "FullAdder", 4, 1),
         "Adder32" => ripple(&mut b, "Adder8", 4, 8),
         "Sub32" => {
             let (x, y) = (b.input("a"), b.input("b"));
@@ -113,9 +114,9 @@ pub fn reference(chip: &str) -> ChipDef {
             b.wire(clk, into(ff, 1));
             b.output("q", out(ff, 0));
         }
-        "Register32" => {
+        "Register4" | "Register32" => {
             let ins = [b.input("d"), b.input("load"), b.input("clk")];
-            let r = b.chip_n("Bit", 32, &ins);
+            let r = b.chip_n("Bit", if chip == "Register4" { 4 } else { 32 }, &ins);
             b.output("q", out(r, 0));
         }
         "Counter32" => {
@@ -137,6 +138,38 @@ pub fn reference(chip: &str) -> ChipDef {
             let m3 = b.chip1("Mux32", &[m2, zero, reset]);
             let one = b.constant(1, 1);
             b.wire(m3, into(reg, 0));
+            b.wire(one, into(reg, 1));
+            b.wire(clk, into(reg, 2));
+            b.output("out", q);
+        }
+        "Counter12" => {
+            let (d, load, inc, reset, clk) = (
+                b.input("d"),
+                b.input("load"),
+                b.input("inc"),
+                b.input("reset"),
+                b.input("clk"),
+            );
+            let reg = b.part(
+                Part {
+                    kind: PartKind::Chip("Bit".into()),
+                    repeat: 12,
+                },
+                &[],
+            );
+            let q = out(reg, 0);
+            let high = b.constant(20, 0);
+            let wide = b.join(&[12, 20], &[q, high]);
+            let one32 = b.constant(32, 1);
+            let zero = b.constant(1, 0);
+            let sum = b.chip("Adder32", &[wide, one32, zero]);
+            let split = b.split(&[12, 20], out(sum, 0));
+            let m1 = b.chip_n("Mux", 12, &[q, out(split, 0), inc]);
+            let m2 = b.chip_n("Mux", 12, &[out(m1, 0), d, load]);
+            let zero12 = b.constant(12, 0);
+            let m3 = b.chip_n("Mux", 12, &[out(m2, 0), zero12, reset]);
+            let one = b.constant(1, 1);
+            b.wire(out(m3, 0), into(reg, 0));
             b.wire(one, into(reg, 1));
             b.wire(clk, into(reg, 2));
             b.output("out", q);

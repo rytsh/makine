@@ -10,6 +10,24 @@ use crate::design::Design;
 use crate::sandbox;
 
 impl App {
+    pub(super) fn open_mcs4_project(&mut self) {
+        if self.session.is_some() {
+            return;
+        }
+        self.store_world();
+        let mut p = makine_world::projects::mcs4::project(makine_world::projects::mcs4::DEMO);
+        p.world.name = crate::worlds::unique_name(&p.world.name, &self.progress.worlds);
+        self.switch_world(p.world);
+        if let Some(w) = &mut self.world {
+            w.collapsed = p.collapsed.into_iter().collect();
+            w.sim.running = false;
+            for end in p.watches {
+                w.sim.watch(end);
+            }
+        }
+        self.view = View::World;
+    }
+
     pub(super) fn open_world(&mut self) {
         if self.world.is_none() {
             let p = &self.progress;
@@ -343,6 +361,15 @@ impl App {
             self.worlds_section(ui);
         }
         self.network_section(ui);
+        if self.session.is_none() {
+            egui::CollapsingHeader::new("Örnek projeler")
+                .id_salt("workshop-projects")
+                .show(ui, |ui| {
+                    ui.label(RichText::new("Mevcut dünyan korunur; örnek ayrı bir dünya olarak açılır.").weak().small());
+                    if ui.button("4004 atölyesi aç").clicked() { self.open_mcs4_project(); }
+                    ui.label(RichText::new("Kapılardan aritmetik ve kontrol çekirdeği; özgün MCS-4 bellek/GÇ sistemi henüz yok.").weak().small());
+                });
+        }
         let Some(w) = &mut self.world else { return };
         egui::CollapsingHeader::new(RichText::new("⌨ Kısayollar").strong())
             .id_salt("world-shortcuts")
@@ -362,7 +389,12 @@ impl App {
 
         // What is selected comes first: it is what the player works on.
         w.symbols = self.progress.symbols;
+        w.module_panel(ui);
         w.selection_panel(ui);
+        let watched = w.sim.traces.len();
+        egui::CollapsingHeader::new(format!("Sinyal izleme ({watched})"))
+            .id_salt("world-scope")
+            .show(ui, |ui| w.scope_panel(ui));
 
         crate::theme::section(ui, "Parçalar");
         w.palette_ui(ui, crate::worldview::palette());
@@ -450,6 +482,19 @@ impl App {
                 .clicked()
             {
                 w.refit();
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui
+                .button("Saat çevrimi")
+                .on_hover_text("Dur ve ilk saatin bir sonraki yükselen kenarına kadar ilerle")
+                .clicked()
+                && !w.sim.clock_cycle(&w.world)
+            {
+                w.status = Some("Önce bir Saat koy.".into());
+            }
+            if ui.button("Baştan").clicked() {
+                w.sim.reset();
             }
         });
         ui.horizontal(|ui| {

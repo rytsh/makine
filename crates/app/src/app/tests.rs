@@ -221,6 +221,50 @@ mod editor {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world-devices.png")).unwrap();
 
+        // The workshop is an ordinary saved world, initially collapsed.
+        app.borrow_mut().open_mcs4_project();
+        harness.run_steps(2);
+        for _ in 0..5 {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            w.sim.clock_cycle(&w.world);
+            w.sim.run_frame(&w.world);
+        }
+        harness.run_steps(2);
+        harness
+            .render()
+            .unwrap()
+            .save(format!("{dir}/makine-world-4004.png"))
+            .unwrap();
+
+        // Open the outer module; its existing child modules remain closed.
+        {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            let root = w
+                .world
+                .modules()
+                .max_by_key(|(_, m)| m.members.len())
+                .unwrap()
+                .0;
+            w.toggle_module(root);
+            w.refit();
+        }
+        harness.run_steps(2);
+        harness
+            .render()
+            .unwrap()
+            .save(format!("{dir}/makine-world-modules.png"))
+            .unwrap();
+
+        // Go back to the compact view before the multiplayer capture.
+        {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            w.collapsed = w.world.modules().map(|(id, _)| id).collect();
+            w.refit();
+        }
+
         // Building together: a guest's cursor in the host's world.
         {
             let mut a = app.borrow_mut();
@@ -397,6 +441,9 @@ mod glyph_tests {
             include_str!("../worldview/panels.rs"),
             include_str!("../worldview/draw.rs"),
             include_str!("../worldview/layout.rs"),
+            include_str!("../worldview/workbench.rs"),
+            include_str!("../worldview/scope.rs"),
+            include_str!("../worldview/routing.rs"),
             include_str!("../worldsim.rs"),
             include_str!("../session.rs"),
             include_str!("../worlds.rs"),
@@ -667,6 +714,28 @@ mod sandbox_tests {
         let w = a.world.as_ref().unwrap();
         assert!(w.sim.error().is_none(), "{:?}", w.sim.error());
         assert_eq!(w.sim.compiled().unwrap().problems, vec![]);
+    }
+
+    #[test]
+    fn workshop_opens_without_replacing_user_world_or_unlocking_levels() {
+        let mut app = App::new(Progress::default(), None);
+        app.open_world();
+        app.world
+            .as_mut()
+            .unwrap()
+            .add(makine_world::Kind::Lamp, egui::pos2(0.0, 0.0));
+        app.store_world();
+        let before = app.progress.solutions.len();
+        app.open_mcs4_project();
+        assert_eq!(app.progress.worlds["dünya"].len(), 1);
+        assert_eq!(app.progress.solutions.len(), before);
+        let w = app.world.as_mut().unwrap();
+        assert!(!w.sim.running);
+        assert!(!w.collapsed.is_empty());
+        w.sim.run_frame(&w.world);
+        assert!(w.sim.error().is_none());
+        assert!(w.sim.compiled().unwrap().problems.is_empty());
+        assert_eq!(w.sim.traces.len(), 5);
     }
 
     /// Several worlds: create, switch, rename, delete; edits stay in the

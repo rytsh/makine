@@ -285,10 +285,16 @@ pub fn compile(world: &World, lib: &Library) -> Compiled {
     for (id, p) in world.parts() {
         b.part(id, &p.kind);
     }
-    let wired = b.wires(world);
-    // A probe per wired output pin.
+    b.wires(world);
+    // Probe every output, including one not wired yet. Inspection must not
+    // require an artificial lamp or dummy wire.
+    let ends: Vec<_> = b
+        .built
+        .iter()
+        .flat_map(|(id, p)| (0..p.outputs.len()).map(|pin| End::new(*id, pin)))
+        .collect();
     let mut probes = HashMap::new();
-    for (from, _) in wired {
+    for from in ends {
         if probes.contains_key(&from) {
             continue;
         }
@@ -527,8 +533,7 @@ mod tests {
         let (c, sim) = run(&w, &lib, &[2]);
         assert_eq!(c.problems, vec![]);
         assert_eq!(sim.output(c.probe(End::new(rom, 0)).unwrap()), 30);
-        // Only wired outputs are probed.
-        assert_eq!(c.probe(End::new(split, 0)), None);
+        assert_eq!(sim.output(c.probe(End::new(split, 0)).unwrap()), 30 & 15);
         assert_eq!(sim.output(c.probe(End::new(split, 1)).unwrap()), 30 >> 4);
         assert!(c.native(rom).is_some());
     }
