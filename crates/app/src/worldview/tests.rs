@@ -60,8 +60,7 @@ mod basics {
         let mut lit = Vec::new();
         for _ in 0..8 {
             v.sim.run_frame(&v.world, false);
-            let o = v.sim.compiled().unwrap().lamps[0].1.unwrap();
-            lit.push(v.sim.values()[o]);
+            lit.push(v.sim.lamp_lit(Pos::new(2, 0, 0)) as u64);
         }
         // Steps 1..=8 with period 2: high on steps 2-3 and 6-7.
         assert_eq!(lit, vec![0, 1, 1, 0, 0, 1, 1, 0]);

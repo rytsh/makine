@@ -38,7 +38,11 @@ pub fn palette() -> Vec<(&'static str, Block, &'static str)> {
             },
             "Tıkla: aç/kapa",
         ),
-        ("Lamba", Block::Lamp, "Komşu tel 1 ise yanar"),
+        (
+            "Lamba",
+            Block::Lamp,
+            "Komşu tellerden biri 1 ise yanar; telleri birbirine bağlamaz",
+        ),
         (
             "Saat",
             Block::Clock {

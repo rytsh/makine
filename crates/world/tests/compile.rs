@@ -363,14 +363,10 @@ fn every_wire_and_lamp_is_readable() {
     assert_eq!(read(3, 0), 1);
     assert_eq!(read(2, 1), 0, "a gate shows its output");
     assert_eq!(read(2, 2), 0);
-    // Lamps in position order: (2,3) after the NOT is dark, (4,0) is lit.
-    let lit: Vec<(Pos, u64)> = c
-        .lamps
-        .iter()
-        .map(|&(p, o)| (p, sim.output(o.unwrap())))
-        .collect();
-    assert!(lit.contains(&(Pos::new(4, 0, 0), 1)));
-    assert!(lit.contains(&(Pos::new(2, 3, 0), 0)));
+    // The lamp at (4,0) is lit, the one after the NOT at (2,3) is dark.
+    let values: Vec<u64> = (0..c.def.outputs.len()).map(|o| sim.output(o)).collect();
+    assert!(c.lamp_lit(Pos::new(4, 0, 0), &values));
+    assert!(!c.lamp_lit(Pos::new(2, 3, 0), &values));
 }
 
 #[test]
@@ -381,4 +377,74 @@ fn unconnected_inputs_read_zero() {
     set(&mut w, 1, 0, 0, output("q", Dir::East));
     let mut s = Sim::new(&w);
     assert!(s.eval(&[])("q"));
+}
+
+#[test]
+fn lamps_read_without_joining_wires() {
+    // Two separate signals touch one lamp from opposite sides: they must
+    // stay separate (no short circuit), and the lamp lights if either is 1.
+    //
+    //   S - L - S'      S faces east, S' faces west
+    //   |       |
+    //   q0      q1      each signal also goes down to its own output port
+    let mut w = World::new("l");
+    set(
+        &mut w,
+        0,
+        0,
+        0,
+        Block::Switch {
+            on: true,
+            facing: Dir::East,
+        },
+    );
+    set(&mut w, 1, 0, 0, Block::Wire);
+    set(&mut w, 2, 0, 0, Block::Lamp);
+    set(&mut w, 3, 0, 0, Block::Wire);
+    set(
+        &mut w,
+        4,
+        0,
+        0,
+        Block::Switch {
+            on: false,
+            facing: Dir::West,
+        },
+    );
+    set(&mut w, 1, 1, 0, Block::Wire);
+    set(&mut w, 1, 2, 0, output("q0", Dir::South));
+    set(&mut w, 3, 1, 0, Block::Wire);
+    set(&mut w, 3, 2, 0, output("q1", Dir::South));
+    let c = compile(&w).expect("a lamp is not a wire");
+    let mut sim = Circuit::compile_def(&Library::new(), &c.def).unwrap();
+    for (a, b) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+        sim.set_input(0, a);
+        sim.set_input(1, b);
+        sim.eval().unwrap();
+        let values: Vec<u64> = (0..c.def.outputs.len()).map(|o| sim.output(o)).collect();
+        let port = |n: &str| values[c.ports.iter().find(|(p, _)| p == n).unwrap().1];
+        assert_eq!((port("q0"), port("q1")), (a, b), "signals stay apart");
+        assert_eq!(c.lamp_lit(Pos::new(2, 0, 0), &values), a == 1 || b == 1);
+    }
+}
+
+#[test]
+fn lamps_do_not_pass_signals_on() {
+    // switch - lamp - wire - port: the port is not driven through the lamp.
+    let mut w = World::new("l");
+    set(
+        &mut w,
+        0,
+        0,
+        0,
+        Block::Switch {
+            on: true,
+            facing: Dir::East,
+        },
+    );
+    set(&mut w, 1, 0, 0, Block::Lamp);
+    set(&mut w, 2, 0, 0, Block::Wire);
+    set(&mut w, 3, 0, 0, output("q", Dir::East));
+    let mut s = Sim::new(&w);
+    assert!(!s.eval(&[])("q"));
 }

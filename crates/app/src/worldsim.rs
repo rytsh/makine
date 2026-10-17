@@ -170,6 +170,12 @@ impl WorldSim {
         self.values.get(o).map(|v| *v == 1)
     }
 
+    /// Whether the lamp at `pos` is lit.
+    pub fn lamp_lit(&self, pos: Pos) -> bool {
+        self.compiled()
+            .is_some_and(|c| c.lamp_lit(pos, &self.values))
+    }
+
     /// Deliver a key to the keyboard device at `anchor` at the next step.
     pub fn press(&mut self, anchor: Pos, key: u8) {
         if let Some(n) = self.native_at(anchor) {
@@ -288,8 +294,7 @@ mod tests {
     }
 
     fn lamp(sim: &WorldSim) -> bool {
-        let c = sim.compiled().unwrap();
-        sim.output(c.lamps[0].1.unwrap()).unwrap()
+        sim.lamp_lit(Pos::new(1, 0, 0))
     }
 
     #[test]

@@ -78,8 +78,9 @@ pub struct Compiled {
     pub net_output: Vec<Option<usize>>,
     /// Chip inputs in order.
     pub inputs: Vec<InputSource>,
-    /// Lamps: position and the chip output to read.
-    pub lamps: Vec<(Pos, Option<usize>)>,
+    /// Lamps: position and the chip outputs of the wires touching it (a
+    /// lamp is lit when any of them is 1).
+    pub lamps: Vec<(Pos, Vec<usize>)>,
     /// Output ports: name and chip output.
     pub ports: Vec<(String, usize)>,
     /// Devices by anchor, with their native part's name (if they have
@@ -107,6 +108,14 @@ impl Compiled {
     /// The chip output showing a cell's value, if the cell is on a driven net.
     pub fn output_at(&self, pos: Pos, lane: Lane) -> Option<usize> {
         self.net_output[self.net_at(pos, lane)?]
+    }
+
+    /// Whether the lamp at `pos` is lit, given every chip output's value.
+    pub fn lamp_lit(&self, pos: Pos, values: &[u64]) -> bool {
+        self.lamps
+            .iter()
+            .find(|(p, _)| *p == pos)
+            .is_some_and(|(_, outs)| outs.iter().any(|&o| values.get(o) == Some(&1)))
     }
 
     /// The library to simulate [`Compiled::def`] with: the devices' native
@@ -153,7 +162,7 @@ impl Uf {
 fn is_conductor(b: &Block) -> bool {
     matches!(
         b,
-        Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via | Block::Lamp
+        Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via
     )
 }
 
@@ -553,10 +562,17 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
         }
     }
 
+    // A lamp reads each side separately, so it never joins two wires.
     let lamps = blocks
         .iter()
         .filter(|(_, b)| matches!(b, Block::Lamp))
-        .map(|(&p, _)| (p, net_output[nets[&(p, Lane::Main)]]))
+        .map(|(&p, _)| {
+            let outs = Dir::ALL
+                .iter()
+                .filter_map(|&d| net_output[b.net(p, d)?])
+                .collect();
+            (p, outs)
+        })
         .collect();
 
     // Non-conductor cells show the net they drive (gates, inputs) or read

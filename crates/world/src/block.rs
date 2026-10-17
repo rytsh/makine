@@ -125,7 +125,8 @@ pub enum Block {
     Gate { gate: Gate, facing: Dir },
     /// A one-bit switch the player toggles. Drives the cell in front.
     Switch { on: bool, facing: Dir },
-    /// A lamp: lit when any neighbouring wire is 1.
+    /// A lamp: lit when any neighbouring wire is 1. It only reads: wires on
+    /// different sides stay separate signals.
     Lamp,
     /// A clock: drives the cell in front, toggling every `period` ticks.
     Clock { period: u32, facing: Dir },

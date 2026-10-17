@@ -282,7 +282,7 @@ impl WorldView {
                     self.arrow(painter, origin, p, 0.3, *facing, fade(Color32::WHITE));
                 }
                 Block::Lamp => {
-                    let lit = value_at(p, Lane::Main) == Some(true);
+                    let lit = self.sim.lamp_lit(p);
                     let c = if lit { LAMP_ON } else { LAMP_OFF };
                     self.draw_box(
                         painter,
