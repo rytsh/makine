@@ -1,0 +1,12 @@
+[package]
+name = "makine-sim"
+description = "Gate-level circuit simulator: chip definitions, flattening and evaluation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+serde = ["dep:serde"]

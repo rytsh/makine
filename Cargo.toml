@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/sim", "crates/levels", "crates/app", "crates/rv"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Line tables only: full debug info for the GUI stack takes gigabytes.
+[profile.dev]
+debug = "line-tables-only"
+
+# The simulator and emulator are hot loops; keep tests fast in debug builds.
+[profile.dev.package.makine-sim]
+opt-level = 3
+
+[profile.dev.package.makine-rv]
+opt-level = 3
+
+[profile.release]
+debug = "line-tables-only"
