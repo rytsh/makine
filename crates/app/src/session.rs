@@ -10,7 +10,7 @@ use egui::Color32;
 use makine_net::{Client, Event, Host, Player};
 use makine_pack::Package;
 use makine_sim::Library;
-use makine_world::{Block, Device, Edit, Pos, World};
+use makine_world::{Edit, Pos, World};
 
 use crate::sandbox::{self, Sandbox};
 use crate::worldview::WorldView;
@@ -47,15 +47,10 @@ pub fn color(id: u32) -> Color32 {
 fn chips_in_edit(e: &Edit, lib: &Library, sandbox: &Sandbox) -> Vec<Package> {
     fn names(e: &Edit, out: &mut BTreeSet<String>) {
         match e {
-            Edit::Set {
-                block:
-                    Some(Block::Device {
-                        device: Device::Chip { name, .. },
-                        ..
-                    }),
-                ..
-            } => {
-                out.insert(name.clone());
+            Edit::Part { part: Some(p), .. } => {
+                if let Some(n) = p.kind.chip_name() {
+                    out.insert(n.to_string());
+                }
             }
             Edit::Batch(v) => v.iter().for_each(|e| names(e, out)),
             _ => {}
@@ -72,10 +67,10 @@ fn chips_in_edit(e: &Edit, lib: &Library, sandbox: &Sandbox) -> Vec<Package> {
 /// Free chips used anywhere in the world.
 pub fn chips_in_world(w: &World, lib: &Library, sandbox: &Sandbox) -> Vec<Package> {
     let edit = Edit::Batch(
-        w.blocks()
-            .map(|(pos, b)| Edit::Set {
-                pos,
-                block: Some(b.clone()),
+        w.parts()
+            .map(|(id, p)| Edit::Part {
+                id,
+                part: Some(p.clone()),
             })
             .collect(),
     );
@@ -168,7 +163,8 @@ impl Session {
                     Link::Client(c) => c.send_edit(e, chips),
                 }
             }
-            let cursor = view.hover();
+            // Only moves of a few points are sent.
+            let cursor = view.hover().map(|p| Pos::new(p.x.round(), p.y.round()));
             if cursor != self.last_cursor {
                 self.last_cursor = cursor;
                 match &mut self.link {
@@ -198,7 +194,7 @@ impl Session {
                 Event::Welcome { world, chips } => {
                     install(&chips, lib, sandbox, &mut self.status);
                     let name = world.name.clone();
-                    *view = WorldView::new(world);
+                    *view = WorldView::new(world.checked());
                     view.sharing = true;
                     // The app refreshes the library (with the new chips)
                     // and hands it to the new view.

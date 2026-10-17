@@ -1,6 +1,6 @@
 [package]
 name = "makine-world"
-description = "The block world: a layered grid of wires, gates and devices that compiles to a circuit"
+description = "The world: parts and wires on a plane, like the level editor, that compile to a circuit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

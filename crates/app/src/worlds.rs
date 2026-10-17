@@ -5,37 +5,32 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use makine_pack::Package;
 use makine_sim::Library;
-use makine_world::{Block, Device, World};
+use makine_world::World;
 use serde::{Deserialize, Serialize};
 
 use crate::sandbox::{self, Sandbox};
 
 pub const EXT: &str = "makinedunya";
 const FORMAT: &str = "makine-world";
-const VERSION: u32 = 1;
+/// 2: parts and wires (1 was a grid of blocks, no longer read).
+const VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct WorldFile {
     format: String,
     version: u32,
     world: World,
-    /// One package per free chip used directly by a chip block (each with
-    /// its own dependencies).
+    /// One package per free chip used directly by a part (each with its
+    /// own dependencies).
     #[serde(default)]
     chips: Vec<Package>,
 }
 
-/// Chip names used by chip blocks in the world.
+/// Library chips used by parts in the world.
 fn chip_names(world: &World) -> BTreeSet<String> {
     world
-        .blocks()
-        .filter_map(|(_, b)| match b {
-            Block::Device {
-                device: Device::Chip { name, .. },
-                ..
-            } => Some(name.clone()),
-            _ => None,
-        })
+        .parts()
+        .filter_map(|(_, p)| p.kind.chip_name().map(str::to_string))
         .collect()
 }
 
@@ -65,6 +60,9 @@ pub fn import(text: &str, lib: &Library, sandbox: &mut Sandbox) -> Result<World,
     }
     if f.version > VERSION {
         return Err("dosya daha yeni bir sürümden; makine'yi güncelle".into());
+    }
+    if f.version < VERSION {
+        return Err("bu dosya eski kareli dünyalardan; yeni dünya bunları açamıyor".into());
     }
     // Check every package first so a failure adds nothing.
     let mut trial = sandbox.clone();
@@ -120,8 +118,8 @@ mod tests {
     use super::*;
     use crate::design::Design;
     use makine_levels::reference::reference;
-    use makine_sim::ChipBuilder;
-    use makine_world::{Dir, Pos};
+    use makine_sim::{ChipBuilder, Part, PartKind};
+    use makine_world::{Edit, Kind, Placed, Pos};
 
     fn lib() -> Library {
         let mut l = Library::new();
@@ -142,25 +140,21 @@ mod tests {
         l.insert(sb.chips["Tampon"].def.clone());
 
         let mut w = World::new("paylaş");
-        let def = &sb.chips["Tampon"].def;
-        let d = Device::Chip {
-            name: "Tampon".into(),
-            inputs: def.inputs.clone(),
-            outputs: def.outputs.clone(),
-        };
-        w.apply(w.place_device(d, Pos::new(0, 0, 0), Dir::East).unwrap());
-        let not = Device::Chip {
-            name: "Not".into(),
-            inputs: def.inputs.clone(),
-            outputs: def.outputs.clone(),
-        };
-        w.apply(w.place_device(not, Pos::new(0, 5, 0), Dir::East).unwrap());
+        for (id, name) in [(1, "Tampon"), (2, "Not")] {
+            w.apply(Edit::Part {
+                id,
+                part: Some(Placed {
+                    kind: Kind::Part(Part::new(PartKind::Chip(name.into()))),
+                    pos: Pos::new(0.0, id as f32 * 60.0),
+                }),
+            });
+        }
         let text = export(&w, &l, &sb).unwrap();
 
         // A friend with the Not level solved and no free chips.
         let mut friend = Sandbox::default();
         let got = import(&text, &lib(), &mut friend).unwrap();
-        assert_eq!(got.blocks().count(), w.blocks().count());
+        assert_eq!(got.parts().count(), 2);
         assert!(friend.chips.contains_key("Tampon"));
         // Without the Not level, nothing is added.
         let mut empty = Sandbox::default();

@@ -144,6 +144,7 @@ pub enum Symbol {
     And,
     Nand,
     Or,
+    Nor,
     Xor,
     Mux,
     Demux,
@@ -162,6 +163,7 @@ impl Symbol {
                 "Not" => Symbol::Not,
                 "And" => Symbol::And,
                 "Or" => Symbol::Or,
+                "Nor" => Symbol::Nor,
                 "Xor" => Symbol::Xor,
                 "Mux" | "Mux32" => Symbol::Mux,
                 "Demux" => Symbol::Demux,
@@ -173,7 +175,7 @@ impl Symbol {
         let fits = match s {
             Symbol::Box => true,
             Symbol::Not => (i, o) == (1, 1),
-            Symbol::And | Symbol::Nand | Symbol::Or | Symbol::Xor => (i, o) == (2, 1),
+            Symbol::And | Symbol::Nand | Symbol::Or | Symbol::Nor | Symbol::Xor => (i, o) == (2, 1),
             Symbol::Mux => (i, o) == (3, 1),
             Symbol::Demux => (i, o) == (2, 2),
         };
@@ -185,7 +187,7 @@ impl Symbol {
     }
 
     pub fn bubble(self) -> bool {
-        matches!(self, Symbol::Not | Symbol::Nand)
+        matches!(self, Symbol::Not | Symbol::Nand | Symbol::Nor)
     }
 }
 
@@ -233,7 +235,7 @@ pub fn geometry(kind: &PartKind, pins: &PartPins, label: &str, symbols: bool) ->
             inputs: vec![(vec2(0.0, h / 2.0), left)],
             outputs: vec![vec2(w, h / 2.0)],
         },
-        Symbol::And | Symbol::Nand | Symbol::Or | Symbol::Xor => Geometry {
+        Symbol::And | Symbol::Nand | Symbol::Or | Symbol::Nor | Symbol::Xor => Geometry {
             symbol,
             size: vec2(w, h),
             inputs: vec![(vec2(0.0, h * 0.25), left), (vec2(0.0, h * 0.75), left)],

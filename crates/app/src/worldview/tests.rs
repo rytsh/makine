@@ -1,763 +1,403 @@
-//! Tests of the world view: projection, editing, devices, selection and
-//! settings panels, driven through egui like a player would.
+//! World view tests: editing through the same gestures as the canvas.
 
-use egui::Pos2;
-use makine_world::block::Gate;
+use egui::{pos2, vec2, Pos2};
+use makine_world::{Device, Edit, End, Gate, Id, Kind, Placed, Pos, World};
 
-mod basics {
-    use crate::worldview::*;
+use super::*;
 
-    use egui::pos2;
-    use makine_world::block::Gate;
+type Harness = egui_kittest::Harness<'static, WorldView>;
 
-    #[test]
-    fn pick_inverts_projection() {
-        let v = WorldView::default();
-        let origin = pos2(400.0, 100.0);
-        for (x, y, z) in [(0, 0, 0), (3, -2, 0), (-5, 7, 2), (10, 10, -40)] {
-            let c = v.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5);
-            assert_eq!(v.pick(origin, c, z), Pos::new(x, y, z));
-        }
-    }
-
-    /// Layers have no limit; Q/E change them, 1–9 pick a block, V the
-    /// select tool and back, P pauses the clocks.
-    #[test]
-    fn shortcut_keys() {
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(600.0, 400.0))
-            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), WorldView::default());
-        h.run();
-        h.hover_at(egui::pos2(300.0, 200.0));
-        h.run();
-        let key = |h: &mut egui_kittest::Harness<'_, WorldView>, k| {
-            h.key_press(k);
-            h.run();
-        };
-        for _ in 0..10 {
-            key(&mut h, egui::Key::E);
-        }
-        assert_eq!(h.state().layer, 10, "above the old limit of 7");
-        for _ in 0..13 {
-            key(&mut h, egui::Key::Q);
-        }
-        assert_eq!(h.state().layer, -3);
-        key(&mut h, egui::Key::Num6);
-        assert!(matches!(
-            h.state().brush,
-            Some(Brush {
-                block: Block::Gate {
-                    gate: Gate::And,
-                    ..
-                }
-            })
-        ));
-        let hand = h.state().brush.clone();
-        key(&mut h, egui::Key::V);
-        assert!(h.state().selecting());
-        key(&mut h, egui::Key::V);
-        assert_eq!(h.state().brush, hand);
-        let running = h.state().sim.running;
-        key(&mut h, egui::Key::P);
-        assert_eq!(h.state().sim.running, !running);
-    }
-
-    #[test]
-    fn port_names_count_up() {
-        assert_eq!(next_name("a"), "b");
-        assert_eq!(next_name("z"), "aa");
-        assert_eq!(next_name("az"), "ba");
-        assert_eq!(next_name("Q"), "R");
-        assert_eq!(next_name("x0"), "x1");
-        assert_eq!(next_name("q9"), "q10");
-        assert_eq!(next_name("sel_"), "sel_1");
-
-        // Placing ports: the one in hand moves on, skipping names in use.
-        let mut v = WorldView::new(World::new("p"));
-        v.edit(Edit::Set {
-            pos: Pos::new(5, 5, 0),
-            block: Some(Block::Port {
-                name: "b".into(),
-                output: false,
-                facing: Dir::East,
-            }),
-        });
-        v.brush = Some(Brush {
-            block: Block::Port {
-                name: "a".into(),
-                output: false,
-                facing: Dir::East,
-            },
-        });
-        let names: Vec<String> = (0..3)
-            .map(|y| {
-                v.place(Pos::new(0, y, 0), false);
-                match v.world.get(Pos::new(0, y, 0)) {
-                    Some(Block::Port { name, .. }) => name.clone(),
-                    _ => panic!(),
-                }
-            })
-            .collect();
-        assert_eq!(names, ["a", "c", "d"]);
-        // Choosing the port again from the palette starts at "a" again,
-        // which is taken: the next placed port still gets a free name.
-        v.brush = Some(Brush {
-            block: Block::Port {
-                name: "a".into(),
-                output: false,
-                facing: Dir::East,
-            },
-        });
-        v.place(Pos::new(0, 9, 0), false);
-        assert!(matches!(
-            v.world.get(Pos::new(0, 9, 0)),
-            Some(Block::Port { name, .. }) if name == "e"
-        ));
-        // Numbered names count up: a bus.
-        v.brush = Some(Brush {
-            block: Block::Port {
-                name: "x0".into(),
-                output: false,
-                facing: Dir::East,
-            },
-        });
-        for y in 10..13 {
-            v.place(Pos::new(0, y, 0), false);
-        }
-        assert!(matches!(
-            v.world.get(Pos::new(0, 12, 0)),
-            Some(Block::Port { name, .. }) if name == "x2"
-        ));
-    }
-
-    #[test]
-    fn edits_undo_redo() {
-        let mut v = WorldView::default();
-        v.edit(Edit::Set {
-            pos: Pos::new(0, 0, 0),
-            block: Some(Block::Wire),
-        });
-        v.edit(Edit::Set {
-            pos: Pos::new(1, 0, 0),
-            block: Some(Block::Lamp),
-        });
-        assert_eq!(v.world.len(), 2);
-        v.undo();
-        assert_eq!(v.world.len(), 1);
-        v.redo();
-        assert_eq!(v.world.get(Pos::new(1, 0, 0)), Some(&Block::Lamp));
-    }
-
-    #[test]
-    fn clock_and_lamp_run() {
-        // clock -> wire -> lamp; the lamp blinks with the clock.
-        let mut v = WorldView::default();
-        v.edit(Edit::Set {
-            pos: Pos::new(0, 0, 0),
-            block: Some(Block::Clock {
-                period: 2,
-                facing: Dir::East,
-            }),
-        });
-        v.edit(Edit::Set {
-            pos: Pos::new(1, 0, 0),
-            block: Some(Block::Wire),
-        });
-        v.edit(Edit::Set {
-            pos: Pos::new(2, 0, 0),
-            block: Some(Block::Lamp),
-        });
-        let mut lit = Vec::new();
-        for _ in 0..8 {
-            v.sim.run_frame(&v.world, false);
-            lit.push(v.sim.lamp_lit(Pos::new(2, 0, 0)) as u64);
-        }
-        // Steps 1..=8 with period 2: high on steps 2-3 and 6-7.
-        assert_eq!(lit, vec![0, 1, 1, 0, 0, 1, 1, 0]);
-    }
+fn harness(v: WorldView) -> Harness {
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(900.0, 600.0))
+        .build_ui_state(|ui, v: &mut WorldView| v.show(ui), v);
+    h.run();
+    h
 }
 
-mod history {
-    use crate::worldview::*;
+/// A view with the camera fixed: world point (x, y) at screen (x, y).
+fn view(w: World) -> WorldView {
+    let mut v = WorldView::new(w);
+    v.fit = false;
+    v.zoom = 1.0;
+    v.offset = Vec2::ZERO;
+    v
+}
 
-    fn wire(v: &mut WorldView, x: i32, b: Block) {
-        v.edit(Edit::Set {
-            pos: Pos::new(x, 0, 0),
-            block: Some(b),
-        });
+fn put(w: &mut World, kind: Kind, x: f32, y: f32) -> Id {
+    let id = w.new_id();
+    w.apply(Edit::Part {
+        id,
+        part: Some(Placed {
+            kind,
+            pos: Pos::new(x, y),
+        }),
+    });
+    id
+}
+
+/// Screen position of a part's output / input pin.
+fn out_pin(h: &Harness, id: Id, pin: usize) -> Pos2 {
+    let v = h.state();
+    v.layout(v.origin).source_pos(End::new(id, pin)).unwrap()
+}
+
+fn in_pin(h: &Harness, id: Id, pin: usize) -> Pos2 {
+    let v = h.state();
+    v.layout(v.origin).sink_pos(End::new(id, pin)).unwrap()
+}
+
+fn centre(h: &Harness, id: Id) -> Pos2 {
+    let v = h.state();
+    let l = v.layout(v.origin);
+    l.rect(l.part_rect(id).unwrap()).center()
+}
+
+fn drag(h: &mut Harness, from: Pos2, to: Pos2) {
+    h.drag_at(from);
+    h.run();
+    let mid = from + (to - from) / 2.0;
+    h.hover_at(mid);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    h.drop_at(to);
+    h.run();
+}
+
+fn click(h: &mut Harness, at: Pos2) {
+    h.hover_at(at);
+    h.run();
+    h.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: Default::default(),
+    });
+    h.event(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run();
+}
+
+fn lit(v: &WorldView, lamp: Id) -> bool {
+    v.sim
+        .input_value(&v.world, End::new(lamp, 0))
+        .is_some_and(|x| x != 0)
+}
+
+#[test]
+fn wire_by_dragging_and_toggle_a_switch() {
+    let mut w = World::new("w");
+    let sw = put(&mut w, Kind::Switch { on: false }, 100.0, 100.0);
+    let not = put(&mut w, Kind::Gate(Gate::Not), 250.0, 100.0);
+    let lamp = put(&mut w, Kind::Lamp, 400.0, 100.0);
+    let mut h = harness(view(w));
+    let (a, b) = (out_pin(&h, sw, 0), in_pin(&h, not, 0));
+    drag(&mut h, a, b);
+    let (a, b) = (out_pin(&h, not, 0), in_pin(&h, lamp, 0));
+    drag(&mut h, a, b);
+    assert_eq!(h.state().world.wires().count(), 2);
+    h.run();
+    assert!(lit(h.state(), lamp), "NOT of 0 lights the lamp");
+
+    // Clicking the switch flips it, and the lamp goes out.
+    let c = centre(&h, sw);
+    click(&mut h, c);
+    h.run();
+    assert!(matches!(
+        h.state().world.part(sw).unwrap().kind,
+        Kind::Switch { on: true }
+    ));
+    assert!(!lit(h.state(), lamp));
+
+    // Undo flips it back, undo again cuts the last wire.
+    h.state_mut().undo();
+    h.run();
+    assert!(lit(h.state(), lamp));
+    h.state_mut().undo();
+    assert_eq!(h.state().world.wires().count(), 1);
+    h.state_mut().redo();
+    assert_eq!(h.state().world.wires().count(), 2);
+}
+
+#[test]
+fn pulling_a_wire_off_cuts_it_and_widths_must_fit() {
+    let mut w = World::new("w");
+    let i = put(
+        &mut w,
+        Kind::Input {
+            name: "a".into(),
+            width: 4,
+            value: 5,
+        },
+        50.0,
+        100.0,
+    );
+    let not = put(&mut w, Kind::Gate(Gate::Not), 250.0, 100.0);
+    let out = put(
+        &mut w,
+        Kind::Output {
+            name: "q".into(),
+            width: 4,
+        },
+        250.0,
+        250.0,
+    );
+    let mut h = harness(view(w));
+    // 4 bits into a 1-bit gate: refused.
+    let (a, b) = (out_pin(&h, i, 0), in_pin(&h, not, 0));
+    drag(&mut h, a, b);
+    assert_eq!(h.state().world.wires().count(), 0);
+    assert!(h.state().status.is_some());
+    // Into the 4-bit output: fine.
+    let (a, b) = (out_pin(&h, i, 0), in_pin(&h, out, 0));
+    drag(&mut h, a, b);
+    assert_eq!(
+        h.state().world.wire_into(End::new(out, 0)),
+        Some(End::new(i, 0))
+    );
+    h.run();
+    assert_eq!(h.state().sim.value(End::new(i, 0)), Some(5));
+    // Pull the wire's end off the output, onto empty board: cut.
+    let b = in_pin(&h, out, 0);
+    drag(&mut h, b, pos2(600.0, 500.0));
+    assert_eq!(h.state().world.wires().count(), 0);
+}
+
+#[test]
+fn move_select_copy_paste_delete() {
+    let mut w = World::new("w");
+    let a = put(&mut w, Kind::Gate(Gate::And), 100.0, 100.0);
+    let b = put(&mut w, Kind::Gate(Gate::Or), 300.0, 100.0);
+    w.apply(Edit::Wire {
+        to: End::new(b, 0),
+        from: Some(End::new(a, 0)),
+    });
+    let mut h = harness(view(w));
+
+    // Dragging a part moves it, as one undoable edit.
+    let c = centre(&h, a);
+    drag(&mut h, c, c + vec2(0.0, 80.0));
+    let p = h.state().world.part(a).unwrap().pos;
+    assert_eq!((p.x, p.y), (100.0, 180.0));
+    h.state_mut().undo();
+    let p = h.state().world.part(a).unwrap().pos;
+    assert_eq!((p.x, p.y), (100.0, 100.0));
+
+    let v = h.state_mut();
+    v.selected = [a, b].into();
+    // Copy, paste: two new parts with a wire between them, selected.
+    v.copy().unwrap();
+    v.paste(None, pos2(100.0, 300.0));
+    assert_eq!(v.world.len(), 4);
+    assert_eq!(v.world.wires().count(), 2);
+    assert_eq!(v.selected.len(), 2);
+    assert!(!v.selected.contains(&a));
+    // Delete takes the copies and their wire.
+    v.delete_selected();
+    assert_eq!(v.world.len(), 2);
+    assert_eq!(v.world.wires().count(), 1);
+}
+
+#[test]
+fn shift_drag_selects() {
+    let mut w = World::new("w");
+    let a = put(&mut w, Kind::Lamp, 100.0, 100.0);
+    let b = put(&mut w, Kind::Lamp, 200.0, 100.0);
+    let far = put(&mut w, Kind::Lamp, 600.0, 400.0);
+    let mut h = harness(view(w));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+    drag(&mut h, pos2(60.0, 60.0), pos2(300.0, 200.0));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    let sel = &h.state().selected;
+    assert!(sel.contains(&a) && sel.contains(&b) && !sel.contains(&far));
+}
+
+#[test]
+fn placing_from_the_palette_names_ports() {
+    let mut h = harness(view(World::new("w")));
+    let input = Kind::Input {
+        name: "a".into(),
+        width: 1,
+        value: 0,
+    };
+    h.state_mut().placing = Some(input.clone());
+    for x in [100.0, 200.0, 300.0] {
+        click(&mut h, pos2(x, 200.0));
     }
+    let mut names: Vec<String> = h
+        .state()
+        .world
+        .parts()
+        .filter_map(|(_, p)| p.kind.port_name().map(str::to_string))
+        .collect();
+    names.sort();
+    assert_eq!(names, ["a", "b", "c"]);
+    // Still in hand; Esc lets go.
+    assert!(h.state().placing.is_some());
+    h.key_press(egui::Key::Escape);
+    h.run();
+    assert!(h.state().placing.is_none());
+}
 
-    /// In a shared world, undo takes back only what this player did and
-    /// what nobody has changed since.
-    #[test]
-    fn undo_respects_other_players() {
-        let mut v = WorldView::new(World::new("h"));
-        v.sharing = true;
-        wire(&mut v, 0, Block::Wire);
-        wire(&mut v, 1, Block::Wire);
-        // Another player puts a lamp on my second wire.
-        v.apply_remote(Edit::Set {
-            pos: Pos::new(1, 0, 0),
-            block: Some(Block::Lamp),
-        });
-        v.outbox.clear();
-        // My last edit was entirely overwritten: undo skips it and takes
-        // back the first one.
-        v.undo();
-        assert_eq!(v.world.get(Pos::new(0, 0, 0)), None);
-        assert_eq!(v.world.get(Pos::new(1, 0, 0)), Some(&Block::Lamp));
-        // What was undone is shared with the others.
-        assert_eq!(
-            v.outbox,
-            vec![Edit::Batch(vec![Edit::Set {
-                pos: Pos::new(0, 0, 0),
-                block: None
-            }])]
+#[test]
+fn next_names() {
+    assert_eq!(next_name("a"), "b");
+    assert_eq!(next_name("z"), "aa");
+    assert_eq!(next_name("x0"), "x1");
+    assert_eq!(next_name("q9"), "q10");
+    assert_eq!(next_name("Z"), "AA");
+    assert_eq!(next_name("_"), "_1");
+}
+
+#[test]
+fn clock_runs_and_keyboard_types() {
+    let mut w = World::new("w");
+    let clk = put(&mut w, Kind::Clock { period: 1 }, 50.0, 50.0);
+    let lamp = put(&mut w, Kind::Lamp, 200.0, 50.0);
+    w.apply(Edit::Wire {
+        to: End::new(lamp, 0),
+        from: Some(End::new(clk, 0)),
+    });
+    let kbd = put(&mut w, Kind::Device(Device::Keyboard), 50.0, 200.0);
+    let disp = put(
+        &mut w,
+        Kind::Device(Device::Display { bits: 7 }),
+        300.0,
+        200.0,
+    );
+    w.apply(Edit::Wire {
+        to: End::new(disp, 0),
+        from: Some(End::new(kbd, 0)),
+    });
+    let mut v = view(w);
+    v.selected = [kbd].into();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(900.0, 600.0))
+        .build_ui_state(|ui, v: &mut WorldView| v.show(ui), v);
+    h.run_steps(2);
+    let before = lit(h.state(), lamp);
+    h.run_steps(1);
+    assert_ne!(lit(h.state(), lamp), before, "the clock ticks every frame");
+    assert!(h.state().typing());
+    h.event(egui::Event::Text("A".into()));
+    h.run_steps(2);
+    assert_eq!(
+        h.state()
+            .sim
+            .input_value(&h.state().world, End::new(disp, 0)),
+        Some(b'A' as u64)
+    );
+}
+
+#[test]
+fn resizing_a_device_cuts_wires_that_no_longer_fit() {
+    let mut w = World::new("w");
+    let a = put(
+        &mut w,
+        Kind::Input {
+            name: "a".into(),
+            width: 4,
+            value: 3,
+        },
+        50.0,
+        50.0,
+    );
+    let ram = put(
+        &mut w,
+        Kind::Device(Device::Ram { addr: 4, data: 8 }),
+        200.0,
+        50.0,
+    );
+    w.apply(Edit::Wire {
+        to: End::new(ram, 0),
+        from: Some(End::new(a, 0)),
+    });
+    let mut v = view(w);
+    v.set_kind(ram, Kind::Device(Device::Ram { addr: 4, data: 4 }));
+    assert_eq!(v.world.wires().count(), 1, "the address still fits");
+    v.set_kind(ram, Kind::Device(Device::Ram { addr: 3, data: 4 }));
+    assert_eq!(v.world.wires().count(), 0);
+}
+
+#[test]
+fn chips_from_a_selection() {
+    let mut w = World::new("w");
+    let a = put(
+        &mut w,
+        Kind::Input {
+            name: "a".into(),
+            width: 1,
+            value: 0,
+        },
+        50.0,
+        50.0,
+    );
+    let not = put(&mut w, Kind::Gate(Gate::Not), 200.0, 50.0);
+    let q = put(
+        &mut w,
+        Kind::Output {
+            name: "q".into(),
+            width: 1,
+        },
+        350.0,
+        50.0,
+    );
+    w.apply(Edit::Wire {
+        to: End::new(not, 0),
+        from: Some(End::new(a, 0)),
+    });
+    w.apply(Edit::Wire {
+        to: End::new(q, 0),
+        from: Some(End::new(not, 0)),
+    });
+    let mut v = view(w);
+    v.selected = [a, not, q].into();
+    v.chip_name = "Ters".into();
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(400.0, 700.0))
+        .build_ui_state(
+            |ui, v: &mut WorldView| {
+                crate::theme::install(ui.ctx());
+                v.selection_panel(ui);
+            },
+            v,
         );
-        v.redo();
-        assert_eq!(v.world.get(Pos::new(0, 0, 0)), Some(&Block::Wire));
-        // Nothing of mine is left to undo except that wire.
-        v.undo();
-        v.undo();
-        assert_eq!(v.world.len(), 1, "the lamp stays");
-    }
-
-    /// Edits that change nothing do not fill the history.
-    #[test]
-    fn no_op_edits_are_not_recorded() {
-        let mut v = WorldView::new(World::new("h"));
-        wire(&mut v, 0, Block::Wire);
-        wire(&mut v, 0, Block::Wire);
-        v.undo();
-        assert!(v.world.is_empty());
-        assert!(!v.can_undo());
-    }
-}
-
-mod ui_tests {
-    use super::*;
-    use crate::worldview::*;
-    use std::{cell::RefCell, rc::Rc};
-
-    /// Paint a wire by dragging across cells, erase one with right click,
-    /// and toggle a switch by clicking it.
-    #[test]
-    fn paint_erase_toggle() {
-        let view = Rc::new(RefCell::new(WorldView::default()));
-        let v = view.clone();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(800.0, 600.0))
-            .build_ui(move |ui| v.borrow_mut().show(ui));
-        h.run();
-        // Screen centre of a cell on layer 0 (the camera was fitted on the
-        // first frame).
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let cell = |view: &WorldView, x: i32, y: i32| {
-            let origin = rect.center_top() + vec2(0.0, 80.0);
-            view.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5)
-        };
-        let path: Vec<Pos2> = (0..4).map(|x| cell(&view.borrow(), x, 0)).collect();
-        h.drag_at(path[0]);
-        h.run();
-        for p in &path[1..] {
-            h.hover_at(*p);
-            h.run();
-        }
-        h.drop_at(path[3]);
-        h.run();
-        let wires: Vec<Pos> = view.borrow().world.blocks().map(|(p, _)| p).collect();
-        assert_eq!(wires.len(), 4, "{wires:?}");
-
-        // Right click erases.
-        let p = cell(&view.borrow(), 2, 0);
-        h.event(egui::Event::PointerMoved(p));
-        h.event(egui::Event::PointerButton {
-            pos: p,
-            button: egui::PointerButton::Secondary,
-            pressed: true,
-            modifiers: egui::Modifiers::NONE,
-        });
-        h.event(egui::Event::PointerButton {
-            pos: p,
-            button: egui::PointerButton::Secondary,
-            pressed: false,
-            modifiers: egui::Modifiers::NONE,
-        });
-        h.run();
-        assert_eq!(view.borrow().world.len(), 3);
-        assert!(view.borrow().world.get(Pos::new(2, 0, 0)).is_none());
-
-        // Place a switch, then click it to turn it on.
-        view.borrow_mut().brush = Some(Brush {
-            block: Block::Switch {
-                on: false,
-                facing: Dir::East,
-            },
-        });
-        let p = cell(&view.borrow(), 0, 2);
-        let click = |h: &mut egui_kittest::Harness| {
-            h.event(egui::Event::PointerMoved(p));
-            h.event(egui::Event::PointerButton {
-                pos: p,
-                button: egui::PointerButton::Primary,
-                pressed: true,
-                modifiers: egui::Modifiers::NONE,
-            });
-            h.event(egui::Event::PointerButton {
-                pos: p,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: egui::Modifiers::NONE,
-            });
-            h.run();
-        };
-        click(&mut h);
-        assert_eq!(
-            view.borrow().world.get(Pos::new(0, 2, 0)),
-            Some(&Block::Switch {
-                on: false,
-                facing: Dir::East
-            })
-        );
-        click(&mut h);
-        assert_eq!(
-            view.borrow().world.get(Pos::new(0, 2, 0)),
-            Some(&Block::Switch {
-                on: true,
-                facing: Dir::East
-            })
-        );
-        // Undo turns it off again.
-        view.borrow_mut().undo();
-        assert_eq!(
-            view.borrow().world.get(Pos::new(0, 2, 0)),
-            Some(&Block::Switch {
-                on: false,
-                facing: Dir::East
-            })
-        );
-    }
-}
-
-mod wire_tests {
-    use crate::worldview::*;
-
-    /// Two wires dragged side by side stay apart; a third dragged across
-    /// them joins both.
-    #[test]
-    fn drag_parallel_then_join() {
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(800.0, 600.0))
-            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), WorldView::default());
-        h.run();
-        let origin = egui::pos2(400.0, 80.0);
-        let drag = |h: &mut egui_kittest::Harness<'_, WorldView>, cells: &[(i32, i32)]| {
-            let at = |h: &egui_kittest::Harness<'_, WorldView>, (x, y): (i32, i32)| {
-                h.state().to_screen(origin, x as f32 + 0.5, y as f32 + 0.5)
-            };
-            let first = at(h, cells[0]);
-            h.drag_at(first);
-            h.run();
-            for &c in &cells[1..] {
-                let p = at(h, c);
-                h.hover_at(p);
-                h.run();
-            }
-            let last = at(h, *cells.last().unwrap());
-            h.drop_at(last);
-            h.run();
-        };
-        drag(&mut h, &[(0, 0), (1, 0), (2, 0), (3, 0)]);
-        drag(&mut h, &[(0, 1), (1, 1), (2, 1), (3, 1)]);
-        let w = &h.state().world;
-        assert_eq!(w.len(), 8);
-        assert!(!w.accepts_wire(Pos::new(1, 0, 0), Dir::South), "apart");
-
-        // Across both, top to bottom at x = 2.
-        drag(&mut h, &[(2, -1), (2, 0), (2, 1), (2, 2)]);
-        let w = &h.state().world;
-        for y in [0, 1] {
-            assert!(w.accepts_wire(Pos::new(2, y, 0), Dir::North));
-            assert!(w.accepts_wire(Pos::new(2, y, 0), Dir::South));
-            assert!(w.accepts_wire(Pos::new(2, y, 0), Dir::East));
-        }
-        // They are one net now: a switch on the top wire lights the bottom
-        // one. (Before the join, the bottom one would read nothing.)
-        let v = h.state_mut();
-        v.brush = Some(Brush {
-            block: Block::Switch {
-                on: true,
-                facing: Dir::East,
-            },
-        });
-        v.facing = Dir::East;
-        v.place(Pos::new(-1, 0, 0), false);
-        let c = makine_world::compile(&v.world).unwrap();
-        let lane = makine_world::compile::Lane::Main;
-        let top = c.output_at(Pos::new(0, 0, 0), lane);
-        let bottom = c.output_at(Pos::new(3, 1, 0), lane);
-        assert!(top.is_some());
-        assert_eq!(top, bottom);
-    }
-}
-
-mod device_tests {
-    use crate::worldview::*;
-    use std::{cell::RefCell, rc::Rc};
-
-    /// A keyboard wired straight into a display: select the keyboard, type
-    /// a letter, the display shows its code (plus `ready` in bit 7).
-    #[test]
-    fn type_into_keyboard_and_read_display() {
-        let mut w = World::new("k");
-        let e = w
-            .place_device(Device::Keyboard, Pos::new(0, 0, 0), Dir::East)
-            .unwrap();
-        w.apply(e);
-        for y in 0..8 {
-            w.apply(Edit::Set {
-                pos: Pos::new(3, y, 0),
-                block: Some(Block::Straight { facing: Dir::East }),
-            });
-        }
-        let e = w
-            .place_device(Device::Display { bits: 8 }, Pos::new(4, 0, 0), Dir::East)
-            .unwrap();
-        w.apply(e);
-        let view = Rc::new(RefCell::new(WorldView::new(w)));
-        view.borrow_mut().selected = Some(Pos::new(0, 0, 0));
-        let v = view.clone();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(800.0, 600.0))
-            .build_ui(move |ui| v.borrow_mut().show(ui));
-        h.run_steps(2);
-        assert!(view.borrow().typing());
-        h.event(egui::Event::Text("A".into()));
-        h.run_steps(2);
-        let shown = {
-            let v = view.borrow();
-            let values = v.sim.values();
-            let d = v
-                .sim
-                .compiled()
-                .unwrap()
-                .devices
-                .iter()
-                .find(|d| matches!(d.device, Device::Display { .. }))
-                .unwrap();
-            d.inputs
-                .iter()
-                .enumerate()
-                .map(|(i, o)| o.map_or(0, |o| values[o] << i))
-                .sum::<u64>()
-        };
-        assert_eq!(shown, 0x80 | b'A' as u64);
-        // Esc leaves the keyboard.
-        h.key_press(egui::Key::Escape);
-        h.run();
-        assert!(!view.borrow().typing());
-    }
-
-    /// Placing a device by clicking, resizing it from the panel, and
-    /// keeping RAM contents across unrelated edits.
-    #[test]
-    fn place_resize_and_keep_memory() {
-        let mut v = WorldView::new(World::new("t"));
-        v.brush = Some(Brush {
-            block: Block::Device {
-                device: Device::Ram { addr: 2, data: 4 },
-                facing: Dir::East,
-            },
-        });
-        v.place(Pos::new(0, 0, 0), true);
-        assert_eq!(v.selected, Some(Pos::new(0, 0, 0)));
-        // Clicking a device selects it instead of painting.
-        v.brush = Some(Brush { block: Block::Wire });
-        v.selected = None;
-        v.place(Pos::new(1, 1, 0), true);
-        assert_eq!(v.selected, Some(Pos::new(0, 0, 0)));
-        let n = v.world.len();
-        v.replace_device(Pos::new(0, 0, 0), Device::Ram { addr: 3, data: 4 })
-            .unwrap();
-        assert!(v.world.len() > n);
-        // Write into the RAM directly, edit elsewhere, the word is kept.
-        v.sim.run_frame(&v.world, false);
-        let name = v.sim.native_at(Pos::new(0, 0, 0)).unwrap();
-        {
-            let sim = v.sim.running_circuit().unwrap();
-            let r: &mut makine_sim::Clocked<device::RamState> = sim.native_mut(&name).unwrap();
-            r.state.words[5] = 9;
-        }
-        v.edit(Edit::Set {
-            pos: Pos::new(20, 0, 0),
-            block: Some(Block::Lamp),
-        });
-        v.sim.run_frame(&v.world, false);
-        assert_eq!(v.ram_words(Pos::new(0, 0, 0)).unwrap()[5], 9);
-        // A device that does not fit is refused with a message.
-        v.brush = Some(Brush {
-            block: Block::Device {
-                device: Device::Keyboard,
-                facing: Dir::East,
-            },
-        });
-        v.place(Pos::new(19, 0, 0), true);
-        assert!(v.status.is_some());
-        // Erasing any cell removes the whole device.
-        v.erase(Pos::new(2, 3, 0));
-        assert_eq!(v.world.len(), 1);
-        assert_eq!(v.selected, None);
-    }
-}
-
-mod selection_tests {
-    use super::*;
-    use crate::worldview::*;
-    use std::{cell::RefCell, rc::Rc};
-
-    fn press(h: &mut egui_kittest::Harness, p: Pos2, button: egui::PointerButton, down: bool) {
-        h.event(egui::Event::PointerButton {
-            pos: p,
-            button,
-            pressed: down,
-            modifiers: egui::Modifiers::NONE,
-        });
-    }
-
-    /// Drag-select, copy, paste somewhere else, move with arrows, delete.
-    #[test]
-    fn select_copy_paste_move() {
-        let mut w = World::new("s");
-        for x in 0..3 {
-            w.apply(Edit::Set {
-                pos: Pos::new(x, 0, 0),
-                block: Some(Block::Wire),
-            });
-        }
-        w.apply(Edit::Set {
-            pos: Pos::new(1, 1, 1),
-            block: Some(Block::Lamp),
-        });
-        let mut v = WorldView::new(w);
-        v.brush = None;
-        let view = Rc::new(RefCell::new(v));
-        let vv = view.clone();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(800.0, 600.0))
-            .build_ui(move |ui| vv.borrow_mut().show(ui));
-        h.run();
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let origin = rect.center_top() + vec2(0.0, 80.0);
-        let cell =
-            |v: &WorldView, x: i32, y: i32| v.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5);
-
-        // Drag from (0,0) to (2,1).
-        let (a, b) = (cell(&view.borrow(), 0, 0), cell(&view.borrow(), 2, 1));
-        h.event(egui::Event::PointerMoved(a));
-        press(&mut h, a, egui::PointerButton::Primary, true);
-        h.run();
-        for t in 1..=4 {
-            h.event(egui::Event::PointerMoved(a + (b - a) * (t as f32 / 4.0)));
-            h.run();
-        }
-        press(&mut h, b, egui::PointerButton::Primary, false);
-        h.run();
-        let sel = view.borrow().selection.unwrap();
-        assert_eq!(sel, Region::between(Pos::new(0, 0, 0), Pos::new(2, 1, 0)));
-        assert_eq!(sel.blocks(&view.borrow().world).len(), 4, "all layers");
-
-        // Copy, then paste at (0, 5) by clicking there.
-        h.event(egui::Event::Copy);
-        h.run();
-        assert!(view.borrow().clipboard.is_some());
-        let text = view.borrow().clipboard.as_ref().unwrap().to_json();
-        h.event(egui::Event::Paste(text));
-        h.run();
-        assert!(view.borrow().pasting.is_some());
-        let p = cell(&view.borrow(), 0, 5);
-        h.event(egui::Event::PointerMoved(p));
-        h.run();
-        press(&mut h, p, egui::PointerButton::Primary, true);
-        press(&mut h, p, egui::PointerButton::Primary, false);
-        h.run();
-        let v = view.borrow();
-        assert_eq!(v.world.len(), 8);
-        assert_eq!(v.world.get(Pos::new(1, 6, 1)), Some(&Block::Lamp));
-        drop(v);
-
-        // The pasted copy is selected: move it right with the arrow key.
-        h.key_press(egui::Key::ArrowRight);
-        h.run();
-        let v = view.borrow();
-        assert_eq!(
-            v.world.get(Pos::new(2, 6, 1)),
-            Some(&Block::Lamp),
-            "sel={:?} status={:?} blocks={:?}",
-            v.selection,
-            v.status,
-            v.world.blocks().map(|(p, _)| p).collect::<Vec<_>>()
-        );
-        assert!(v.world.get(Pos::new(0, 5, 0)).is_none());
-        drop(v);
-
-        // Delete removes it.
-        h.key_press(egui::Key::Delete);
-        h.run();
-        assert_eq!(view.borrow().world.len(), 4);
-        // Undo brings it back in one step.
-        view.borrow_mut().undo();
-        assert_eq!(view.borrow().world.len(), 8);
-    }
-}
-
-mod settings_tests {
-    use super::*;
-    use crate::worldview::*;
+    h.run();
     use egui_kittest::kittest::Queryable;
-
-    /// The side panels of the world view, as the app shows them.
-    fn panels(ui: &mut Ui, v: &mut WorldView) {
-        v.block_panel(ui);
-        v.device_panel(ui);
-    }
-
-    fn harness(v: WorldView) -> egui_kittest::Harness<'static, WorldView> {
-        egui_kittest::Harness::builder()
-            .with_size(egui::vec2(500.0, 600.0))
-            .build_ui_state(panels, v)
-    }
-
-    /// Ports come from the palette and are renamed in their panel; then the
-    /// world becomes a chip with that pin. A clock's period is set the same
-    /// way.
-    #[test]
-    fn ports_and_clocks_are_editable() {
-        let mut v = WorldView::new(World::new("p"));
-        let brush = |name: &str| {
-            palette()
-                .into_iter()
-                .find(|(n, ..)| *n == name)
-                .map(|(_, b, _)| Brush { block: b })
-        };
-        v.brush = brush("Giriş");
-        v.place(Pos::new(0, 0, 0), false);
-        v.brush = Some(Brush {
-            block: Block::Gate {
-                gate: Gate::Not,
-                facing: Dir::East,
+    h.get_by_label("Çip yap").click();
+    h.run();
+    assert_eq!(
+        h.state().request,
+        Some(Request::MakeChip {
+            name: "Ters".into(),
+            parts: {
+                let mut v = vec![a, not, q];
+                v.sort();
+                v
             },
-        });
-        v.place(Pos::new(1, 0, 0), false);
-        v.brush = brush("Çıkış");
-        v.place(Pos::new(2, 0, 0), false);
-        v.brush = brush("Saat");
-        v.place(Pos::new(0, 3, 0), false);
-        // Clicking a port selects it for its settings.
-        v.place(Pos::new(2, 0, 0), true);
-        assert_eq!(v.selected_block, Some(Pos::new(2, 0, 0)));
+        })
+    );
+}
 
-        let mut h = harness(v);
-        h.run();
-        h.get_by_label("Ad").focus();
-        h.run();
-        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-        h.get_by_label("Ad").type_text("ters");
-        h.run_steps(2);
-        let ports = Region::between(Pos::new(0, 0, 0), Pos::new(2, 0, 0));
-        let mut part = World::new("Ters");
-        part.apply(
-            Clip::copy(&h.state().world, ports)
-                .unwrap()
-                .paste(&part, Pos::new(0, 0, 0))
-                .unwrap(),
-        );
-        let chip = makine_world::chip::to_chip(&part, "Ters", &Library::new()).unwrap();
-        assert_eq!(chip.outputs[0].name, "ters");
-        // An invalid name is not applied.
-        h.get_by_label("Ad").type_text(" x");
-        h.run_steps(2);
-        assert!(matches!(
-            h.state().world.get(Pos::new(2, 0, 0)),
-            Some(Block::Port { name, .. }) if name == "ters"
-        ));
-
-        h.state_mut().place(Pos::new(0, 3, 0), true);
-        h.run();
-        h.get_by_label("Periyot (adım)").focus();
-        h.run();
-        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-        h.get_by_label("Periyot (adım)").type_text("7");
-        h.key_press(egui::Key::Enter);
-        h.run_steps(2);
-        assert!(matches!(
-            h.state().world.get(Pos::new(0, 3, 0)),
-            Some(Block::Clock { period: 7, .. })
-        ));
-    }
-
-    /// R turns what is being pasted, not the brush.
-    #[test]
-    fn r_turns_the_paste() {
-        let mut w = World::new("r");
-        for x in 0..3 {
-            w.apply(Edit::Set {
-                pos: Pos::new(x, 0, 0),
-                block: Some(Block::Wire),
-            });
-        }
-        let mut v = WorldView::new(w);
-        v.pasting = Clip::copy(
-            &v.world,
-            Region::between(Pos::new(0, 0, 0), Pos::new(2, 0, 0)),
-        );
-        let f = v.facing;
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(600.0, 400.0))
-            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), v);
-        h.run();
-        h.hover_at(egui::pos2(300.0, 200.0));
-        h.run();
-        h.key_press(egui::Key::R);
-        h.run();
-        assert_eq!(h.state().pasting.as_ref().unwrap().size(), (1, 3));
-        assert_eq!(h.state().facing, f, "facing unchanged while pasting");
-    }
-
-    /// The ROM text box follows the ROM when someone else changes it.
-    #[test]
-    fn rom_text_follows_contents() {
-        let mut v = WorldView::new(World::new("r"));
-        let rom = Device::Rom {
-            addr: 1,
-            data: 8,
-            words: vec![0xAB, 0xCD],
-        };
-        let e = v
-            .world
-            .place_device(rom, Pos::new(0, 0, 0), Dir::East)
-            .unwrap();
-        v.edit(e);
-        v.selected = Some(Pos::new(0, 0, 0));
-        let mut h = harness(v);
-        h.run();
-        assert_eq!(h.state().rom_text.as_ref().unwrap().1, "AB CD");
-        {
-            let v = h.state_mut();
-            let e = v.world.remove(Pos::new(0, 0, 0)).unwrap();
-            v.apply_remote(e);
-            let new = Device::Rom {
-                addr: 1,
-                data: 8,
-                words: vec![0x12, 0x34],
-            };
-            let e = v
-                .world
-                .place_device(new, Pos::new(0, 0, 0), Dir::East)
-                .unwrap();
-            v.apply_remote(e);
-            v.selected = Some(Pos::new(0, 0, 0));
-        }
-        h.run();
-        assert_eq!(h.state().rom_text.as_ref().unwrap().1, "12 34");
-    }
+#[test]
+fn undo_respects_other_players() {
+    let mut v = view(World::new("w"));
+    let id = v.add(Kind::Lamp, pos2(0.0, 0.0));
+    // Someone else turns it into a switch: undoing my add must not delete
+    // their part.
+    v.apply_remote(Edit::Part {
+        id,
+        part: Some(Placed {
+            kind: Kind::Switch { on: true },
+            pos: Pos::new(0.0, 0.0),
+        }),
+    });
+    assert!(!v.can_undo());
+    v.undo();
+    assert_eq!(v.world.len(), 1);
 }

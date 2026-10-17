@@ -4,12 +4,21 @@
 use std::time::{Duration, Instant};
 
 use makine_net::{Client, Event, Host};
-use makine_world::{Block, Edit, Pos, World};
+use makine_world::{Edit, Kind, Placed, Pos, World};
 
-fn set(x: i32, b: Block) -> Edit {
-    Edit::Set {
-        pos: Pos::new(x, 0, 0),
-        block: Some(b),
+/// Put part `id` (a lamp at `x`, or a switch).
+fn set(id: u64, x: f32, switch: bool) -> Edit {
+    let kind = if switch {
+        Kind::Switch { on: true }
+    } else {
+        Kind::Lamp
+    };
+    Edit::Part {
+        id,
+        part: Some(Placed {
+            kind,
+            pos: Pos::new(x, 0.0),
+        }),
     }
 }
 
@@ -43,10 +52,8 @@ fn host_poll(host: &mut Host, world: &mut World) -> Vec<Event> {
     host.poll(world, |_| vec![])
 }
 
-fn cells(w: &World) -> Vec<(Pos, Block)> {
-    let mut v: Vec<(Pos, Block)> = w.blocks().map(|(p, b)| (p, b.clone())).collect();
-    v.sort_by_key(|(p, _)| *p);
-    v
+fn cells(w: &World) -> Vec<(u64, Placed)> {
+    w.parts().map(|(id, p)| (id, p.clone())).collect()
 }
 
 /// Poll everyone until `done` or a timeout.
@@ -73,7 +80,7 @@ fn settle(
 #[test]
 fn players_converge() {
     let mut hw = World::new("ortak");
-    hw.apply(set(0, Block::Lamp));
+    hw.apply(set(1000, 0.0, false));
     let mut host = Host::start("ev sahibi", 0).unwrap();
     let addr = format!("127.0.0.1:{}", host.port());
     let mut a = Peer {
@@ -95,15 +102,15 @@ fn players_converge() {
         p.iter().all(|p| p.client.players().len() == 3)
     });
 
-    // Everyone writes cell 1 (and some others) at once, without waiting.
+    // Everyone writes part 1 (and some others) at once, without waiting.
     for round in 0..20 {
-        a.edit(set(1, Block::Wire));
-        b.edit(set(1, Block::Via));
-        let e = set(1, Block::Cross);
+        a.edit(set(1, 1.0, false));
+        b.edit(set(1, 2.0, true));
+        let e = set(1, 3.0, false);
         hw.apply(e.clone());
         host.send_edit(e, vec![]);
-        a.edit(set(10 + round, Block::Wire));
-        b.edit(set(10 + round, Block::Lamp));
+        a.edit(set(10 + round, 0.0, false));
+        b.edit(set(10 + round, 5.0, true));
         if round % 3 == 0 {
             host_poll(&mut host, &mut hw);
             a.poll();
@@ -121,7 +128,7 @@ fn players_converge() {
     assert_eq!(cells(&b.world), cells(&hw));
 
     // Cursors reach the others.
-    a.client.send_cursor(Some(Pos::new(3, 4, 0)));
+    a.client.send_cursor(Some(Pos::new(3.0, 4.0)));
     let aid = a.client.id().unwrap();
     settle(&mut host, &mut hw, &mut [&mut a, &mut b], |_, p| {
         p[1].log
@@ -176,7 +183,7 @@ fn late_joiner_misses_nothing() {
     });
     // a floods edits; b connects in the middle of them.
     for x in 0..200 {
-        a.edit(set(x, Block::Wire));
+        a.edit(set(x, 0.0, false));
     }
     let mut b = Peer {
         world: World::new("?"),
@@ -184,7 +191,7 @@ fn late_joiner_misses_nothing() {
         log: vec![],
     };
     for x in 200..400 {
-        a.edit(set(x, Block::Lamp));
+        a.edit(set(x, 1.0, true));
     }
     settle(&mut host, &mut hw, &mut [&mut a, &mut b], |hw, p| {
         hw.len() == 400 && p.iter().all(|p| cells(&p.world) == cells(hw))

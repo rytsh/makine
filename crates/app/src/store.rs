@@ -36,8 +36,9 @@ pub struct Progress {
     /// Free-form chips.
     #[serde(default)]
     pub sandbox: Sandbox,
-    /// Block worlds, by name.
-    #[serde(default)]
+    /// Worlds, by name. Worlds from before (a grid of blocks) are left
+    /// out when loading.
+    #[serde(default, deserialize_with = "worlds_or_nothing")]
     pub worlds: BTreeMap<String, makine_world::World>,
     /// The world open last.
     #[serde(default)]
@@ -46,6 +47,21 @@ pub struct Progress {
 
 fn yes() -> bool {
     true
+}
+
+/// The worlds that can still be read; others are dropped (an old save must
+/// not lose the player's levels).
+fn worlds_or_nothing<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<BTreeMap<String, makine_world::World>, D::Error> {
+    let raw: BTreeMap<String, serde_json::Value> = BTreeMap::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let w: makine_world::World = serde_json::from_value(v).ok()?;
+            Some((k, w.checked()))
+        })
+        .collect())
 }
 
 impl Default for Progress {
@@ -124,6 +140,14 @@ mod tests {
         p.save(&path).unwrap();
         assert_eq!(Progress::load(&path).unwrap(), p);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn old_worlds_are_dropped() {
+        let json = r#"{"worlds":{"eski":{"name":"eski","chunks":[]},
+            "yeni":{"name":"yeni","parts":{},"wires":[]}},"solutions":{}}"#;
+        let p: Progress = serde_json::from_str(json).unwrap();
+        assert_eq!(p.worlds.keys().collect::<Vec<_>>(), ["yeni"]);
     }
 
     #[test]

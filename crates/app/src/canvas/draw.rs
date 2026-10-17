@@ -12,23 +12,23 @@ use crate::design::{Geometry, Symbol, BUBBLE, GATE_W, HEADER, LEAD, PIN_RADIUS};
 use crate::theme;
 
 pub const BG: Color32 = theme::BOARD;
-pub(super) const GRID: Color32 = theme::BOARD_GRID;
+pub(crate) const GRID: Color32 = theme::BOARD_GRID;
 /// Parts are black epoxy packages on the board.
-pub(super) const PART_FILL: Color32 = Color32::from_rgb(22, 27, 25);
-pub(super) const PART_HEADER: Color32 = Color32::from_rgb(42, 52, 48);
-pub(super) const NAND_HEADER: Color32 = Color32::from_rgb(124, 74, 40);
-pub(super) const BUS_HEADER: Color32 = Color32::from_rgb(34, 62, 82);
-pub(super) const GATE_FILL: Color32 = Color32::from_rgb(20, 26, 24);
-pub(super) const GATE_LINE: Color32 = theme::INK;
-pub(super) const TEXT: Color32 = theme::INK;
-pub(super) const DIM: Color32 = theme::INK_DIM;
+pub(crate) const PART_FILL: Color32 = Color32::from_rgb(22, 27, 25);
+pub(crate) const PART_HEADER: Color32 = Color32::from_rgb(42, 52, 48);
+pub(crate) const NAND_HEADER: Color32 = Color32::from_rgb(124, 74, 40);
+pub(crate) const BUS_HEADER: Color32 = Color32::from_rgb(34, 62, 82);
+pub(crate) const GATE_FILL: Color32 = Color32::from_rgb(20, 26, 24);
+pub(crate) const GATE_LINE: Color32 = theme::INK;
+pub(crate) const TEXT: Color32 = theme::INK;
+pub(crate) const DIM: Color32 = theme::INK_DIM;
 pub const ON: Color32 = theme::SIGNAL;
 pub const OFF: Color32 = theme::SIGNAL_OFF;
-pub(super) const WIRE_HOVER: Color32 = Color32::from_rgb(255, 236, 200);
-pub(super) const BUS: Color32 = theme::BUS;
-pub(super) const ERR: Color32 = theme::BAD;
+pub(crate) const WIRE_HOVER: Color32 = Color32::from_rgb(255, 236, 200);
+pub(crate) const BUS: Color32 = theme::BUS;
+pub(crate) const ERR: Color32 = theme::BAD;
 
-pub(super) fn wire_color(width: u8, value: Option<u64>) -> Color32 {
+pub(crate) fn wire_color(width: u8, value: Option<u64>) -> Color32 {
     match (width, value) {
         (1, Some(1)) => ON,
         (1, _) => OFF,
@@ -37,7 +37,7 @@ pub(super) fn wire_color(width: u8, value: Option<u64>) -> Color32 {
     }
 }
 
-pub(super) fn pin_dot(painter: &egui::Painter, at: Pos2, p: &Pin, z: f32, hovered: bool) {
+pub(crate) fn pin_dot(painter: &egui::Painter, at: Pos2, p: &Pin, z: f32, hovered: bool) {
     let r = PIN_RADIUS * z * if hovered { 1.4 } else { 1.0 };
     let fill = if p.width > 1 { BUS } else { DIM };
     painter.circle_filled(at, r, fill);
@@ -83,7 +83,7 @@ pub(super) fn port(painter: &egui::Painter, r: Rect, p: &Pin, v: u64, z: f32, ho
 
 /// A wire from source `a` (leaving to the right) to sink `b`, arriving from
 /// direction `dir` (pointing away from the sink, towards the wire).
-pub(super) fn bezier(a: Pos2, b: Pos2, dir: Vec2, stroke: Stroke) -> Shape {
+pub(crate) fn bezier(a: Pos2, b: Pos2, dir: Vec2, stroke: Stroke) -> Shape {
     CubicBezierShape::from_points_stroke(
         bezier_points(a, b, dir),
         false,
@@ -95,7 +95,7 @@ pub(super) fn bezier(a: Pos2, b: Pos2, dir: Vec2, stroke: Stroke) -> Shape {
 
 /// Control points of the wire from `a` (leaving to the right) into `b`
 /// (entered against `dir`).
-pub(super) fn bezier_points(a: Pos2, b: Pos2, dir: Vec2) -> [Pos2; 4] {
+pub(crate) fn bezier_points(a: Pos2, b: Pos2, dir: Vec2) -> [Pos2; 4] {
     let d = ((b.x - a.x).abs() * 0.5).max(40.0);
     let end = if dir.y != 0.0 {
         let dy = ((b.y - a.y).abs() * 0.5).max(40.0);
@@ -107,7 +107,7 @@ pub(super) fn bezier_points(a: Pos2, b: Pos2, dir: Vec2) -> [Pos2; 4] {
 }
 
 /// Distance from `p` to the wire curve `c`.
-pub(super) fn bezier_distance(c: [Pos2; 4], p: Pos2) -> f32 {
+pub(crate) fn bezier_distance(c: [Pos2; 4], p: Pos2) -> f32 {
     let at = |t: f32| {
         let u = 1.0 - t;
         (c[0].to_vec2() * (u * u * u)
@@ -131,7 +131,7 @@ pub(super) fn bezier_distance(c: [Pos2; 4], p: Pos2) -> f32 {
 }
 
 /// A part drawn as a labelled box with a coloured header.
-pub(super) fn draw_box(
+pub(crate) fn draw_box(
     painter: &egui::Painter,
     r: Rect,
     part: &makine_sim::Part,
@@ -206,7 +206,7 @@ pub(crate) fn gate_outline(symbol: Symbol, x0: f32, x1: f32, y0: f32, y1: f32) -
             }
             pts.push(pos2(x0, y1));
         }
-        Symbol::Or | Symbol::Xor => {
+        Symbol::Or | Symbol::Nor | Symbol::Xor => {
             // Curved back, pointed front.
             let back = w * 0.22;
             pts.push(pos2(x0, y0));
@@ -267,7 +267,7 @@ pub(crate) fn gate_outline(symbol: Symbol, x0: f32, x1: f32, y0: f32, y1: f32) -
 }
 
 /// A gate drawn as its logic symbol.
-pub(super) fn draw_gate(
+pub(crate) fn draw_gate(
     painter: &egui::Painter,
     r: Rect,
     g: &Geometry,
@@ -298,7 +298,7 @@ pub(super) fn draw_gate(
             pos2(p.x, y1 - (y1 - y0) * 0.09)
         } else {
             let mut x = x0;
-            if matches!(g.symbol, Symbol::Or | Symbol::Xor) {
+            if matches!(g.symbol, Symbol::Or | Symbol::Nor | Symbol::Xor) {
                 // Meet the curved back.
                 let t = ((p.y - (y0 + y1) / 2.0) / ((y1 - y0) / 2.0)).abs();
                 x += body_w * 0.22 * 0.75 * (1.0 - t * t);
@@ -358,7 +358,7 @@ pub(super) fn draw_gate(
     ));
     // Or/Xor outlines are not convex at the back; fill the notch with
     // background so the shape reads correctly.
-    if matches!(g.symbol, Symbol::Or | Symbol::Xor) {
+    if matches!(g.symbol, Symbol::Or | Symbol::Nor | Symbol::Xor) {
         let back = body_w * 0.22;
         let n = 10;
         let mut notch = vec![pos2(x0, y0)];

@@ -330,28 +330,19 @@ impl App {
         }
     }
 
-    /// Right panel in the world view: build bar, layer, simulation.
+    /// Right panel in the world view: parts, simulation, the selection.
     pub(super) fn world_panel(&mut self, ui: &mut Ui) {
         if self.world.is_none() {
             return;
         }
         let title = self.world.as_ref().unwrap().world.name.clone();
         ui.label(crate::theme::strong(title, 22.0));
-        ui.label(
-            RichText::new(format!(
-                "katman {} · yukarıdan bakış",
-                self.world.as_ref().unwrap().layer
-            ))
-            .weak()
-            .small(),
-        );
         ui.add_space(4.0);
         // Switching worlds mid-session would leave the others behind.
         if self.session.is_none() {
             self.worlds_section(ui);
         }
         self.network_section(ui);
-        ui.separator();
         let Some(w) = &mut self.world else { return };
         egui::CollapsingHeader::new(RichText::new("⌨ Kısayollar").strong())
             .id_salt("world-shortcuts")
@@ -367,71 +358,29 @@ impl App {
                         }
                     });
             });
+        ui.separator();
+
         // What is selected comes first: it is what the player works on.
+        w.symbols = self.progress.symbols;
         w.selection_panel(ui);
-        w.block_panel(ui);
-        w.device_panel(ui);
-        crate::theme::section(ui, "Bloklar");
-        let current = w.brush.as_ref().map(|b| std::mem::discriminant(&b.block));
-        let current_gate = match w.brush.as_ref().map(|b| &b.block) {
-            Some(makine_world::Block::Gate { gate, .. }) => Some(*gate),
-            _ => None,
-        };
-        crate::worldview::tiles(ui, |ui| {
-            for (name, block, tip) in crate::worldview::palette() {
-                let gate = match &block {
-                    makine_world::Block::Gate { gate, .. } => Some(*gate),
-                    _ => None,
-                };
-                let selected =
-                    current == Some(std::mem::discriminant(&block)) && gate == current_gate;
-                let r = crate::worldview::tile(ui, &block, name, selected);
-                let r = if tip.is_empty() {
-                    r
-                } else {
-                    r.on_hover_text(tip)
-                };
-                if r.clicked() {
-                    w.brush = Some(crate::worldview::Brush { block });
-                }
-            }
-        });
-        // The name the next port gets; it counts up as ports are placed.
-        if let Some(crate::worldview::Brush {
-            block: makine_world::Block::Port { name, .. },
-        }) = &mut w.brush
-        {
-            ui.horizontal(|ui| {
-                let l = ui.label("Sıradaki port adı").id;
-                let mut text = name.clone();
-                ui.add(egui::TextEdit::singleline(&mut text).desired_width(70.0))
-                    .labelled_by(l)
-                    .on_hover_text("Koydukça kendiliğinden ilerler: a, b, c … ya da x0, x1, x2 …");
-                let text = text.trim();
-                if !text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    *name = text.to_string();
-                }
-            });
-        }
+
+        crate::theme::section(ui, "Parçalar");
+        w.palette_ui(ui, crate::worldview::palette());
         crate::theme::section(ui, "Cihazlar");
-        w.device_palette_ui(ui);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add(egui::Button::new("⬚ Seç aracı").selected(w.selecting()))
-                .on_hover_text("Alan seç: kopyala, taşı, çipe çevir")
-                .clicked()
-            {
-                w.brush = None;
-            }
-        });
-        // Chips from the library, as blocks.
-        let mut chips: Vec<String> = levels()
+        w.palette_ui(ui, crate::worldview::device_palette());
+        // Chips from the library, as parts.
+        let mut chips: Vec<(String, String)> = levels()
             .iter()
             .filter(|l| self.progress.solved(l.chip))
-            .map(|l| l.chip.to_string())
+            .map(|l| (l.chip.to_string(), l.title.to_string()))
             .collect();
-        chips.extend(self.progress.sandbox.chips.keys().map(|n| format!("★{n}")));
+        chips.extend(
+            self.progress
+                .sandbox
+                .chips
+                .keys()
+                .map(|n| (n.clone(), "Senin çipin".to_string())),
+        );
         if !chips.is_empty() {
             egui::CollapsingHeader::new(
                 RichText::new(format!("Çiplerin ({})", chips.len())).strong(),
@@ -439,80 +388,36 @@ impl App {
             .id_salt("world-chips")
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new("Çözdüğün seviyeler ve serbest çiplerin, blok olarak.")
+                    RichText::new("Çözdüğün seviyeler ve serbest çiplerin. Sürükle ya da tıkla.")
                         .weak()
                         .small(),
                 );
-                let current = match w.brush.as_ref().map(|b| &b.block) {
-                    Some(makine_world::Block::Device {
-                        device: makine_world::Device::Chip { name, .. },
-                        ..
-                    }) => Some(name.clone()),
-                    _ => None,
-                };
                 ui.horizontal_wrapped(|ui| {
-                    for label in &chips {
-                        let name = label.trim_start_matches('★');
-                        let r = ui.selectable_label(current.as_deref() == Some(name), label);
+                    for (name, tip) in &chips {
+                        let kind = makine_world::Kind::Part(makine_sim::Part::new(PartKind::Chip(
+                            name.clone(),
+                        )));
+                        let selected = w.placing.as_ref() == Some(&kind);
+                        let b = egui::Button::new(name.as_str())
+                            .selected(selected)
+                            .sense(egui::Sense::click_and_drag());
+                        let r = ui.add(b);
+                        let r = crate::worldview::draggable(ui, r, &kind).on_hover_text(tip);
                         if r.clicked() {
-                            if let Some(p) = self.lib.kind_pins(&PartKind::Chip(name.into())) {
-                                w.brush = Some(crate::worldview::Brush {
-                                    block: makine_world::Block::Device {
-                                        device: makine_world::Device::Chip {
-                                            name: name.into(),
-                                            inputs: p.inputs,
-                                            outputs: p.outputs,
-                                        },
-                                        facing: makine_world::Dir::East,
-                                    },
-                                });
-                            }
+                            w.placing = if selected { None } else { Some(kind) };
                         }
                     }
                 });
             });
         }
-        crate::theme::section(ui, "Yerleştirme");
-        ui.horizontal(|ui| {
-            ui.label("Yön");
-            let arrow = match w.facing {
-                makine_world::Dir::East => "→ doğu",
-                makine_world::Dir::South => "↓ güney",
-                makine_world::Dir::West => "← batı",
-                makine_world::Dir::North => "↑ kuzey",
-            };
-            if ui.button(arrow).on_hover_text("R ile de döner").clicked() {
-                w.facing = w.facing.cw();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Katman");
-            if ui
-                .button("▼")
-                .on_hover_text("Bir katman aşağı (Q)")
-                .clicked()
-            {
-                w.set_layer(w.layer - 1);
-            }
+        if w.placing.is_some() {
             ui.label(
-                RichText::new(format!("{:>3}", w.layer))
-                    .monospace()
-                    .size(16.0)
-                    .color(crate::theme::COPPER_BRIGHT),
+                RichText::new("Koymak için tahtaya tıkla. Bırakmak için Esc.")
+                    .color(crate::theme::COPPER_BRIGHT)
+                    .small(),
             );
-            if ui
-                .button("▲")
-                .on_hover_text("Bir katman yukarı (E)")
-                .clicked()
-            {
-                w.set_layer(w.layer + 1);
-            }
-        });
-        ui.label(
-            RichText::new("Alttaki katman soluk görünür. Katmanları üst üste 'Geçiş' bağlar.")
-                .weak()
-                .small(),
-        );
+        }
+
         crate::theme::section(ui, "Simülasyon");
         ui.horizontal(|ui| {
             let label = if w.sim.running {
@@ -522,7 +427,7 @@ impl App {
             };
             if ui
                 .button(label)
-                .on_hover_text("Saatleri durdur/başlat")
+                .on_hover_text("Saatleri durdur/başlat (P)")
                 .clicked()
             {
                 w.sim.running = !w.sim.running;
@@ -541,7 +446,7 @@ impl App {
             }
             if ui
                 .button("⌖ Ortala")
-                .on_hover_text("Bütün dünyayı göster")
+                .on_hover_text("Bütün dünyayı göster (Home)")
                 .clicked()
             {
                 w.refit();
@@ -550,14 +455,14 @@ impl App {
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(!w.sim.running, egui::Button::new("⏭ Bir adım"))
-                .on_hover_text("Durmuşken saati bir adım ilerlet")
+                .on_hover_text("Durmuşken saati bir adım ilerlet (N)")
                 .clicked()
             {
                 w.sim.single_step();
             }
             let l = ui
                 .label("Hız")
-                .on_hover_text("Saat bloğu her 'periyot' adımda bir değişir; hız, saniyedeki adım")
+                .on_hover_text("Saat her 'periyot' adımda bir değişir; hız, karedeki adım sayısı")
                 .id;
             let name = |v: u32| match v {
                 0 => "En hızlı".to_string(),
@@ -575,7 +480,7 @@ impl App {
         });
         ui.label(
             RichText::new(format!(
-                "{} blok · adım {} · {}",
+                "{} parça · adım {} · {}",
                 w.world.len(),
                 w.sim.tick,
                 if w.sim.running {
@@ -589,6 +494,11 @@ impl App {
         if let Some(e) = w.sim.error() {
             ui.colored_label(crate::theme::BAD, e.to_string());
         }
+        if let Some(c) = w.sim.compiled() {
+            for p in c.problems.iter().take(3) {
+                ui.colored_label(crate::theme::WARN, p.to_string());
+            }
+        }
         if let Some(e) = &w.status {
             ui.colored_label(crate::theme::WARN, e);
         }
@@ -598,18 +508,17 @@ impl App {
     }
 
     pub(super) fn handle_world_request(&mut self, req: crate::worldview::Request) {
-        let crate::worldview::Request::MakeChip { name, region } = req;
+        let crate::worldview::Request::MakeChip { name, parts } = req;
         let Some(w) = &mut self.world else { return };
         if let Err(e) = sandbox::check_name(&name, &self.lib, &self.progress.sandbox, None) {
             w.status = Some(e);
             return;
         }
-        let part = w.region_world(region, &name);
-        match makine_world::chip::to_chip(&part, &name, &self.lib) {
+        match makine_world::chip::to_chip(&w.world, &parts, &name, &self.lib) {
             Ok(def) => {
                 let n = def.parts.len();
                 let mut d = Design::new(def);
-                // Lay the parts out in a grid so the 2D editor is usable.
+                // Lay the parts out in a grid so the editor is usable.
                 for (i, p) in d.pos.iter_mut().enumerate() {
                     *p = [200.0 + 90.0 * (i % 8) as f32, 60.0 + 70.0 * (i / 8) as f32];
                 }

@@ -346,7 +346,7 @@ impl App {
                 self.view == View::World,
                 "🌍  Dünya",
             ))
-            .on_hover_text("Blokları yerleştirerek kendi devreni kur (katman katman)")
+            .on_hover_text("Parçaları serbestçe yerleştirip kendi devreni kur; çalışırken izle")
             .clicked()
         {
             self.open_world();

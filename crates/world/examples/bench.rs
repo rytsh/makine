@@ -4,84 +4,53 @@
 
 use std::time::Instant;
 
-use makine_sim::Circuit;
-use makine_world::block::{Block, Dir, Gate};
-use makine_world::{compile, Edit, Pos, World};
+use makine_sim::{Circuit, Library};
+use makine_world::{compile, Device, Edit, End, Gate, Kind, Placed, Pos, World};
+
+fn put(w: &mut World, kind: Kind) -> u64 {
+    let id = w.new_id();
+    w.apply(Edit::Part {
+        id,
+        part: Some(Placed {
+            kind,
+            pos: Pos::new(0.0, 0.0),
+        }),
+    });
+    id
+}
 
 fn main() {
-    // A world full of RAM blocks, with wires between: device pins dominate.
-    {
-        let mut w = World::new("ram");
-        let d = makine_world::Device::Ram { addr: 8, data: 16 };
-        let (len, wide) = d.size();
-        for i in 0..40 {
-            let e = w
-                .place_device(d.clone(), Pos::new(i * (len + 2), 0, 0), Dir::East)
-                .unwrap();
-            w.apply(e);
-            for y in 0..wide {
-                w.apply(Edit::Set {
-                    pos: Pos::new(i * (len + 2) + len, y, 0),
-                    block: Some(Block::Straight { facing: Dir::East }),
-                });
-            }
-        }
-        let t = Instant::now();
-        compile(&w).unwrap();
-        println!(
-            "{:>6} blocks of RAM: world compile {:>8.2?}",
-            w.len(),
-            t.elapsed()
-        );
-    }
-    for side in [50, 100, 200] {
-        // Rows of NOT gates separated by wires: side*side cells.
+    let lib = Library::new();
+    for n in [1_000, 10_000, 50_000] {
+        // A chain of NOT gates fed by a switch, with a few RAMs on the side.
         let mut w = World::new("b");
-        let mut edits = Vec::new();
-        for y in 0..side {
-            for x in 0..side {
-                let b = if x % 2 == 1 {
-                    Block::Gate {
-                        gate: Gate::Not,
-                        facing: Dir::East,
-                    }
-                } else if y % 2 == 0 {
-                    Block::Wire
-                } else {
-                    Block::Straight { facing: Dir::East }
-                };
-                edits.push(Edit::Set {
-                    pos: Pos::new(x, y * 2, 0),
-                    block: Some(b),
-                });
-            }
-            edits.push(Edit::Set {
-                pos: Pos::new(-1, y * 2, 0),
-                block: Some(Block::Switch {
-                    on: true,
-                    facing: Dir::East,
-                }),
+        let mut prev = put(&mut w, Kind::Switch { on: true });
+        for _ in 0..n {
+            let g = put(&mut w, Kind::Gate(Gate::Not));
+            w.apply(Edit::Wire {
+                to: End::new(g, 0),
+                from: Some(End::new(prev, 0)),
             });
+            prev = g;
         }
-        w.apply(Edit::Batch(edits));
+        for _ in 0..20 {
+            put(&mut w, Kind::Device(Device::Ram { addr: 8, data: 16 }));
+        }
         let t = Instant::now();
-        let c = compile(&w).unwrap();
-        let tc = t.elapsed();
+        let c = compile(&w, &lib);
+        let compile_time = t.elapsed();
         let t = Instant::now();
-        let mut sim = Circuit::compile_def(&c.library(), &c.def).unwrap();
-        let ts = t.elapsed();
+        let mut sim = Circuit::compile_def(&c.library_with(&lib), &c.def).unwrap();
+        let build_time = t.elapsed();
         let t = Instant::now();
         for i in 0..100 {
-            sim.set_input(0, i & 1);
+            sim.set_input(0, i % 2);
             sim.eval().unwrap();
         }
-        let te = t.elapsed() / 100;
         println!(
-            "{:>6} blocks: world compile {:>8.2?}, circuit {:>8.2?}, step {:>8.2?}",
-            w.len(),
-            tc,
-            ts,
-            te
+            "{n:>6} gates: world compile {compile_time:>8.2?}, circuit {build_time:>8.2?}, \
+             100 steps {:>8.2?}",
+            t.elapsed()
         );
     }
 }

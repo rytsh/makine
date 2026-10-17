@@ -1,91 +1,90 @@
-//! The world view's side panels: the build palette and the settings of
-//! what is selected (a region, a clock or port, a device).
+//! The world view's side panels: the parts palette and the settings of
+//! what is selected.
 
 use egui::{RichText, Ui};
-use makine_world::block::{Block, Dir, Gate};
-use makine_world::device::{self, Device};
-use makine_world::region::Clip;
-use makine_world::Edit;
+use makine_sim::{mask, Part, PartKind};
+use makine_world::{device, Device, Gate, Id, Kind, Placed};
 
-use super::{Brush, Request, WorldView};
+use super::{Request, WorldView};
+use crate::theme;
 
-/// Palette entries: what the build bar offers.
-pub fn palette() -> Vec<(&'static str, Block, &'static str)> {
-    let g = |gate| Block::Gate {
-        gate,
-        facing: Dir::East,
-    };
+/// What can be dragged from the palette onto the board.
+#[derive(Clone, Debug)]
+pub struct PaletteItem(pub Kind);
+
+/// A palette entry.
+pub struct Entry {
+    pub name: &'static str,
+    pub kind: Kind,
+    pub tip: &'static str,
+}
+
+/// The parts offered, in order (1–9 pick the first nine).
+pub fn palette() -> Vec<Entry> {
+    let e = |name, kind, tip| Entry { name, kind, tip };
     vec![
-        (
-            "Tel",
-            Block::Wire,
-            "Çektiğin yöne bağlanır: yan yana çekilen teller birleşmez, bir telin üstünden \
-             geçersen birleşir",
-        ),
-        (
-            "Düz tel",
-            Block::Straight { facing: Dir::East },
-            "Sadece önüne ve arkasına bağlanır: yan yana döşeyince bus olur",
-        ),
-        ("Köprü", Block::Cross, "İki tel birbirine değmeden kesişir"),
-        ("Geçiş", Block::Via, "Üst ve alt katmana bağlanır"),
-        ("NOT", g(Gate::Not), "Arkasından okur, önüne yazar"),
-        ("AND", g(Gate::And), "İki yanından okur, önüne yazar"),
-        ("OR", g(Gate::Or), ""),
-        ("XOR", g(Gate::Xor), ""),
-        ("NAND", g(Gate::Nand), ""),
-        ("NOR", g(Gate::Nor), ""),
-        (
-            "Anahtar",
-            Block::Switch {
-                on: false,
-                facing: Dir::East,
-            },
-            "Tıkla: aç/kapa",
-        ),
-        (
-            "Lamba",
-            Block::Lamp,
-            "Komşu tellerden biri 1 ise yanar; telleri birbirine bağlamaz",
-        ),
-        (
+        e("Anahtar", Kind::Switch { on: false }, "Tıkla: aç / kapa"),
+        e("Lamba", Kind::Lamp, "Girişi 0 değilse yanar"),
+        e("NOT", Kind::Gate(Gate::Not), "Girişin tersi"),
+        e("AND", Kind::Gate(Gate::And), "İkisi de 1 ise 1"),
+        e("OR", Kind::Gate(Gate::Or), "En az biri 1 ise 1"),
+        e("XOR", Kind::Gate(Gate::Xor), "Farklıysa 1"),
+        e("NAND", Kind::Gate(Gate::Nand), "İkisi de 1 ise 0"),
+        e("NOR", Kind::Gate(Gate::Nor), "İkisi de 0 ise 1"),
+        e(
             "Saat",
-            Block::Clock {
-                period: 30,
-                facing: Dir::East,
-            },
+            Kind::Clock { period: 30 },
             "Kendi kendine yanıp söner. Seçip periyodunu ayarla.",
         ),
-        (
+        e(
             "Giriş",
-            Block::Port {
+            Kind::Input {
                 name: "a".into(),
-                output: false,
-                facing: Dir::East,
+                width: 1,
+                value: 0,
             },
-            "Dünyayı çipe çevirince çipin girişi olur",
+            "Tıkla: değeri değiştir. Çip yapınca çipin girişi olur.",
         ),
-        (
+        e(
             "Çıkış",
-            Block::Port {
+            Kind::Output {
                 name: "q".into(),
-                output: true,
-                facing: Dir::East,
+                width: 1,
             },
-            "Arkasındaki teli okur; çipin çıkışı olur",
+            "Bağlı telin değerini gösterir. Çip yapınca çipin çıkışı olur.",
+        ),
+        e(
+            "Sabit",
+            Kind::Part(Part::new(PartKind::Const { width: 1, value: 1 })),
+            "Hep aynı değeri verir",
+        ),
+        e(
+            "Böl",
+            Kind::Part(Part::new(PartKind::Split(vec![1; 8]))),
+            "Bus'ı parçalara ayırır",
+        ),
+        e(
+            "Birleştir",
+            Kind::Part(Part::new(PartKind::Join(vec![1; 8]))),
+            "Parçaları tek bus yapar",
         ),
     ]
 }
 
-/// Device entries of the build bar.
-pub fn device_palette() -> Vec<(&'static str, Device, &'static str)> {
+/// Devices offered.
+pub fn device_palette() -> Vec<Entry> {
+    let e = |name, d, tip| Entry {
+        name,
+        kind: Kind::Device(d),
+        tip,
+    };
     vec![
-        (
+        e(
             "RAM",
             Device::Ram { addr: 4, data: 8 },
             "Okunup yazılabilen bellek",
         ),
-        (
+        e(
             "ROM",
             Device::Rom {
                 addr: 4,
@@ -94,16 +93,16 @@ pub fn device_palette() -> Vec<(&'static str, Device, &'static str)> {
             },
             "İçeriği senin yazdığın sabit bellek",
         ),
-        (
+        e(
             "Ekran",
             Device::Screen { bits: 3 },
             "Siyah beyaz piksel ekran",
         ),
-        ("Klavye", Device::Keyboard, "Yazdığın tuşları devreye verir"),
-        (
+        e("Klavye", Device::Keyboard, "Yazdığın tuşları devreye verir"),
+        e(
             "Gösterge",
             Device::Display { bits: 8 },
-            "Tellerdeki sayıyı gösterir",
+            "Teldeki sayıyı gösterir",
         ),
     ]
 }
@@ -111,51 +110,229 @@ pub fn device_palette() -> Vec<(&'static str, Device, &'static str)> {
 /// Width of a palette tile.
 pub const TILE: f32 = 58.0;
 
-/// A palette tile: a drawing of `block` over its name. Selected tiles are
-/// copper.
-pub fn tile(ui: &mut Ui, block: &Block, name: &str, selected: bool) -> egui::Response {
+/// A palette tile: a drawing of the part over its name. Selected tiles are
+/// copper. Dragging it onto the board places the part there.
+pub fn tile(ui: &mut Ui, kind: &Kind, name: &str, selected: bool) -> egui::Response {
     let size = egui::vec2(TILE, 52.0);
-    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
-    let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+    paint_tile(ui, rect, kind, name, selected, r.hovered());
     r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
-    if ui.is_rect_visible(rect) {
-        let p = ui.painter();
-        let (fill, stroke) = if selected {
-            (
-                crate::theme::COPPER.gamma_multiply(0.22),
-                crate::theme::COPPER,
-            )
-        } else if r.hovered() {
-            (crate::theme::RAISED_HOVER, crate::theme::INK_DIM)
-        } else {
-            (crate::theme::RAISED, crate::theme::LINE)
-        };
-        p.rect(
-            rect,
-            4.0,
-            fill,
-            egui::Stroke::new(if selected { 1.5 } else { 1.0 }, stroke),
-            egui::StrokeKind::Inside,
-        );
-        let icon = egui::Rect::from_center_size(
-            rect.center_top() + egui::vec2(0.0, 19.0),
-            egui::vec2(28.0, 24.0),
-        );
-        super::render::palette_icon(p, icon, block, selected);
-        let text = if selected {
-            crate::theme::COPPER_BRIGHT
-        } else {
-            crate::theme::INK
-        };
-        p.text(
-            rect.center_bottom() - egui::vec2(0.0, 6.0),
-            egui::Align2::CENTER_BOTTOM,
-            name,
-            egui::FontId::proportional(11.0),
-            text,
-        );
+    draggable(ui, r, kind)
+}
+
+/// Let `r` be dragged onto the board to drop `kind` there; a ghost of its
+/// name follows the pointer.
+pub fn draggable(ui: &Ui, r: egui::Response, kind: &Kind) -> egui::Response {
+    r.dnd_set_drag_payload(PaletteItem(kind.clone()));
+    if r.dragged() {
+        if let Some(p) = ui.ctx().pointer_interact_pos() {
+            let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("world-drag"));
+            ui.ctx().layer_painter(layer).text(
+                p + egui::vec2(10.0, 10.0),
+                egui::Align2::LEFT_TOP,
+                super::label(kind),
+                egui::FontId::proportional(13.0),
+                theme::COPPER_BRIGHT,
+            );
+        }
     }
-    r
+    r.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+fn paint_tile(ui: &Ui, rect: egui::Rect, kind: &Kind, name: &str, selected: bool, hovered: bool) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let p = ui.painter();
+    let (fill, stroke) = if selected {
+        (theme::COPPER.gamma_multiply(0.22), theme::COPPER)
+    } else if hovered {
+        (theme::RAISED_HOVER, theme::INK_DIM)
+    } else {
+        (theme::RAISED, theme::LINE)
+    };
+    p.rect(
+        rect,
+        4.0,
+        fill,
+        egui::Stroke::new(if selected { 1.5 } else { 1.0 }, stroke),
+        egui::StrokeKind::Inside,
+    );
+    let icon = egui::Rect::from_center_size(
+        rect.center_top() + egui::vec2(0.0, 19.0),
+        egui::vec2(28.0, 24.0),
+    );
+    icon_for(p, icon, kind, selected);
+    let text = if selected {
+        theme::COPPER_BRIGHT
+    } else {
+        theme::INK
+    };
+    p.text(
+        rect.center_bottom() - egui::vec2(0.0, 6.0),
+        egui::Align2::CENTER_BOTTOM,
+        name,
+        egui::FontId::proportional(11.0),
+        text,
+    );
+}
+
+/// A small drawing of a part, for its tile.
+fn icon_for(painter: &egui::Painter, r: egui::Rect, kind: &Kind, lit: bool) {
+    use crate::canvas::draw::{GATE_LINE, ON};
+    use egui::{pos2, vec2, Color32, Pos2, Stroke};
+    let c = r.center();
+    let s = r.height().min(r.width());
+    let line = Stroke::new(1.6, if lit { Color32::WHITE } else { GATE_LINE });
+    let accent = if lit { ON } else { theme::COPPER };
+    match kind {
+        Kind::Gate(g) => {
+            use crate::design::Symbol;
+            let symbol = match g {
+                Gate::Not => Symbol::Not,
+                Gate::And => Symbol::And,
+                Gate::Nand => Symbol::Nand,
+                Gate::Or => Symbol::Or,
+                Gate::Nor => Symbol::Nor,
+                Gate::Xor => Symbol::Xor,
+            };
+            let (x0, x1) = (c.x - s * 0.34, c.x + s * 0.26);
+            let (y0, y1) = (c.y - s * 0.3, c.y + s * 0.3);
+            let outline = crate::canvas::gate_outline(symbol, x0, x1, y0, y1);
+            if *g == Gate::Xor {
+                let pts: Vec<Pos2> = (0..=10)
+                    .map(|k| {
+                        let t = k as f32 / 10.0;
+                        pos2(
+                            x0 - s * 0.08 + 4.0 * t * (1.0 - t) * s * 0.1,
+                            y0 + (y1 - y0) * t,
+                        )
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(pts, line));
+            }
+            painter.add(egui::Shape::closed_line(outline, line));
+            if symbol.bubble() {
+                painter.circle_stroke(pos2(x1 + s * 0.06, c.y), s * 0.06, line);
+            }
+        }
+        Kind::Switch { .. } => {
+            let body = egui::Rect::from_center_size(c, vec2(s * 0.8, s * 0.42));
+            painter.rect_filled(body, s * 0.21, theme::RAISED_HOVER);
+            painter.circle_filled(body.right_center() - vec2(s * 0.21, 0.0), s * 0.15, accent);
+        }
+        Kind::Lamp => {
+            painter.circle_filled(c, s * 0.42, ON.gamma_multiply(0.15));
+            painter.circle_filled(c, s * 0.26, Color32::from_rgb(255, 238, 170));
+        }
+        Kind::Clock { .. } => {
+            let w = s * 0.4;
+            let (y0, y1) = (c.y + s * 0.2, c.y - s * 0.2);
+            let pts = vec![
+                pos2(c.x - w, y0),
+                pos2(c.x - w / 2.0, y0),
+                pos2(c.x - w / 2.0, y1),
+                pos2(c.x + w / 2.0, y1),
+                pos2(c.x + w / 2.0, y0),
+                pos2(c.x + w, y0),
+            ];
+            painter.add(egui::Shape::line(pts, Stroke::new(2.0, accent)));
+        }
+        Kind::Input { .. } | Kind::Output { .. } => {
+            let output = matches!(kind, Kind::Output { .. });
+            let body = egui::Rect::from_center_size(c, vec2(s * 0.62, s * 0.5));
+            let fill = Color32::from_rgb(208, 220, 210);
+            painter.rect_filled(body, 2.0, fill);
+            let (x, d) = if output {
+                (body.left(), -1.0)
+            } else {
+                (body.right(), 1.0)
+            };
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    pos2(x + d * s * 0.2, c.y),
+                    pos2(x, c.y - s * 0.12),
+                    pos2(x, c.y + s * 0.12),
+                ],
+                fill,
+                Stroke::NONE,
+            ));
+        }
+        Kind::Part(p) => match &p.kind {
+            PartKind::Const { .. } => {
+                painter.text(
+                    c,
+                    egui::Align2::CENTER_CENTER,
+                    "1",
+                    egui::FontId::monospace(s * 0.7),
+                    accent,
+                );
+            }
+            PartKind::Split(_) | PartKind::Join(_) => {
+                let split = matches!(p.kind, PartKind::Split(_));
+                let (a, b) = if split { (-1.0, 1.0) } else { (1.0, -1.0) };
+                let hub = c + vec2(a * s * 0.1, 0.0);
+                painter.line_segment(
+                    [c + vec2(a * s * 0.45, 0.0), hub],
+                    Stroke::new(s * 0.14, theme::BUS),
+                );
+                for dy in [-0.3, -0.1, 0.1, 0.3] {
+                    painter.line_segment(
+                        [hub, c + vec2(b * s * 0.45, dy * s)],
+                        Stroke::new(1.5, accent),
+                    );
+                }
+            }
+            _ => chip_icon(painter, c, s, line),
+        },
+        Kind::Device(Device::Screen { .. }) => {
+            let body = egui::Rect::from_center_size(c, vec2(s * 0.86, s * 0.62));
+            painter.rect_filled(body, 2.0, Color32::from_rgb(8, 12, 10));
+            painter.rect_stroke(body, 2.0, line, egui::StrokeKind::Inside);
+            for (x, y) in [
+                (-0.2, -0.1),
+                (0.2, -0.1),
+                (-0.2, 0.12),
+                (0.0, 0.16),
+                (0.2, 0.12),
+            ] {
+                painter.circle_filled(
+                    c + vec2(x * s, y * s),
+                    s * 0.04,
+                    Color32::from_rgb(140, 255, 160),
+                );
+            }
+        }
+        Kind::Device(Device::Display { .. }) => {
+            let body = egui::Rect::from_center_size(c, vec2(s * 0.9, s * 0.56));
+            painter.rect_filled(body, 2.0, Color32::from_rgb(12, 24, 18));
+            painter.text(
+                c,
+                egui::Align2::CENTER_CENTER,
+                "42",
+                egui::FontId::monospace(s * 0.4),
+                Color32::from_rgb(140, 255, 160),
+            );
+        }
+        Kind::Device(_) => chip_icon(painter, c, s, line),
+    }
+}
+
+/// A chip package with pins along both long edges.
+fn chip_icon(painter: &egui::Painter, c: egui::Pos2, s: f32, line: egui::Stroke) {
+    use egui::{pos2, vec2};
+    let body = egui::Rect::from_center_size(c, vec2(s * 0.86, s * 0.62));
+    painter.rect_filled(body, 2.0, crate::canvas::draw::PART_FILL);
+    painter.rect_stroke(body, 2.0, line, egui::StrokeKind::Inside);
+    for k in 0..4 {
+        let x = body.left() + body.width() * (0.2 + 0.2 * k as f32);
+        for y in [body.top(), body.bottom()] {
+            painter.line_segment(
+                [pos2(x, y - s * 0.07), pos2(x, y + s * 0.07)],
+                egui::Stroke::new(1.6, egui::Color32::from_rgb(196, 204, 198)),
+            );
+        }
+    }
 }
 
 /// Tiles in rows that fill the width.
@@ -167,131 +344,63 @@ pub fn tiles(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 }
 
 impl WorldView {
-    /// Device buttons of the build bar.
-    pub fn device_palette_ui(&mut self, ui: &mut Ui) {
-        let current = match self.brush.as_ref().map(|b| &b.block) {
-            Some(Block::Device { device, .. }) => Some(std::mem::discriminant(device)),
-            _ => None,
-        };
+    /// Tiles for `entries`; clicking one puts it in hand (click the board to
+    /// place it), dragging one drops it where it is let go.
+    pub fn palette_ui(&mut self, ui: &mut Ui, entries: Vec<Entry>) {
         tiles(ui, |ui| {
-            for (name, device, tip) in device_palette() {
-                let selected = current == Some(std::mem::discriminant(&device));
-                let block = Block::Device {
-                    device: device.clone(),
-                    facing: Dir::East,
-                };
-                if tile(ui, &block, name, selected)
-                    .on_hover_text(tip)
+            for e in entries {
+                let selected = self.placing.as_ref().is_some_and(|k| same_tool(k, &e.kind));
+                if tile(ui, &e.kind, e.name, selected)
+                    .on_hover_text(e.tip)
                     .clicked()
                 {
-                    self.brush = Some(Brush {
-                        block: Block::Device {
-                            device,
-                            facing: Dir::East,
-                        },
-                    });
+                    self.placing = if selected { None } else { Some(e.kind) };
                 }
             }
         });
-        if current.is_some() {
-            ui.label(
-                RichText::new(
-                    "Tıklayarak yerleştir. Girişler arka kenarda, çıkışlar ön kenarda: \
-                     yan yana bağlamak için 'Düz tel' kullan.",
-                )
-                .weak()
-                .small(),
-            );
-        }
     }
 
-    /// Tools for the selected region.
+    /// Tools for the selection: copy, delete, make a chip.
     pub fn selection_panel(&mut self, ui: &mut Ui) {
-        if let Some(clip) = &self.pasting {
-            ui.separator();
-            ui.label(RichText::new(format!("Yapıştırılıyor: {} blok", clip.blocks.len())).strong());
-            ui.horizontal(|ui| {
-                if ui.button("↻ Döndür (R)").clicked() {
-                    self.pasting = self.pasting.as_ref().map(Clip::rotated);
-                }
-                if ui.button("Bırak (Esc)").clicked() {
-                    self.pasting = None;
-                    self.status = None;
-                }
-            });
+        let n = self.selected.len();
+        if n == 0 {
             return;
         }
-        let Some(r) = self.selection else {
-            if self.selecting() {
-                ui.label(
-                    RichText::new(
-                        "Bir alan seçmek için sürükle. (Başka bir blok tutarken Shift+sürükle.)",
-                    )
-                    .weak()
-                    .small(),
-                );
-            }
-            return;
-        };
-        let blocks = r.blocks(&self.world);
-        let n = blocks.len();
-        let layers: std::collections::BTreeSet<i32> = blocks.iter().map(|(p, _)| p.z).collect();
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(format!("Seçim: {}×{}, {n} blok", r.width(), r.height())).strong(),
-            );
-            if ui
-                .small_button("✖")
-                .on_hover_text("Seçimi bırak (Esc)")
-                .clicked()
-            {
-                self.selection = None;
-            }
-        });
-        let layer_text = match (layers.first(), layers.last()) {
-            (Some(a), Some(b)) if a == b => format!("{a}. katman"),
-            (Some(a), Some(b)) => format!("{} katman: {a} … {b}", layers.len()),
-            _ => "boş".into(),
-        };
-        ui.label(format!("İçinde: {layer_text}"));
-        ui.label(
-            RichText::new(
-                "Seçim, dikdörtgenin altındaki ve üstündeki bütün katmanları kapsar. \
-                 Oklar: taşı · Del: sil · Ctrl+C/X/V",
-            )
-            .weak()
-            .small(),
-        );
+        if n == 1 {
+            self.part_panel(ui);
+        } else {
+            ui.horizontal(|ui| {
+                ui.label(theme::strong(format!("{n} parça seçili"), 15.0));
+                if ui
+                    .small_button("✖")
+                    .on_hover_text("Seçimi bırak (Esc)")
+                    .clicked()
+                {
+                    self.selected.clear();
+                }
+            });
+        }
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Kopyala").clicked() {
+            if ui.button("Çoğalt").on_hover_text("Ctrl+D").clicked() {
+                self.duplicate();
+            }
+            if ui.button("Kopyala").on_hover_text("Ctrl+C").clicked() {
                 if let Some(t) = self.copy() {
                     ui.ctx().copy_text(t);
                 }
             }
-            if ui.button("Kes").clicked() {
-                if let Some(t) = self.cut() {
-                    ui.ctx().copy_text(t);
-                }
-            }
-            if ui
-                .add_enabled(self.clipboard.is_some(), egui::Button::new("Yapıştır"))
-                .clicked()
-            {
-                self.start_paste(None);
-            }
-            if ui.button("Sil").clicked() {
-                self.delete_selection();
+            if ui.button("Sil").on_hover_text("Delete").clicked() {
+                self.delete_selected();
             }
         });
-        ui.add_space(4.0);
-        ui.label(RichText::new("Çipe çevir").strong());
+        if n < 2 {
+            return;
+        }
+        theme::section(ui, "Çipe çevir");
         ui.label(
             RichText::new(
-                "Seçimdeki portlar çipin uçları olur; hangi katmanda olduklarının önemi \
-                 yok. Katmanlar 'Geçiş' bloklarıyla birbirine bağlanır, hepsi tek çip olur. \
-                 x0, x1, … gibi sıralı adlar tek bir bus'a birleşir. Anahtarlar o anki \
-                 değerleriyle sabit olur.",
+                "Seçimdeki Girişler ve Çıkışlar çipin uçları olur (yukarıdan aşağı). \
+                 Anahtarlar o anki değerleriyle sabit olur.",
             )
             .weak()
             .small(),
@@ -307,104 +416,66 @@ impl WorldView {
             if ui.button("Çip yap").clicked() {
                 self.request = Some(Request::MakeChip {
                     name: self.chip_name.trim().to_string(),
-                    region: r,
+                    parts: self.selected.iter().copied().collect(),
                 });
             }
         });
     }
 
-    /// Settings of a selected clock (period) or port (name).
-    pub fn block_panel(&mut self, ui: &mut Ui) {
-        let Some(pos) = self.selected_block else {
+    /// Settings of the one selected part.
+    fn part_panel(&mut self, ui: &mut Ui) {
+        let Some((id, Placed { kind, .. })) = self.single().map(|(i, p)| (i, p.clone())) else {
             return;
         };
-        let Some(block) = self.world.get(pos).cloned() else {
-            self.selected_block = None;
-            return;
-        };
-        ui.separator();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Seçili: {}", block.label())).strong());
+            ui.label(theme::strong(kind.label(), 15.0));
             if ui
                 .small_button("✖")
                 .on_hover_text("Seçimi bırak (Esc)")
                 .clicked()
             {
-                self.selected_block = None;
+                self.selected.clear();
             }
         });
-        let new = match &block {
-            Block::Clock { period, facing } => {
-                let mut p = *period;
-                ui.horizontal(|ui| {
-                    let l = ui.label("Periyot (adım)").id;
-                    ui.add(egui::DragValue::new(&mut p).range(1..=100_000))
-                        .labelled_by(l);
-                });
-                (p != *period).then_some(Block::Clock {
-                    period: p,
-                    facing: *facing,
+        let mut new: Option<Kind> = None;
+        let num = |ui: &mut Ui, label: &str, v: u32, lo: u32, hi: u32| -> Option<u32> {
+            let mut x = v;
+            let r = ui
+                .horizontal(|ui| {
+                    let l = ui.label(label).id;
+                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi))
+                        .labelled_by(l)
                 })
-            }
-            Block::Port {
-                name,
-                output,
-                facing,
-            } => {
-                let mut n = name.clone();
-                ui.horizontal(|ui| {
-                    let l = ui.label("Ad").id;
-                    ui.add(egui::TextEdit::singleline(&mut n).desired_width(80.0))
-                        .labelled_by(l);
-                });
-                ui.label(
-                    RichText::new("x0, x1, … gibi sıralı adlar çipte tek bir bus olur.")
-                        .weak()
-                        .small(),
-                );
-                let n = n.trim().to_string();
-                let valid = !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_');
-                (valid && n != *name).then_some(Block::Port {
-                    name: n,
-                    output: *output,
-                    facing: *facing,
-                })
-            }
-            _ => None,
+                .inner;
+            (r.changed() && x != v).then_some(x)
         };
-        if let Some(b) = new {
-            self.edit(Edit::Set {
-                pos,
-                block: Some(b),
-            });
+        match &kind {
+            Kind::Clock { period } => {
+                if let Some(p) = num(ui, "Periyot (adım)", *period, 1, 100_000) {
+                    new = Some(Kind::Clock { period: p });
+                }
+            }
+            Kind::Input { .. } | Kind::Output { .. } => new = port_settings(ui, &kind),
+            Kind::Part(p) => {
+                if let Some(k) = part_settings(ui, p) {
+                    new = Some(Kind::Part(k));
+                }
+            }
+            Kind::Device(d) => {
+                if let Some(d) = self.device_settings(ui, id, d) {
+                    new = Some(Kind::Device(d));
+                }
+            }
+            _ => {}
+        }
+        if let Some(k) = new {
+            self.set_kind(id, k);
         }
     }
 
-    /// Settings of the selected device.
-    pub fn device_panel(&mut self, ui: &mut Ui) {
-        let Some((anchor, d, _)) = self.selected_device() else {
-            return;
-        };
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Seçili: {}", d.name())).strong());
-            if ui
-                .small_button("✖")
-                .on_hover_text("Seçimi bırak (Esc)")
-                .clicked()
-            {
-                self.selected = None;
-            }
-        });
+    /// Settings of a device; returns the changed device.
+    fn device_settings(&mut self, ui: &mut Ui, id: Id, d: &Device) -> Option<Device> {
         ui.label(RichText::new(d.help()).weak().small());
-        let pins = |names: Vec<String>| names.join(" ");
-        ui.label(RichText::new(format!("Girişler: {}", pins(d.inputs()))).small());
-        if !d.outputs().is_empty() {
-            ui.label(RichText::new(format!("Çıkışlar: {}", pins(d.outputs()))).small());
-        }
-
-        // Size.
-        let mut changed: Option<Device> = None;
         let size = |ui: &mut Ui, label: &str, v: u8, lo: u8, hi: u8| -> Option<u8> {
             let mut x = v;
             let r = ui
@@ -416,7 +487,8 @@ impl WorldView {
                 .inner;
             (r.changed() && x != v).then_some(x)
         };
-        match &d {
+        let mut changed = None;
+        match d {
             Device::Ram { addr, data } => {
                 if let Some(a) = size(ui, "Adres biti", *addr, 1, device::MAX_ADDR) {
                     changed = Some(Device::Ram {
@@ -430,6 +502,14 @@ impl WorldView {
                         data: b,
                     });
                 }
+                if let Some(words) = self.ram_words(id) {
+                    ui.label(RichText::new("İçerik").small());
+                    ui.label(
+                        RichText::new(device::words_text(&words, *data))
+                            .monospace()
+                            .small(),
+                    );
+                }
             }
             Device::Rom { addr, data, words } => {
                 if let Some(a) = size(ui, "Adres biti", *addr, 1, device::MAX_ADDR) {
@@ -446,6 +526,7 @@ impl WorldView {
                         words: words.clone(),
                     });
                 }
+                changed = changed.or_else(|| self.rom_editor(ui, id, *addr, *data, words));
             }
             Device::Screen { bits } => {
                 if let Some(b) = size(ui, "Boyut biti", *bits, 2, device::MAX_SCREEN_BITS) {
@@ -457,84 +538,205 @@ impl WorldView {
                     changed = Some(Device::Display { bits: b });
                 }
             }
-            Device::Keyboard | Device::Chip { .. } => {}
-        }
-        if let Some(new) = changed {
-            if let Err(e) = self.replace_device(anchor, new) {
-                self.status = Some(e);
-            }
-            return;
-        }
-
-        match &d {
-            Device::Rom { addr, data, words } => {
-                // Refresh the text when another ROM is selected or its
-                // contents changed (undo, another player).
-                let fresh = device::words_text(words, *data);
-                let stale = self.rom_text.as_ref().is_none_or(|(a, _, shown, _)| {
-                    *a != anchor || shown.as_deref() != Some(fresh.as_str())
-                });
-                if stale {
-                    self.rom_text = Some((anchor, fresh.clone(), Some(fresh), None));
-                }
-                let l = ui
-                    .label(
-                        RichText::new(format!(
-                            "İçerik: {} kelime, onaltılık (ya da #onluk), ; yorum",
-                            1u32 << addr
-                        ))
-                        .small(),
-                    )
-                    .id;
-                let (_, text, _, err) = self.rom_text.as_mut().unwrap();
-                ui.add(
-                    egui::TextEdit::multiline(text)
-                        .code_editor()
-                        .desired_rows(6)
-                        .desired_width(f32::INFINITY),
-                )
-                .labelled_by(l);
-                let mut apply = None;
-                if ui.button("İçeriği yükle").clicked() {
-                    match device::parse_words(text) {
-                        Ok(w) if w.len() > 1 << addr => {
-                            *err = Some(format!("{} kelime fazla", w.len() - (1 << addr)))
-                        }
-                        Ok(w) => {
-                            *err = None;
-                            apply = Some(w);
-                        }
-                        Err(e) => *err = Some(e),
-                    }
-                }
-                if let Some(e) = err {
-                    ui.colored_label(crate::theme::BAD, e.as_str());
-                }
-                if let Some(words) = apply {
-                    let new = Device::Rom {
-                        addr: *addr,
-                        data: *data,
-                        words,
-                    };
-                    if let Err(e) = self.replace_device(anchor, new) {
-                        self.status = Some(e);
-                    }
-                }
-            }
-            Device::Ram { data, .. } => {
-                if let Some(words) = self.ram_words(anchor) {
-                    ui.label(RichText::new("İçerik").small());
-                    let text = device::words_text(&words, *data);
-                    ui.label(RichText::new(text).monospace().small());
-                }
-            }
             Device::Keyboard => {
                 ui.colored_label(
-                    crate::theme::GOOD,
+                    theme::GOOD,
                     "⌨ Yazdıkların bu klavyeye gidiyor. Bitirince Esc.",
                 );
             }
-            _ => {}
         }
+        changed
     }
+
+    /// The text box for a ROM's contents; returns the ROM with new words.
+    fn rom_editor(
+        &mut self,
+        ui: &mut Ui,
+        id: Id,
+        addr: u8,
+        data: u8,
+        words: &[u64],
+    ) -> Option<Device> {
+        // Refresh the text when another ROM is selected or its contents
+        // changed (undo, another player).
+        let fresh = device::words_text(words, data);
+        let stale = self
+            .rom_text
+            .as_ref()
+            .is_none_or(|(i, _, shown, _)| *i != id || shown.as_deref() != Some(fresh.as_str()));
+        if stale {
+            self.rom_text = Some((id, fresh.clone(), Some(fresh), None));
+        }
+        let l = ui
+            .label(
+                RichText::new(format!(
+                    "İçerik: {} kelime, onaltılık (ya da #onluk), ; yorum",
+                    1u32 << addr
+                ))
+                .small(),
+            )
+            .id;
+        let (_, text, _, err) = self.rom_text.as_mut().unwrap();
+        ui.add(
+            egui::TextEdit::multiline(text)
+                .code_editor()
+                .desired_rows(6)
+                .desired_width(f32::INFINITY),
+        )
+        .labelled_by(l);
+        let mut out = None;
+        if ui.button("İçeriği yükle").clicked() {
+            match device::parse_words(text) {
+                Ok(w) if w.len() > 1 << addr => {
+                    *err = Some(format!("{} kelime fazla", w.len() - (1 << addr)))
+                }
+                Ok(w) => {
+                    *err = None;
+                    out = Some(Device::Rom {
+                        addr,
+                        data,
+                        words: w,
+                    });
+                }
+                Err(e) => *err = Some(e),
+            }
+        }
+        if let Some(e) = err {
+            ui.colored_label(theme::BAD, e.as_str());
+        }
+        out
+    }
+}
+
+/// Name, width and (for inputs) value of an input or output part; returns
+/// the changed part.
+fn port_settings(ui: &mut Ui, kind: &Kind) -> Option<Kind> {
+    let (name, width, value) = match kind {
+        Kind::Input { name, width, value } => (name, *width, Some(*value)),
+        Kind::Output { name, width } => (name, *width, None),
+        _ => return None,
+    };
+    let mut n = name.clone();
+    let mut w = width;
+    let mut v = value.unwrap_or(0);
+    ui.horizontal(|ui| {
+        let l = ui.label("Ad").id;
+        ui.add(egui::TextEdit::singleline(&mut n).desired_width(80.0))
+            .labelled_by(l);
+    });
+    ui.horizontal(|ui| {
+        let l = ui.label("Bit sayısı").id;
+        ui.add(egui::DragValue::new(&mut w).range(1..=64))
+            .labelled_by(l);
+    });
+    if value.is_some() {
+        ui.horizontal(|ui| {
+            let l = ui.label("Değer").id;
+            ui.add(egui::DragValue::new(&mut v).range(0..=mask(w)))
+                .labelled_by(l);
+        });
+    }
+    let n = n.trim().to_string();
+    let name = if makine_world::part::valid_name(&n) {
+        n
+    } else {
+        name.clone()
+    };
+    let new = match value {
+        Some(_) => Kind::Input {
+            name,
+            width: w,
+            value: v & mask(w),
+        },
+        None => Kind::Output { name, width: w },
+    };
+    (new != *kind).then_some(new)
+}
+
+/// Whether two palette kinds are the same tool (a switch is a switch,
+/// whatever its setting).
+fn same_tool(a: &Kind, b: &Kind) -> bool {
+    std::mem::discriminant(a) == std::mem::discriminant(b)
+        && match (a, b) {
+            (Kind::Gate(x), Kind::Gate(y)) => x == y,
+            (Kind::Device(x), Kind::Device(y)) => {
+                std::mem::discriminant(x) == std::mem::discriminant(y)
+            }
+            (Kind::Part(x), Kind::Part(y)) => match (&x.kind, &y.kind) {
+                (PartKind::Chip(m), PartKind::Chip(n)) => m == n,
+                (m, n) => std::mem::discriminant(m) == std::mem::discriminant(n),
+            },
+            _ => true,
+        }
+}
+
+/// Settings of a library part, splitter, joiner or constant, like the
+/// canvas's right-click menu. Returns the changed part.
+fn part_settings(ui: &mut Ui, p: &Part) -> Option<Part> {
+    let mut part = p.clone();
+    let mut changed = false;
+    match &mut part.kind {
+        PartKind::Split(widths) | PartKind::Join(widths) => {
+            let label = ui.label("Gruplar (düşük bitten başlayarak)").id;
+            let mut text = widths
+                .iter()
+                .map(|w| w.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            if ui
+                .text_edit_singleline(&mut text)
+                .labelled_by(label)
+                .changed()
+            {
+                if let Some(ws) = parse_widths(&text) {
+                    *widths = ws;
+                    changed = true;
+                }
+            }
+            ui.label(
+                RichText::new("örn. 8,8,8,8 ya da 1,1,1,1,1,1,1,1")
+                    .weak()
+                    .small(),
+            );
+        }
+        PartKind::Const { width, value } => {
+            ui.horizontal(|ui| {
+                let label = ui.label("Bit sayısı").id;
+                changed |= ui
+                    .add(egui::DragValue::new(width).range(1..=64))
+                    .labelled_by(label)
+                    .changed();
+            });
+            ui.horizontal(|ui| {
+                let label = ui.label("Değer").id;
+                changed |= ui
+                    .add(egui::DragValue::new(value).hexadecimal(1, false, true))
+                    .labelled_by(label)
+                    .changed();
+            });
+            *value &= mask(*width);
+        }
+        _ => {}
+    }
+    if !matches!(part.kind, PartKind::Const { .. }) {
+        ui.horizontal(|ui| {
+            let label = ui.label("Tekrar").id;
+            changed |= ui
+                .add(egui::DragValue::new(&mut part.repeat).range(1..=64))
+                .labelled_by(label)
+                .changed();
+        })
+        .response
+        .on_hover_text("Parçanın kaç kopyası yan yana çalışsın. Her uç bu kadar genişler.");
+    }
+    changed.then_some(part)
+}
+
+fn parse_widths(text: &str) -> Option<Vec<u8>> {
+    let ws: Vec<u8> = text
+        .split(',')
+        .map(|s| s.trim().parse::<u8>().ok().filter(|&w| w >= 1))
+        .collect::<Option<_>>()?;
+    let total: u32 = ws.iter().map(|&w| w as u32).sum();
+    (!ws.is_empty() && total <= 64).then_some(ws)
 }

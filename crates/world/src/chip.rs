@@ -1,224 +1,202 @@
-//! Worlds as chips: a region of blocks becomes a [`ChipDef`] the player can
-//! use in the editor, in other chips, or place back into a world as a block.
+//! Worlds as chips: a selection of parts becomes a [`ChipDef`] the player
+//! can use in the editor, in other chips, or back in a world.
 //!
-//! The chip's pins are the world's ports. Ports named with a common prefix
-//! and the numbers `0..n` (`x0`, `x1`, … `x7`) become one bus `x[n]`, bit
-//! `i` from port `xi`. Switches become constants at their current setting.
+//! The chip's pins are the selection's input and output parts, in order
+//! from top to bottom. Switches become constants at their current setting.
 //! Clocks and devices with memory cannot go inside a chip yet.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use makine_sim::{ChipDef, Library, Part, PartKind, Pin, Sink, Source, Wire};
 
-use crate::block::Block;
-use crate::compile::{compile, InputSource};
+use crate::compile::{Builder, Mode};
 use crate::device::Device;
-use crate::world::World;
+use crate::part::Kind;
+use crate::world::{Edit, End, Id, Placed, World};
 
-/// Group 1-bit port names into pins: (pin, port name of each bit).
-fn group(names: &[String]) -> Vec<(Pin, Vec<String>)> {
-    let mut buses: BTreeMap<String, BTreeMap<u32, String>> = BTreeMap::new();
-    let mut singles = Vec::new();
-    for n in names {
-        let digits = n.len() - n.trim_end_matches(|c: char| c.is_ascii_digit()).len();
-        let (base, num) = n.split_at(n.len() - digits);
-        match (base.is_empty(), num.parse::<u32>()) {
-            (false, Ok(i)) if digits > 0 && (num == "0" || !num.starts_with('0')) => {
-                buses
-                    .entry(base.to_string())
-                    .or_default()
-                    .insert(i, n.clone());
-            }
-            _ => singles.push(n.clone()),
-        }
-    }
-    let mut out: Vec<(Pin, Vec<String>)> = Vec::new();
-    for (base, bits) in buses {
-        let n = bits.len() as u32;
-        let complete = n > 1 && n <= 64 && bits.keys().copied().eq(0..n) && !names.contains(&base);
-        if complete {
-            out.push((Pin::new(base, n as u8), bits.into_values().collect()));
-        } else {
-            singles.extend(bits.into_values());
-        }
-    }
-    out.extend(
-        singles
-            .into_iter()
-            .map(|n| (Pin::new(n.clone(), 1), vec![n])),
-    );
-    out.sort_by(|a, b| a.0.name.cmp(&b.0.name));
-    out
-}
-
-/// The world as a chip named `name`. `lib` holds the chips the world uses.
-pub fn to_chip(world: &World, name: &str, lib: &Library) -> Result<ChipDef, String> {
-    for (_, b) in world.blocks() {
-        match b {
-            Block::Clock { .. } => return Err("saat bloğu çipin içine giremez".into()),
-            Block::Device { device, .. }
-                if !matches!(device, Device::Chip { .. } | Device::Display { .. }) =>
-            {
-                return Err(format!("{} henüz çipin içine giremez", device.name()));
+/// The parts `ids` of `world` as a chip named `name`. `lib` holds the chips
+/// the world uses. Wires from outside the selection are cut.
+pub fn to_chip(world: &World, ids: &[Id], name: &str, lib: &Library) -> Result<ChipDef, String> {
+    let set: BTreeSet<Id> = ids.iter().copied().collect();
+    let mut parts: Vec<(Id, &Placed)> = world.parts().filter(|(id, _)| set.contains(id)).collect();
+    // Pins top to bottom, then left to right.
+    parts.sort_by(|a, b| {
+        (a.1.pos.y, a.1.pos.x)
+            .partial_cmp(&(b.1.pos.y, b.1.pos.x))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    for (_, p) in &parts {
+        match &p.kind {
+            Kind::Clock { .. } => return Err("saat çipin içine giremez".into()),
+            Kind::Device(d) if !matches!(d, Device::Display { .. }) => {
+                return Err(format!("{} henüz çipin içine giremez", d.name()));
             }
             _ => {}
         }
     }
-    crate::compile::check_chips(world, lib)?;
-    let c = compile(world).map_err(|e| e.to_string())?;
-    let switch_on = |p| matches!(world.get(p), Some(Block::Switch { on: true, .. }));
-
-    let in_names: Vec<String> = c
-        .inputs
-        .iter()
-        .filter_map(|s| match s {
-            InputSource::Port(n) => Some(n.clone()),
-            _ => None,
-        })
-        .collect();
-    let out_names: Vec<String> = c.ports.iter().map(|(n, _)| n.clone()).collect();
-    if out_names.is_empty() {
-        return Err(
-            "seçimde hiç çıkış portu yok: çipin ne üreteceğini bir çıkış portuyla göster".into(),
-        );
+    let mut names = BTreeSet::new();
+    for (_, p) in &parts {
+        if let Some(n) = p.kind.port_name() {
+            if !names.insert(n.to_string()) {
+                return Err(format!("'{n}' adında iki uç var"));
+            }
+        }
     }
-    let ins = group(&in_names);
-    let outs = group(&out_names);
-    if let Some(p) = ins
+    if !parts
         .iter()
-        .find(|i| outs.iter().any(|o| o.0.name == i.0.name))
+        .any(|(_, p)| matches!(p.kind, Kind::Output { .. }))
     {
-        return Err(format!("'{}' hem giriş hem çıkış portu", p.0.name));
+        return Err("seçimde hiç çıkış yok: çipin ne üreteceğini bir Çıkış ile göster".into());
     }
 
-    let mut def = ChipDef::new(name, &[], &[]);
-    def.inputs = ins.iter().map(|(p, _)| p.clone()).collect();
-    def.outputs = outs.iter().map(|(p, _)| p.clone()).collect();
-    def.parts = c.def.parts.clone();
-
-    // New source for each old chip input.
-    let mut src_of: Vec<Source> = Vec::new();
-    for s in &c.inputs {
-        let src = match s {
-            InputSource::Port(n) => {
-                let (j, (pin, bits)) = ins
-                    .iter()
-                    .enumerate()
-                    .find(|(_, (_, bits))| bits.contains(n))
-                    .unwrap();
-                if pin.width == 1 {
-                    Source::Input(j)
-                } else {
-                    let bit = bits.iter().position(|b| b == n).unwrap();
-                    split_bit(&mut def, j, pin.width, bit)
-                }
-            }
-            InputSource::Switch(p) => {
-                def.parts.push(Part::new(PartKind::Const {
-                    width: 1,
-                    value: switch_on(*p) as u64,
-                }));
-                Source::Part {
-                    part: def.parts.len() - 1,
-                    pin: 0,
-                }
-            }
-            InputSource::Clock { .. } => unreachable!("rejected above"),
-        };
-        src_of.push(src);
-    }
-    let map = |s: Source| match s {
-        Source::Input(i) => src_of[i],
-        s => s,
-    };
-
-    // Old output -> new sink, for port outputs only.
-    let mut sink_of: BTreeMap<usize, Sink> = BTreeMap::new();
-    let mut joins: BTreeMap<usize, usize> = BTreeMap::new();
-    for (port, o) in &c.ports {
-        let (j, (pin, bits)) = outs
-            .iter()
-            .enumerate()
-            .find(|(_, (_, b))| b.contains(port))
-            .unwrap();
-        let sink = if pin.width == 1 {
-            Sink::Output(j)
-        } else {
-            let join = *joins.entry(j).or_insert_with(|| {
-                def.parts
-                    .push(Part::new(PartKind::Join(vec![1; pin.width as usize])));
-                let join = def.parts.len() - 1;
-                def.wires.push(Wire {
-                    from: Source::Part { part: join, pin: 0 },
-                    to: Sink::Output(j),
-                });
-                join
-            });
-            Sink::Part {
-                part: join,
-                pin: bits.iter().position(|b| b == port).unwrap(),
-            }
-        };
-        sink_of.insert(*o, sink);
-    }
-    for w in &c.def.wires {
-        let to = match w.to {
-            Sink::Output(o) => match sink_of.get(&o) {
-                Some(s) => *s,
-                None => continue,
-            },
-            s => s,
-        };
-        def.wires.push(Wire {
-            from: map(w.from),
-            to,
+    // The selection alone, wires to the outside cut.
+    let mut inside = World::new(name);
+    for (id, p) in &parts {
+        inside.apply(Edit::Part {
+            id: *id,
+            part: Some((*p).clone()),
         });
     }
-    // Check it builds.
+    for (from, to) in world.wires() {
+        if set.contains(&from.part) && set.contains(&to.part) {
+            inside.apply(Edit::Wire {
+                to,
+                from: Some(from),
+            });
+        }
+    }
+
+    let mut b = Builder::new(name, lib, Mode::Chip);
+    for (id, p) in &parts {
+        b.part(*id, &p.kind);
+    }
+    b.wires(&inside);
+    if let Some(p) = b.problems.first() {
+        return Err(p.to_string());
+    }
+    // Output parts become the chip's outputs; nothing wired reads 0.
+    let mut outs = Vec::new();
+    for (id, p) in &parts {
+        if let Kind::Output { name, width } = &p.kind {
+            let src = match inside.wire_into(End::new(*id, 0)) {
+                Some(from) => {
+                    let (src, w) = b.source(from).ok_or("bir çıkışın teli kopuk")?;
+                    if w != *width && w != 1 {
+                        return Err(format!("'{name}' {width} bit, ona bağlı tel {w} bit"));
+                    }
+                    Some(src)
+                }
+                None => None,
+            };
+            outs.push((Pin::new(name.clone(), *width), src));
+        }
+    }
+    let mut def: ChipDef = b.def;
+    for (pin, src) in outs {
+        let o = def.outputs.len();
+        let src = src.unwrap_or_else(|| {
+            def.parts.push(Part::new(PartKind::Const {
+                width: pin.width,
+                value: 0,
+            }));
+            Source::Part {
+                part: def.parts.len() - 1,
+                pin: 0,
+            }
+        });
+        def.outputs.push(pin);
+        def.wires.push(Wire {
+            from: src,
+            to: Sink::Output(o),
+        });
+    }
     makine_sim::Circuit::compile_def(lib, &def).map_err(|e| e.to_string())?;
     Ok(def)
-}
-
-/// Bit `bit` of input bus `pin`, through one Split per bus (reused).
-fn split_bit(def: &mut ChipDef, pin: usize, width: u8, bit: usize) -> Source {
-    let existing = def.wires.iter().find_map(|w| match (w.from, w.to) {
-        (Source::Input(i), Sink::Part { part, .. })
-            if i == pin && matches!(def.parts[part].kind, PartKind::Split(_)) =>
-        {
-            Some(part)
-        }
-        _ => None,
-    });
-    let split = existing.unwrap_or_else(|| {
-        def.parts
-            .push(Part::new(PartKind::Split(vec![1; width as usize])));
-        let s = def.parts.len() - 1;
-        def.wires.push(Wire {
-            from: Source::Input(pin),
-            to: Sink::Part { part: s, pin: 0 },
-        });
-        s
-    });
-    Source::Part {
-        part: split,
-        pin: bit,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::part::Gate;
+    use crate::world::Pos;
+    use makine_sim::Circuit;
+
+    fn put(w: &mut World, kind: Kind, y: f32) -> Id {
+        let id = w.new_id();
+        w.apply(Edit::Part {
+            id,
+            part: Some(Placed {
+                kind,
+                pos: Pos::new(0.0, y),
+            }),
+        });
+        id
+    }
+
+    fn wire(w: &mut World, from: Id, to: (Id, usize)) {
+        w.apply(Edit::Wire {
+            to: End::new(to.0, to.1),
+            from: Some(End::new(from, 0)),
+        });
+    }
+
+    fn input(name: &str, width: u8) -> Kind {
+        Kind::Input {
+            name: name.into(),
+            width,
+            value: 0,
+        }
+    }
+
+    fn output(name: &str, width: u8) -> Kind {
+        Kind::Output {
+            name: name.into(),
+            width,
+        }
+    }
 
     #[test]
-    fn grouping() {
-        let names: Vec<String> = ["x1", "x0", "sel", "y0", "a10", "q2", "q0"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let g = group(&names);
-        let pins: Vec<String> = g.iter().map(|(p, _)| p.to_string()).collect();
-        // x0,x1 -> x[2]; y0 alone stays y0; q0,q2 have a gap: singles.
-        assert_eq!(pins, ["a10", "q0", "q2", "sel", "x[2]", "y0"]);
-        assert_eq!(g[4].1, ["x0", "x1"]);
+    fn a_selection_becomes_a_chip() {
+        let mut w = World::new("w");
+        let a = put(&mut w, input("a", 1), 0.0);
+        let b = put(&mut w, input("b", 1), 50.0);
+        let x = put(&mut w, Kind::Gate(Gate::Xor), 20.0);
+        let q = put(&mut w, output("q", 1), 30.0);
+        let outside = put(&mut w, Kind::Lamp, 90.0);
+        wire(&mut w, a, (x, 0));
+        wire(&mut w, b, (x, 1));
+        wire(&mut w, x, (q, 0));
+        wire(&mut w, x, (outside, 0));
+        let lib = Library::new();
+        let def = to_chip(&w, &[a, b, x, q], "Ya", &lib).unwrap();
+        let names = |p: &[Pin]| p.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        assert_eq!(names(&def.inputs), ["a", "b"], "top to bottom");
+        assert_eq!(names(&def.outputs), ["q"]);
+        let mut sim = Circuit::compile_def(&lib, &def).unwrap();
+        for v in 0..4u64 {
+            let out = sim.eval_values(&[v & 1, v >> 1]).unwrap();
+            assert_eq!(out, vec![(v & 1) ^ (v >> 1)]);
+        }
+    }
+
+    #[test]
+    fn buses_and_refusals() {
+        let mut w = World::new("w");
+        let a = put(&mut w, input("a", 8), 0.0);
+        let q = put(&mut w, output("q", 8), 10.0);
+        let unwired = put(&mut w, output("z", 4), 20.0);
+        wire(&mut w, a, (q, 0));
+        let lib = Library::new();
+        let def = to_chip(&w, &[a, q, unwired], "Gec", &lib).unwrap();
+        let mut sim = Circuit::compile_def(&lib, &def).unwrap();
+        assert_eq!(sim.eval_values(&[0xA5]).unwrap(), vec![0xA5, 0]);
+
+        assert!(to_chip(&w, &[a], "X", &lib).unwrap_err().contains("çıkış"));
+        let clk = put(&mut w, Kind::Clock { period: 3 }, 0.0);
+        assert!(to_chip(&w, &[a, q, clk], "X", &lib).is_err());
+        let dup = put(&mut w, output("q", 1), 40.0);
+        assert!(to_chip(&w, &[a, q, dup], "X", &lib)
+            .unwrap_err()
+            .contains("iki"));
     }
 }

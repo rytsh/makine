@@ -5,13 +5,13 @@
 //! then every edit, in the host's order.
 //!
 //! Each player applies their own edits at once, so building feels instant.
-//! Edits are plain "set these cells" changes, where the last write to a cell
-//! wins, so applying the host's order on top makes everyone converge: when
+//! Edits are plain "set this part" or "set the wire into this pin" changes,
+//! where the last write wins, so applying the host's order on top makes everyone converge: when
 //! another player's edit arrived in between, a player's own edit is applied
 //! again when the host echoes it back (see [`Client::poll`]).
 //!
 //! The protocol is one JSON message per line over TCP. Simulation runs on
-//! each machine separately; only the blocks are shared.
+//! each machine separately; only the parts and wires are shared.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// Default TCP port.
 pub const PORT: u16 = 7878;
 /// Bumped when messages change; mismatched players are refused.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 /// The host's player id.
 pub const HOST_ID: u32 = 0;
 /// Longest message accepted (a large world with its chips).

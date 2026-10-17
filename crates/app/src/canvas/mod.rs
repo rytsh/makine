@@ -17,7 +17,7 @@ use makine_sim::{mask, Circuit, Library, PartId, PartKind, Sink, Source};
 
 use crate::design::{Design, Port, Symbol};
 
-mod draw;
+pub(crate) mod draw;
 mod layout;
 mod menu;
 

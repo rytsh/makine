@@ -114,163 +114,95 @@ mod editor {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-play.png")).unwrap();
 
-        // A block world: two switches into a half adder lighting two lamps,
-        // and a clock blinking a lamp on layer 1.
+        // A world: two switches into a half adder lighting two lamps, and a
+        // clock blinking a lamp.
         {
-            use makine_world::{Block, Dir, Edit, Gate, Pos};
-            let mut w = makine_world::World::new("örnek");
-            let mut set = |x, y, z, b| {
-                w.apply(Edit::Set {
-                    pos: Pos::new(x, y, z),
-                    block: Some(b),
+            use crate::worldview::WorldView;
+            use makine_world::{End, Gate, Kind, World};
+            let mut w = World::new("örnek");
+            let mut v = WorldView::new(World::new("örnek"));
+            let mut put = |kind, x, y| v.add(kind, egui::pos2(x, y));
+            let a = put(Kind::Switch { on: true }, 40.0, 40.0);
+            let b = put(Kind::Switch { on: false }, 40.0, 160.0);
+            let x = put(Kind::Gate(Gate::Xor), 220.0, 60.0);
+            let n = put(Kind::Gate(Gate::And), 220.0, 160.0);
+            let l1 = put(Kind::Lamp, 380.0, 64.0);
+            let l2 = put(Kind::Lamp, 380.0, 164.0);
+            let clk = put(Kind::Clock { period: 30 }, 40.0, 280.0);
+            let l3 = put(Kind::Lamp, 220.0, 280.0);
+            let q = put(
+                Kind::Output {
+                    name: "toplam".into(),
+                    width: 1,
+                },
+                540.0,
+                160.0,
+            );
+            for (f, t, pin) in [
+                (a, x, 0),
+                (b, x, 1),
+                (a, n, 0),
+                (b, n, 1),
+                (x, l1, 0),
+                (n, l2, 0),
+                (clk, l3, 0),
+                (x, q, 0),
+            ] {
+                v.edit(makine_world::Edit::Wire {
+                    to: End::new(t, pin),
+                    from: Some(End::new(f, 0)),
                 });
-            };
-            set(
-                0,
-                0,
-                0,
-                Block::Switch {
-                    on: true,
-                    facing: Dir::East,
-                },
-            );
-            for x in 1..=5 {
-                set(x, 0, 0, Block::Wire);
             }
-            set(
-                0,
-                2,
-                0,
-                Block::Switch {
-                    on: false,
-                    facing: Dir::East,
-                },
-            );
-            for x in 1..=5 {
-                set(x, 2, 0, Block::Wire);
-            }
-            set(
-                5,
-                1,
-                0,
-                Block::Gate {
-                    gate: Gate::Xor,
-                    facing: Dir::East,
-                },
-            );
-            set(6, 1, 0, Block::Wire);
-            set(7, 1, 0, Block::Lamp);
-            set(3, 1, 0, Block::Wire);
-            set(3, 2, 0, Block::Cross);
-            set(3, 3, 0, Block::Wire);
-            for x in 3..=5 {
-                set(x, 4, 0, Block::Wire);
-            }
-            for y in 3..=6 {
-                set(1, y, 0, Block::Wire);
-            }
-            for x in 2..=5 {
-                set(x, 6, 0, Block::Wire);
-            }
-            set(
-                5,
-                5,
-                0,
-                Block::Gate {
-                    gate: Gate::And,
-                    facing: Dir::East,
-                },
-            );
-            set(6, 5, 0, Block::Wire);
-            set(7, 5, 0, Block::Lamp);
-            set(
-                2,
-                9,
-                1,
-                Block::Clock {
-                    period: 30,
-                    facing: Dir::East,
-                },
-            );
-            for x in 3..=5 {
-                set(x, 9, 1, Block::Wire);
-            }
-            set(6, 9, 1, Block::Lamp);
+            std::mem::swap(&mut w, &mut v.world);
+            let mut v = WorldView::new(w);
+            v.selected = [x].into();
             let mut a = app.borrow_mut();
             a.view = View::World;
-            a.world = Some(crate::worldview::WorldView::new(w));
+            a.world = Some(v);
         }
         harness.run_steps(3);
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world.png")).unwrap();
 
-        // Drawn wires: two side by side stay apart, one across joins them;
-        // a selection over three layers.
+        // Devices: a keyboard into a display, a screen and a RAM; library
+        // chips; a part in hand.
+        let screen_id;
         {
-            use makine_world::wire::draw_wire;
-            use makine_world::{Block, Dir, Edit, Pos};
-            let mut w = makine_world::World::new("teller");
-            let line = |w: &mut makine_world::World, cells: &[(i32, i32)]| {
-                let mut prev = None;
-                for &(x, y) in cells {
-                    let p = Pos::new(x, y, 0);
-                    let e = draw_wire(w, prev, p, false);
-                    w.apply(e);
-                    prev = Some(p);
-                }
-            };
-            line(&mut w, &[(1, 0), (6, 0)]);
-            line(&mut w, &[(1, 1), (6, 1)]);
-            line(&mut w, &[(1, 2), (6, 2)]);
-            line(&mut w, &[(4, -1), (4, 1)]);
-            w.apply(Edit::Set {
-                pos: Pos::new(0, 0, 0),
-                block: Some(Block::Switch {
-                    on: true,
-                    facing: Dir::East,
-                }),
-            });
-            let e = makine_world::wire::link_to_block(&w, Pos::new(0, 0, 0));
-            w.apply(e);
-            for (x, y, z) in [(6, 4, 0), (6, 4, 1), (6, 4, 2)] {
-                w.apply(Edit::Set {
-                    pos: Pos::new(x, y, z),
-                    block: Some(Block::Via),
+            use crate::worldview::WorldView;
+            use makine_sim::Part;
+            use makine_world::{Device, End, Kind, World};
+            let mut v = WorldView::new(World::new("cihazlar"));
+            v.set_library(app.borrow().lib.clone());
+            let kbd = v.add(Kind::Device(Device::Keyboard), egui::pos2(40.0, 40.0));
+            let disp = v.add(
+                Kind::Device(Device::Display { bits: 8 }),
+                egui::pos2(330.0, 40.0),
+            );
+            let split = v.add(
+                Kind::Part(Part::new(PartKind::Join(vec![7, 1]))),
+                egui::pos2(160.0, 40.0),
+            );
+            screen_id = v.add(
+                Kind::Device(Device::Screen { bits: 3 }),
+                egui::pos2(40.0, 200.0),
+            );
+            v.add(
+                Kind::Device(Device::Ram { addr: 3, data: 8 }),
+                egui::pos2(300.0, 200.0),
+            );
+            v.add(
+                Kind::Part(Part::new(PartKind::Chip("Mux".into()))),
+                egui::pos2(500.0, 200.0),
+            );
+            for (f, fp, t, tp) in [(kbd, 0, split, 0), (kbd, 1, split, 1), (split, 0, disp, 0)] {
+                v.edit(makine_world::Edit::Wire {
+                    to: End::new(t, tp),
+                    from: Some(End::new(f, fp)),
                 });
             }
-            let mut v = crate::worldview::WorldView::new(w);
-            v.brush = None;
-            v.selection = Some(makine_world::region::Region::between(
-                Pos::new(0, -1, 0),
-                Pos::new(6, 4, 0),
-            ));
-            app.borrow_mut().world = Some(v);
-        }
-        harness.run_steps(3);
-        let img = harness.render().unwrap();
-        img.save(format!("{dir}/makine-world-wires.png")).unwrap();
-
-        // Devices: a keyboard into a display, and a screen with a pattern.
-        {
-            use makine_world::device::Device;
-            use makine_world::{Block, Dir, Edit, Pos};
-            let mut w = makine_world::World::new("cihazlar");
-            let place = |w: &mut makine_world::World, d: Device, p: Pos| {
-                let e = w.place_device(d, p, Dir::East).unwrap();
-                w.apply(e);
-            };
-            place(&mut w, Device::Keyboard, Pos::new(0, 0, 0));
-            for y in 0..8 {
-                w.apply(Edit::Set {
-                    pos: Pos::new(3, y, 0),
-                    block: Some(Block::Straight { facing: Dir::East }),
-                });
-            }
-            place(&mut w, Device::Display { bits: 8 }, Pos::new(4, 0, 0));
-            place(&mut w, Device::Screen { bits: 3 }, Pos::new(0, 11, 0));
-            place(&mut w, Device::Ram { addr: 3, data: 8 }, Pos::new(12, 0, 0));
-            let mut v = crate::worldview::WorldView::new(w);
-            v.selected = Some(Pos::new(0, 0, 0));
+            v.selected = [kbd].into();
+            v.placing = Some(Kind::Lamp);
+            v.refit();
             app.borrow_mut().world = Some(v);
         }
         harness.run_steps(2);
@@ -280,7 +212,7 @@ mod editor {
         {
             let mut a = app.borrow_mut();
             let v = a.world.as_mut().unwrap();
-            v.set_screen_for_test(makine_world::Pos::new(0, 11, 0), |x, y| {
+            v.set_screen_for_test(screen_id, |x, y| {
                 matches!((x, y), (2, 2) | (5, 2) | (1, 5) | (6, 5))
                     || (y == 6 && (2..=5).contains(&x))
             });
@@ -289,70 +221,11 @@ mod editor {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world-devices.png")).unwrap();
 
-        // Chips as blocks: Xor and And from the levels, a selected region.
-        {
-            use makine_world::{Block, Device, Dir, Edit, Pos};
-            let mut a = app.borrow_mut();
-            let lib = a.lib.clone();
-            let chip = |name: &str| {
-                let p = lib.kind_pins(&PartKind::Chip(name.into())).unwrap();
-                Device::Chip {
-                    name: name.into(),
-                    inputs: p.inputs,
-                    outputs: p.outputs,
-                }
-            };
-            let mut w = makine_world::World::new("çipler");
-            w.apply(
-                w.place_device(chip("Xor"), Pos::new(2, 0, 0), Dir::East)
-                    .unwrap(),
-            );
-            w.apply(
-                w.place_device(chip("And"), Pos::new(2, 3, 0), Dir::East)
-                    .unwrap(),
-            );
-            let st = || Some(Block::Straight { facing: Dir::East });
-            for (x, y, on) in [(0, 0, true), (0, 1, true), (0, 3, true), (0, 4, false)] {
-                w.apply(Edit::Set {
-                    pos: Pos::new(x, y, 0),
-                    block: Some(Block::Switch {
-                        on,
-                        facing: Dir::East,
-                    }),
-                });
-                w.apply(Edit::Set {
-                    pos: Pos::new(1, y, 0),
-                    block: st(),
-                });
-            }
-            for y in [0, 3] {
-                w.apply(Edit::Set {
-                    pos: Pos::new(5, y, 0),
-                    block: st(),
-                });
-                w.apply(Edit::Set {
-                    pos: Pos::new(6, y, 0),
-                    block: Some(Block::Lamp),
-                });
-            }
-            let mut v = crate::worldview::WorldView::new(w);
-            v.set_library(lib);
-            v.brush = None;
-            v.selection = Some(makine_world::region::Region::between(
-                Pos::new(0, 3, 0),
-                Pos::new(6, 4, 0),
-            ));
-            a.world = Some(v);
-        }
-        harness.run_steps(3);
-        let img = harness.render().unwrap();
-        img.save(format!("{dir}/makine-world-chips.png")).unwrap();
-
         // Building together: a guest's cursor in the host's world.
         {
             let mut a = app.borrow_mut();
             a.session = Some(crate::session::Session::host("ray", 0).unwrap());
-            a.world.as_mut().unwrap().selection = None;
+            a.world.as_mut().unwrap().selected.clear();
         }
         let mut guest = crate::session::Session::join(
             &format!(
@@ -374,7 +247,7 @@ mod editor {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         if let crate::session::Link::Client(c) = &mut guest.link {
-            c.send_cursor(Some(makine_world::Pos::new(4, 1, 0)));
+            c.send_cursor(Some(makine_world::Pos::new(200.0, 120.0)));
         }
         for _ in 0..20 {
             guest.tick(&mut gview, &glib, &mut gsand);
@@ -522,7 +395,8 @@ mod glyph_tests {
             include_str!("../wiki.rs"),
             include_str!("../worldview/mod.rs"),
             include_str!("../worldview/panels.rs"),
-            include_str!("../worldview/render.rs"),
+            include_str!("../worldview/draw.rs"),
+            include_str!("../worldview/layout.rs"),
             include_str!("../worldsim.rs"),
             include_str!("../session.rs"),
             include_str!("../worlds.rs"),
@@ -714,41 +588,40 @@ mod sandbox_tests {
         assert!(!app.borrow().progress.sandbox.users_of("Tampon").is_empty());
     }
 
-    /// Blocks in the world become a chip, which goes back in as a block.
+    /// Parts in the world become a chip, which goes back in as a part.
     #[test]
-    fn world_region_to_chip_and_back() {
-        use makine_world::{Block, Dir, Edit, Gate, Pos};
+    fn world_selection_to_chip_and_back() {
+        use makine_world::{End, Gate, Kind};
         let app = app_with_levels();
         app.borrow_mut().open_world();
         {
             let mut a = app.borrow_mut();
             let w = a.world.as_mut().unwrap();
-            let port = |n: &str, output| Block::Port {
-                name: n.into(),
-                output,
-                facing: Dir::East,
-            };
-            for (i, b) in [
-                port("a", false),
-                Block::Gate {
-                    gate: Gate::Not,
-                    facing: Dir::East,
+            let i = w.add(
+                Kind::Input {
+                    name: "a".into(),
+                    width: 1,
+                    value: 0,
                 },
-                port("q", true),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                w.edit(Edit::Set {
-                    pos: Pos::new(i as i32, 0, 0),
-                    block: Some(b),
-                });
-            }
-            w.selection = Some(makine_world::region::Region::between(
-                Pos::new(0, 0, 0),
-                Pos::new(2, 0, 0),
-            ));
-            w.brush = None;
+                egui::pos2(0.0, 0.0),
+            );
+            let n = w.add(Kind::Gate(Gate::Not), egui::pos2(150.0, 0.0));
+            let q = w.add(
+                Kind::Output {
+                    name: "q".into(),
+                    width: 1,
+                },
+                egui::pos2(300.0, 0.0),
+            );
+            w.edit(makine_world::Edit::Wire {
+                to: End::new(n, 0),
+                from: Some(End::new(i, 0)),
+            });
+            w.edit(makine_world::Edit::Wire {
+                to: End::new(q, 0),
+                from: Some(End::new(n, 0)),
+            });
+            w.selected = [i, n, q].into();
         }
         let a = app.clone();
         let mut h = egui_kittest::Harness::builder()
@@ -766,48 +639,40 @@ mod sandbox_tests {
         let mut sim = Circuit::compile(&app.borrow().lib, "Ters").unwrap();
         assert_eq!(sim.eval_values(&[0]).unwrap(), vec![1]);
 
-        // The chip list offers it as a block; place it and drive it.
+        // The chip list offers it; pick it and click the board to place it.
         h.get_by_label_contains("Çiplerin (").click();
         h.run_steps(2);
-        h.get_by_label("★Ters").click();
+        h.get_by_label("Ters").click();
         h.run_steps(2);
+        let placing = app.borrow().world.as_ref().unwrap().placing.clone();
+        assert_eq!(placing.as_ref().and_then(|k| k.chip_name()), Some("Ters"));
         {
             let mut a = app.borrow_mut();
             let w = a.world.as_mut().unwrap();
-            let Some(crate::worldview::Brush {
-                block: Block::Device { device, .. },
-            }) = w.brush.clone()
-            else {
-                panic!("no chip brush");
-            };
-            let e = w
-                .world
-                .place_device(device, Pos::new(0, 5, 0), Dir::East)
-                .unwrap();
-            w.edit(e);
-            w.edit(Edit::Set {
-                pos: Pos::new(-1, 5, 0),
-                block: Some(Block::Switch {
-                    on: false,
-                    facing: Dir::East,
-                }),
+            let t = w.add(placing.unwrap(), egui::pos2(150.0, 200.0));
+            let s = w.add(Kind::Switch { on: false }, egui::pos2(0.0, 200.0));
+            let l = w.add(Kind::Lamp, egui::pos2(300.0, 200.0));
+            w.edit(makine_world::Edit::Wire {
+                to: End::new(t, 0),
+                from: Some(End::new(s, 0)),
             });
-            w.edit(Edit::Set {
-                pos: Pos::new(3, 5, 0),
-                block: Some(Block::Lamp),
+            w.edit(makine_world::Edit::Wire {
+                to: End::new(l, 0),
+                from: Some(End::new(t, 0)),
             });
+            w.placing = None;
         }
         h.run_steps(2);
         let a = app.borrow();
         let w = a.world.as_ref().unwrap();
         assert!(w.sim.error().is_none(), "{:?}", w.sim.error());
+        assert_eq!(w.sim.compiled().unwrap().problems, vec![]);
     }
 
     /// Several worlds: create, switch, rename, delete; edits stay in the
     /// world they were made in.
     #[test]
     fn many_worlds() {
-        use makine_world::{Block, Edit, Pos};
         let app = app_with_levels();
         app.borrow_mut().open_world();
         let a = app.clone();
@@ -815,23 +680,23 @@ mod sandbox_tests {
             .with_size(egui::vec2(1400.0, 1000.0))
             .build_ui(move |ui| a.borrow_mut().ui(ui));
         h.run_steps(2);
-        let edit = |app: &Rc<RefCell<App>>, x| {
+        let edit = |app: &Rc<RefCell<App>>, x: f32| {
             let mut a = app.borrow_mut();
-            a.world.as_mut().unwrap().edit(Edit::Set {
-                pos: Pos::new(x, 0, 0),
-                block: Some(Block::Wire),
-            });
+            a.world
+                .as_mut()
+                .unwrap()
+                .add(makine_world::Kind::Lamp, egui::pos2(x, 0.0));
             a.store_world();
         };
-        edit(&app, 0);
+        edit(&app, 0.0);
         h.get_by_label_contains("Dünyalar (").click();
         h.run_steps(2);
         h.get_by_label("+ Yeni").click();
         h.run_steps(2);
         assert_eq!(app.borrow().world.as_ref().unwrap().world.name, "dünya 2");
         assert!(app.borrow().world.as_ref().unwrap().world.is_empty());
-        edit(&app, 5);
-        edit(&app, 6);
+        edit(&app, 5.0);
+        edit(&app, 6.0);
         // Back to the first one.
         h.get_by_label("🌍 dünya").click();
         h.run_steps(2);
@@ -863,7 +728,7 @@ mod sandbox_tests {
     /// travel both ways, and the guest's own worlds are left alone.
     #[test]
     fn build_together() {
-        use makine_world::{Block, Device, Dir, Edit, Pos};
+        use makine_world::Kind;
         let host = app_with_levels();
         let guest = app_with_levels();
         for a in [&host, &guest] {
@@ -883,10 +748,7 @@ mod sandbox_tests {
                 .insert("Ikili".into(), Design::new(b.build()));
             h.refresh_library();
             let w = h.world.as_mut().unwrap();
-            w.edit(Edit::Set {
-                pos: Pos::new(0, 0, 0),
-                block: Some(Block::Lamp),
-            });
+            w.add(Kind::Lamp, egui::pos2(0.0, 0.0));
             h.session = Some(crate::session::Session::host("ev", 0).unwrap());
         }
         let port = match &host.borrow().session.as_ref().unwrap().link {
@@ -908,21 +770,14 @@ mod sandbox_tests {
         pump(&|| guest.borrow().session.as_ref().unwrap().ready);
         assert_eq!(guest.borrow().world.as_ref().unwrap().world.len(), 1);
 
-        // Host places the free chip; the guest gets the block and the chip.
+        // Host places the free chip; the guest gets the part and the chip.
         {
             let mut h = host.borrow_mut();
-            let p = h.lib.kind_pins(&PartKind::Chip("Ikili".into())).unwrap();
-            let d = Device::Chip {
-                name: "Ikili".into(),
-                inputs: p.inputs,
-                outputs: p.outputs,
-            };
             let w = h.world.as_mut().unwrap();
-            let e = w
-                .world
-                .place_device(d, Pos::new(3, 3, 0), Dir::East)
-                .unwrap();
-            w.edit(e);
+            w.add(
+                Kind::Part(makine_sim::Part::new(PartKind::Chip("Ikili".into()))),
+                egui::pos2(100.0, 100.0),
+            );
         }
         pump(&|| guest.borrow().progress.sandbox.chips.contains_key("Ikili"));
         pump(&|| {
@@ -932,30 +787,30 @@ mod sandbox_tests {
         assert!(guest.borrow().lib.contains("Ikili"));
 
         // Guest edits; the host sees it and saves it.
-        guest.borrow_mut().world.as_mut().unwrap().edit(Edit::Set {
-            pos: Pos::new(9, 9, 0),
-            block: Some(Block::Wire),
-        });
+        let id = guest
+            .borrow_mut()
+            .world
+            .as_mut()
+            .unwrap()
+            .add(Kind::Clock { period: 5 }, egui::pos2(300.0, 300.0));
         pump(&|| {
             host.borrow()
                 .world
                 .as_ref()
                 .unwrap()
                 .world
-                .get(Pos::new(9, 9, 0))
+                .part(id)
                 .is_some()
         });
         let hname = host.borrow().world.as_ref().unwrap().world.name.clone();
-        assert!(host.borrow().progress.worlds[&hname]
-            .get(Pos::new(9, 9, 0))
-            .is_some());
+        assert!(host.borrow().progress.worlds[&hname].part(id).is_some());
         // The shared world is not saved among the guest's worlds.
         assert!(guest
             .borrow()
             .progress
             .worlds
             .values()
-            .all(|w| w.get(Pos::new(9, 9, 0)).is_none()));
+            .all(|w| w.part(id).is_none()));
 
         // The host stops sharing: the guest goes back to their own world.
         host.borrow_mut().leave_session(None);
@@ -970,7 +825,6 @@ mod sandbox_tests {
     /// and right away when the app closes.
     #[test]
     fn world_edits_are_saved_in_batches() {
-        use makine_world::{Block, Edit, Pos};
         let dir = std::env::temp_dir().join(format!("makine-save-{}", std::process::id()));
         let path = dir.join("progress.json");
         let mut app = App::new(Progress::default(), Some(path.clone()));
@@ -978,10 +832,7 @@ mod sandbox_tests {
         let _ = std::fs::remove_file(&path);
         for x in 0..50 {
             let w = app.world.as_mut().unwrap();
-            w.edit(Edit::Set {
-                pos: Pos::new(x, 0, 0),
-                block: Some(Block::Wire),
-            });
+            w.add(makine_world::Kind::Lamp, egui::pos2(x as f32 * 50.0, 0.0));
             app.store_world();
         }
         let ctx = egui::Context::default();
@@ -993,10 +844,7 @@ mod sandbox_tests {
         assert_eq!(saved.worlds.values().next().unwrap().len(), 50);
         // Closing writes what is pending at once.
         let w = app.world.as_mut().unwrap();
-        w.edit(Edit::Set {
-            pos: Pos::new(0, 5, 0),
-            block: Some(Block::Lamp),
-        });
+        w.add(makine_world::Kind::Lamp, egui::pos2(0.0, 200.0));
         app.store_world();
         eframe::App::on_exit(&mut app);
         let saved = Progress::load(&path).unwrap();

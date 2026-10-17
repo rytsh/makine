@@ -1,108 +1,114 @@
-//! The world view: the block world seen from above, one layer at a time,
-//! and building in it.
+//! The world view: parts on a plane with wires between their pins, edited
+//! the way the level editor is, and running live.
 //!
-//! The world has no edges, in height either. The player edits one layer;
-//! the one below shows through faintly, so they see what they build on.
+//! - Drag a part from the side panel onto the board (or click it in the
+//!   panel, then click the board) to place it.
+//! - Drag a part to move it; drag empty board to pan (or select, with
+//!   Shift); the wheel zooms.
+//! - Drag from an output pin to an input pin to wire them. Pulling a
+//!   wire's end off an input moves or cuts it.
+//! - Click a switch or an input to change it; click any other part to
+//!   select it (its settings show in the side panel).
+//! - Right click a part or a wire for its menu; Delete removes what is
+//!   selected (or the wire under the pointer).
 //!
-//! Controls: left click places the selected block (drag to paint) or, on a
-//! device, selects it; right click removes; R turns the block being placed
-//! (or the blocks being pasted); Q/E or Page Up/Down change layer;
-//! middle-drag or Space+drag pans; the wheel zooms. With the select tool,
-//! dragging selects a region (Ctrl+C/X/V, arrows move it, Del deletes).
-//! Every key is listed in [`SHORTCUTS`], shown in the side panel.
+//! Every change goes through [`WorldView::edit`], so it can be undone and
+//! shared with other players.
 
-use egui::{vec2, Color32, Sense, Ui, Vec2};
-use makine_sim::Library;
-use makine_world::block::{Block, Dir};
-use makine_world::device::{self, Device};
+use std::collections::BTreeSet;
 
-use makine_world::region::{self, Clip, Region};
-use makine_world::{Change, Edit, Pos, World};
+use egui::{pos2, vec2, Color32, Id as EguiId, Pos2, Rect, Sense, Ui, Vec2};
+use makine_sim::{mask, Library};
+use makine_world::{device, Change, Device, Edit, End, Id, Kind, Placed, Pos, World};
 
 use crate::worldsim::WorldSim;
 
+mod draw;
+mod layout;
 mod panels;
-mod render;
 #[cfg(test)]
 mod tests;
 
-pub use panels::{palette, tile, tiles};
-use render::BG;
+pub use layout::{label, shape, Layout};
+pub use panels::{device_palette, draggable, palette, PaletteItem};
 
-/// Every key of the world view: (keys, what they do), for the side panel.
+/// Every key and gesture of the world view: (keys, what they do), for the
+/// side panel.
 pub const SHORTCUTS: &[(&str, &str)] = &[
-    (
-        "Sol tık",
-        "koy (sürükleyerek boya); anahtarı aç/kapa; cihazı seç",
-    ),
-    ("Sağ tık", "sil (sürükleyerek de)"),
-    ("R / Shift+R", "döndür (koyulacak blok ya da yapıştırılan)"),
-    ("Q / E", "bir katman aşağı / yukarı"),
-    ("Page Down / Up", "bir katman aşağı / yukarı"),
-    ("1–9", "blok seç"),
-    ("V", "seç aracı"),
-    ("Shift+sürükle", "blok tutarken alan seç"),
+    ("Sürükle (parça)", "taşı"),
+    ("Sürükle (uçtan uca)", "tel çek"),
+    ("Sürükle (boşluk)", "kaydır"),
+    ("Shift+sürükle", "alan seç"),
+    ("Tık", "anahtarı, girişi değiştir; parçayı seç"),
+    ("Sağ tık", "parçanın ya da telin menüsü"),
+    ("Delete", "seçileni ya da üstündeki teli sil"),
     ("Ctrl+C / X / V", "kopyala / kes / yapıştır"),
-    ("Yön tuşları", "seçimi taşı"),
-    ("Delete", "seçimi sil"),
-    ("Esc", "yapıştırmayı ya da seçimi bırak"),
+    ("Ctrl+D", "seçileni çoğalt"),
+    ("Ctrl+A", "hepsini seç"),
     ("Ctrl+Z / Ctrl+Y", "geri al / yinele"),
+    ("1–9", "parça seç (tıklayınca koyulur)"),
+    ("Esc", "elindekini ya da seçimi bırak"),
     ("Tekerlek", "yakınlaştır"),
-    ("Orta tuş / Boşluk+sürükle", "kaydır"),
     ("P", "saatleri durdur / başlat"),
     ("N", "durmuşken bir adım ilerlet"),
     ("Home", "bütün dünyayı göster"),
 ];
 
-/// The block the player is placing.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Brush {
-    pub block: Block,
+/// Parts copied: positions relative to the first part, and the wires
+/// between them by index.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Clip {
+    format: String,
+    pub parts: Vec<Placed>,
+    /// (from part, from pin, to part, to pin), as indices into `parts`.
+    pub wires: Vec<(usize, usize, usize, usize)>,
+}
+
+const CLIP_FORMAT: &str = "makine-world-clip-2";
+
+impl Clip {
+    fn from_text(text: &str) -> Option<Clip> {
+        let c: Clip = serde_json::from_str(text.trim()).ok()?;
+        (c.format == CLIP_FORMAT).then_some(c)
+    }
 }
 
 pub struct WorldView {
     pub world: World,
-    /// Layer being edited.
-    pub layer: i32,
-    pub brush: Option<Brush>,
-    /// Facing applied to placed blocks; R rotates it.
-    pub facing: Dir,
-    pan: Vec2,
-    zoom: f32,
-    /// This player's changes, newest last. Undo only takes back cells
+    /// A part kind in hand: the next click on the board places it.
+    pub placing: Option<Kind>,
+    /// Camera: screen offset of the world origin from the board's corner,
+    /// and zoom.
+    pub offset: Vec2,
+    pub zoom: f32,
+    /// Draw basic gates as logic symbols.
+    pub symbols: bool,
+    /// This player's changes, newest last. Undo only takes back what
     /// nobody else has changed since.
     undo: Vec<Change>,
     redo: Vec<Change>,
     /// The running circuit of the world.
     pub sim: WorldSim,
-    /// Rebuilding the circuit waits for the end of a drag (large worlds).
-    defer: bool,
-    /// Cell under the pointer last frame.
-    hover: Option<Pos>,
-    /// The last cell painted in the current drag, so dragging does not
-    /// repaint the same cell every frame.
-    painted: Option<Pos>,
-    /// The last cell of the wire being drawn: the next one links to it.
-    wire_end: Option<Pos>,
+    /// Selected parts.
+    pub selected: BTreeSet<Id>,
+    /// What is being dragged.
+    drag: Drag,
+    /// The world as it was when a move started, so the whole move is one
+    /// edit (one undo, one network message).
+    moving: Option<Vec<(Id, Pos)>>,
     /// Centre the camera on the world at the next frame.
     fit: bool,
-    /// The tool before V switched to selecting, to switch back.
-    last_brush: Option<Brush>,
-    /// Anchor of the selected device.
-    pub selected: Option<Pos>,
-    /// A selected clock or port, for its settings.
-    pub selected_block: Option<Pos>,
-    /// A message for the player (e.g. why a device does not fit).
+    /// The board's rect and world origin on screen in the last frame.
+    pub origin: Pos2,
+    board: Rect,
+    /// Pointer position in world units, if it is over the board.
+    hover_pos: Option<Pos2>,
+    /// A message for the player.
     pub status: Option<String>,
-    /// ROM contents being edited: device anchor, text in the box, the
-    /// contents the text was made from, parse error.
-    rom_text: Option<(Pos, String, Option<String>, Option<String>)>,
-    /// Selected region, and the corner where a selection drag started.
-    pub selection: Option<Region>,
-    sel_start: Option<Pos>,
-    /// Blocks being pasted: they follow the pointer until clicked down.
-    pub pasting: Option<Clip>,
-    /// The last copied blocks.
+    /// ROM contents being edited: part, text in the box, the contents the
+    /// text was made from, parse error.
+    rom_text: Option<(Id, String, Option<String>, Option<String>)>,
+    /// The last copied parts.
     pub clipboard: Option<Clip>,
     /// Name typed for a new chip made from the selection.
     pub chip_name: String,
@@ -113,15 +119,31 @@ pub struct WorldView {
     pub outbox: Vec<Edit>,
     /// Whether this world is shared (edits are collected in `outbox`).
     pub sharing: bool,
-    /// Other players' cursors: name, colour, cell.
+    /// Other players' pointers: name, colour, world position.
     pub others: Vec<(String, Color32, Pos)>,
+    /// Screens' pixels, by part, read once per frame.
+    screens: std::collections::HashMap<Id, Vec<bool>>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Drag {
+    #[default]
+    None,
+    /// The view itself.
+    Pan,
+    /// Selected parts (the one grabbed among them).
+    Parts,
+    /// A wire from this output.
+    Wire(End),
+    /// A selection rectangle from this world point.
+    Select(Pos2),
 }
 
 /// Requests from the world view to the app.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
-    /// Turn the blocks in a region into a free chip named `name`.
-    MakeChip { name: String, region: Region },
+    /// Turn the selected parts into a free chip named `name`.
+    MakeChip { name: String, parts: Vec<Id> },
 }
 
 impl Default for WorldView {
@@ -130,37 +152,43 @@ impl Default for WorldView {
     }
 }
 
+/// What is under the pointer.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Hover {
+    source: Option<(End, Pos2)>,
+    sink: Option<(End, Pos2)>,
+    part: Option<Id>,
+    /// A wire (by the input it goes into), when nothing else is.
+    wire: Option<End>,
+}
+
 impl WorldView {
     pub fn new(world: World) -> Self {
         Self {
             world,
-            layer: 0,
-            brush: Some(Brush { block: Block::Wire }),
-            facing: Dir::East,
-            pan: vec2(0.0, 0.0),
+            placing: None,
+            offset: Vec2::ZERO,
             zoom: 1.0,
+            symbols: true,
             undo: Vec::new(),
             redo: Vec::new(),
             sim: WorldSim::default(),
-            defer: false,
-            hover: None,
-            painted: None,
-            wire_end: None,
+            selected: BTreeSet::new(),
+            drag: Drag::None,
+            moving: None,
             fit: true,
-            last_brush: None,
-            selected: None,
-            selected_block: None,
+            origin: Pos2::ZERO,
+            board: Rect::NOTHING,
+            hover_pos: None,
             status: None,
             rom_text: None,
-            selection: None,
-            sel_start: None,
-            pasting: None,
             clipboard: None,
             chip_name: String::new(),
             request: None,
             outbox: Vec::new(),
             sharing: false,
             others: Vec::new(),
+            screens: Default::default(),
         }
     }
 
@@ -173,162 +201,18 @@ impl WorldView {
 
     /// Tidy up after other players changed the world.
     pub fn after_remote_edits(&mut self) {
-        // A device deleted by someone else cannot stay selected.
-        if self
-            .selected
-            .is_some_and(|a| self.world.device_at(a).is_none())
-        {
-            self.selected = None;
-        }
+        let w = &self.world;
+        self.selected.retain(|id| w.part(*id).is_some());
     }
 
-    /// The cell under the pointer, if any.
+    /// The pointer's world position, for other players.
     pub fn hover(&self) -> Option<Pos> {
-        self.hover
+        self.hover_pos.map(|p| Pos::new(p.x, p.y))
     }
 
-    /// Set the player's chip library (used by chip blocks).
+    /// Set the player's chip library (used by library parts).
     pub fn set_library(&mut self, lib: Library) {
         self.sim.set_library(lib);
-    }
-
-    /// Whether the select tool is active (no brush).
-    pub fn selecting(&self) -> bool {
-        self.brush.is_none()
-    }
-
-    /// Copy the selection; also returns it as text for the system clipboard.
-    pub fn copy(&mut self) -> Option<String> {
-        let clip = Clip::copy(&self.world, self.selection?)?;
-        let text = clip.to_json();
-        self.clipboard = Some(clip);
-        Some(text)
-    }
-
-    pub fn cut(&mut self) -> Option<String> {
-        let text = self.copy()?;
-        self.delete_selection();
-        Some(text)
-    }
-
-    pub fn delete_selection(&mut self) {
-        if let Some(r) = self.selection {
-            let e = r.clear(&self.world);
-            if matches!(&e, Edit::Batch(v) if !v.is_empty()) {
-                if self.selected.is_some_and(|a| r.contains(a)) {
-                    self.selected = None;
-                }
-                self.edit(e);
-            }
-        }
-    }
-
-    /// Start pasting `text` if it holds blocks, else the last copy.
-    pub fn start_paste(&mut self, text: Option<&str>) {
-        let clip = text
-            .and_then(Clip::from_json)
-            .or_else(|| self.clipboard.clone());
-        if let Some(c) = clip {
-            self.pasting = Some(c);
-            self.status =
-                Some("Yapıştırmak için tıkla · R: döndür · Esc ya da sağ tık: bırak".into());
-        }
-    }
-
-    /// Paste the floating clip with its corner at `at`.
-    fn paste_at(&mut self, at: Pos) {
-        let Some(clip) = &self.pasting else { return };
-        match clip.paste(&self.world, at) {
-            Ok(e) => {
-                let (w, h) = clip.size();
-                self.edit(e);
-                self.selection = Some(Region::between(
-                    at,
-                    Pos::new(at.x + w - 1, at.y + h - 1, at.z),
-                ));
-                self.pasting = None;
-                self.status = None;
-            }
-            Err(e) => self.status = Some(e),
-        }
-    }
-
-    /// Move the selection and its blocks by (dx, dy).
-    pub fn move_selection(&mut self, dx: i32, dy: i32) {
-        let Some(r) = self.selection else { return };
-        match region::move_region(&self.world, r, dx, dy) {
-            Ok(e) => {
-                self.edit(e);
-                self.selection = Some(Region {
-                    x0: r.x0 + dx,
-                    y0: r.y0 + dy,
-                    x1: r.x1 + dx,
-                    y1: r.y1 + dy,
-                });
-                if let Some(a) = self.selected.filter(|a| r.contains(*a)) {
-                    self.selected = Some(Pos::new(a.x + dx, a.y + dy, a.z));
-                }
-            }
-            Err(e) => self.status = Some(e),
-        }
-    }
-
-    /// A world containing only the blocks of `r`.
-    pub fn region_world(&self, r: Region, name: &str) -> World {
-        let mut w = World::new(name);
-        if let Some(clip) = Clip::copy(&self.world, r) {
-            if let Ok(e) = clip.paste(&w, Pos::new(0, 0, 0)) {
-                w.apply(e);
-            }
-        }
-        w
-    }
-
-    /// The selected device: anchor, device and facing.
-    pub fn selected_device(&self) -> Option<(Pos, Device, Dir)> {
-        let (anchor, d, f) = self.world.device_at(self.selected?)?;
-        Some((anchor, d.clone(), f))
-    }
-
-    /// Replace the device at `anchor` with `device` (same facing), if it
-    /// fits where it is.
-    pub fn replace_device(&mut self, anchor: Pos, device: Device) -> Result<(), String> {
-        let Some((_, _, facing)) = self.world.device_at(anchor) else {
-            return Err("cihaz yok".into());
-        };
-        let remove = self.world.remove(anchor).ok_or("cihaz yok")?;
-        let mut trial = self.world.clone();
-        trial.apply(remove.clone());
-        let place = trial
-            .place_device(device, anchor, facing)
-            .ok_or("yeni boyutu sığmıyor: önündeki ya da yanındaki blokları kaldır")?;
-        self.edit(Edit::Batch(vec![remove, place]));
-        Ok(())
-    }
-
-    /// Contents of a RAM device, if it is running.
-    pub fn ram_words(&mut self, anchor: Pos) -> Option<Vec<u64>> {
-        let name = self.sim.native_at(anchor)?;
-        device::ram(self.sim.running_circuit()?, &name)
-    }
-
-    /// Set a screen's pixels directly (for screenshots).
-    #[cfg(test)]
-    pub fn set_screen_for_test(&mut self, anchor: Pos, f: impl Fn(usize, usize) -> bool) {
-        let name = self.sim.native_at(anchor).unwrap();
-        let sim = self.sim.running_circuit().unwrap();
-        let s: &mut makine_sim::Clocked<device::ScreenState> = sim.native_mut(&name).unwrap();
-        let n = 1usize << s.state.bits;
-        for y in 0..n {
-            for x in 0..n {
-                s.state.pixels[y * n + x] = f(x, y);
-            }
-        }
-    }
-
-    /// Whether typed text goes to a keyboard device.
-    pub fn typing(&self) -> bool {
-        matches!(self.selected_device(), Some((_, Device::Keyboard, _)))
     }
 
     /// Apply an edit made by the player (undoable).
@@ -347,8 +231,6 @@ impl WorldView {
         }
     }
 
-    /// Take back this player's last change, skipping changes that other
-    /// players have entirely overwritten.
     pub fn undo(&mut self) {
         self.step_history(true);
     }
@@ -372,12 +254,11 @@ impl WorldView {
             }
             self.world.apply(e);
             to.push(change);
+            self.after_remote_edits();
             return;
         }
     }
 
-    /// Whether undo would change anything (others may have overwritten
-    /// all of this player's changes).
     pub fn can_undo(&self) -> bool {
         self.undo
             .iter()
@@ -390,35 +271,360 @@ impl WorldView {
             .any(|c| self.world.revert(c, false).is_some())
     }
 
-    pub fn show(&mut self, ui: &mut Ui) {
-        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
-        let rect = response.rect;
-        let origin = rect.center_top() + vec2(0.0, 80.0);
-        painter.rect_filled(rect, 0.0, BG);
-        if std::mem::take(&mut self.fit) {
-            self.fit_to(rect, origin);
-        }
+    /// Put a new part of `kind` with its top-left corner at `at`. Returns
+    /// its id. Inputs and outputs get the next free name.
+    pub fn add(&mut self, kind: Kind, at: Pos2) -> Id {
+        let kind = free_name(&self.world, kind);
+        let id = self.world.new_id();
+        self.edit(Edit::Part {
+            id,
+            part: Some(Placed {
+                kind,
+                pos: Pos::new(at.x.round(), at.y.round()),
+            }),
+        });
+        id
+    }
 
-        // Camera: wheel zooms around the pointer, middle-drag or Space+drag
-        // pans.
-        if let Some(hp) = response.hover_pos() {
-            let (scroll, zd) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-            let f = zd * (scroll * 0.0015).exp();
-            if f != 1.0 {
-                let new = (self.zoom * f).clamp(0.3, 3.0);
-                let anchor = hp - origin - self.pan;
-                self.pan += anchor - anchor * (new / self.zoom);
-                self.zoom = new;
+    /// Change part `id` into `kind`, keeping where it is. Wires to pins it
+    /// no longer has (or whose widths no longer fit) are cut.
+    pub fn set_kind(&mut self, id: Id, kind: Kind) {
+        let Some(p) = self.world.part(id) else { return };
+        let mut edits = vec![Edit::Part {
+            id,
+            part: Some(Placed {
+                kind: kind.clone(),
+                pos: p.pos,
+            }),
+        }];
+        let lib = self.sim.library().clone();
+        if let Some(pins) = kind.pins(&lib) {
+            let out_width = |e: End, w: &World| {
+                let k = if e.part == id {
+                    &kind
+                } else {
+                    &w.part(e.part)?.kind
+                };
+                Some(k.pins(&lib)?.outputs.get(e.pin)?.width)
+            };
+            for (from, to) in self.world.wires() {
+                let keep = if to.part == id {
+                    match (pins.inputs.get(to.pin), out_width(from, &self.world)) {
+                        (Some(p), Some(fw)) => makine_world::compile::fits(fw, p.width),
+                        _ => false,
+                    }
+                } else if from.part == id {
+                    let into = self
+                        .world
+                        .part(to.part)
+                        .and_then(|p| p.kind.pins(&lib))
+                        .and_then(|p| p.inputs.get(to.pin).map(|p| p.width));
+                    match (pins.outputs.get(from.pin), into) {
+                        (Some(p), Some(tw)) => makine_world::compile::fits(p.width, tw),
+                        _ => false,
+                    }
+                } else {
+                    true
+                };
+                if !keep {
+                    edits.push(Edit::Wire { to, from: None });
+                }
             }
         }
-        let space = ui.input(|i| i.key_down(egui::Key::Space));
-        if response.dragged_by(egui::PointerButton::Middle)
-            || (space && response.dragged_by(egui::PointerButton::Primary))
-        {
-            self.pan += response.drag_delta();
+        self.edit(Edit::Batch(edits));
+    }
+
+    /// Remove the selected parts and their wires.
+    pub fn delete_selected(&mut self) {
+        let ids: Vec<Id> = std::mem::take(&mut self.selected).into_iter().collect();
+        if ids.is_empty() {
+            return;
+        }
+        let edits = ids.iter().map(|id| self.world.remove(*id)).collect();
+        self.edit(Edit::Batch(edits));
+    }
+
+    /// Copy the selected parts (and the wires between them); also returns
+    /// them as text for the system clipboard.
+    pub fn copy(&mut self) -> Option<String> {
+        let ids: Vec<Id> = self.selected.iter().copied().collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let first = self.world.part(ids[0])?.pos;
+        let parts: Vec<Placed> = ids
+            .iter()
+            .filter_map(|id| {
+                let mut p = self.world.part(*id)?.clone();
+                p.pos = Pos::new(p.pos.x - first.x, p.pos.y - first.y);
+                Some(p)
+            })
+            .collect();
+        let index = |id: Id| ids.iter().position(|i| *i == id);
+        let wires = self
+            .world
+            .wires()
+            .filter_map(|(f, t)| Some((index(f.part)?, f.pin, index(t.part)?, t.pin)))
+            .collect();
+        let clip = Clip {
+            format: CLIP_FORMAT.into(),
+            parts,
+            wires,
+        };
+        let text = serde_json::to_string(&clip).ok();
+        self.clipboard = Some(clip);
+        text
+    }
+
+    pub fn cut(&mut self) -> Option<String> {
+        let t = self.copy()?;
+        self.delete_selected();
+        Some(t)
+    }
+
+    /// Paste `text` if it holds parts (else the last copy) at world point
+    /// `at`. The pasted parts are selected.
+    pub fn paste(&mut self, text: Option<&str>, at: Pos2) {
+        let Some(clip) = text
+            .and_then(Clip::from_text)
+            .or_else(|| self.clipboard.clone())
+        else {
+            return;
+        };
+        let mut ids = Vec::new();
+        let mut edits = Vec::new();
+        let mut scratch = self.world.clone();
+        for p in &clip.parts {
+            let id = scratch.new_id();
+            let kind = free_name(&scratch, p.kind.clone());
+            let e = Edit::Part {
+                id,
+                part: Some(Placed {
+                    kind,
+                    pos: Pos::new((at.x + p.pos.x).round(), (at.y + p.pos.y).round()),
+                }),
+            };
+            scratch.apply(e.clone());
+            edits.push(e);
+            ids.push(id);
+        }
+        for &(fp, fpin, tp, tpin) in &clip.wires {
+            if let (Some(f), Some(t)) = (ids.get(fp), ids.get(tp)) {
+                edits.push(Edit::Wire {
+                    to: End::new(*t, tpin),
+                    from: Some(End::new(*f, fpin)),
+                });
+            }
+        }
+        self.edit(Edit::Batch(edits));
+        self.selected = ids.into_iter().collect();
+    }
+
+    /// Copy and paste the selection a little lower and to the right.
+    pub fn duplicate(&mut self) {
+        let first = self
+            .selected
+            .first()
+            .and_then(|id| self.world.part(*id))
+            .map(|p| p.pos);
+        if let (Some(_), Some(p)) = (self.copy(), first) {
+            let clip = self.clipboard.clone();
+            self.paste(None, pos2(p.x + 24.0, p.y + 24.0));
+            // The clipboard keeps what the player copied before.
+            self.clipboard = clip;
+        }
+    }
+
+    /// Where a click on the board puts the part in hand: the pointer, or
+    /// the middle of the board.
+    fn drop_point(&self) -> Pos2 {
+        self.hover_pos
+            .unwrap_or_else(|| ((self.board.center() - self.origin) / self.zoom).to_pos2())
+    }
+
+    /// The selected part, if exactly one is selected.
+    pub fn single(&self) -> Option<(Id, &Placed)> {
+        if self.selected.len() != 1 {
+            return None;
+        }
+        let id = *self.selected.first()?;
+        Some((id, self.world.part(id)?))
+    }
+
+    /// Whether typed text goes to a keyboard device.
+    pub fn typing(&self) -> bool {
+        matches!(
+            self.single(),
+            Some((
+                _,
+                Placed {
+                    kind: Kind::Device(Device::Keyboard),
+                    ..
+                }
+            ))
+        )
+    }
+
+    /// Contents of RAM part `id`, if it is running.
+    pub fn ram_words(&mut self, id: Id) -> Option<Vec<u64>> {
+        let (sim, name) = self.sim.device(id)?;
+        device::ram(sim, &name)
+    }
+
+    /// Set a screen's pixels directly (for screenshots).
+    #[cfg(test)]
+    pub fn set_screen_for_test(&mut self, id: Id, f: impl Fn(usize, usize) -> bool) {
+        self.sim.run_frame(&self.world);
+        let (sim, name) = self.sim.device(id).unwrap();
+        let s: &mut makine_sim::Clocked<device::ScreenState> = sim.native_mut(&name).unwrap();
+        let n = 1usize << s.state.bits;
+        for y in 0..n {
+            for x in 0..n {
+                s.state.pixels[y * n + x] = f(x, y);
+            }
+        }
+    }
+
+    /// Fit the camera to the world at the next frame.
+    pub fn refit(&mut self) {
+        self.fit = true;
+    }
+
+    fn layout(&self, origin: Pos2) -> Layout {
+        Layout::new(
+            &self.world,
+            self.sim.library(),
+            origin,
+            self.zoom,
+            self.symbols,
+        )
+    }
+
+    fn fit_to(&mut self, board: Rect) {
+        let l = self.layout(board.min);
+        let Some(b) = l.bounds() else {
+            self.zoom = 1.0;
+            self.offset = board.size() / 2.0 - vec2(60.0, 40.0);
+            return;
+        };
+        let b = b.expand(40.0);
+        self.zoom = (board.width() / b.width())
+            .min(board.height() / b.height())
+            .clamp(0.3, 1.5);
+        self.offset = board.size() / 2.0 - b.center().to_vec2() * self.zoom;
+    }
+
+    /// Pins grab from this far away, in screen points.
+    fn pin_hit(&self) -> f32 {
+        10.0 * self.zoom.max(0.8)
+    }
+
+    fn hover_at(&self, l: &Layout, p: Pos2, wires: bool) -> Hover {
+        let hit = self.pin_hit();
+        let closest = |it: Box<dyn Iterator<Item = (End, Pos2)> + '_>| {
+            it.filter(|(_, sp)| sp.distance(p) < hit)
+                .min_by(|a, b| a.1.distance(p).total_cmp(&b.1.distance(p)))
+        };
+        let mut h = Hover {
+            source: closest(Box::new(l.sources())),
+            sink: closest(Box::new(l.sinks())),
+            part: l.part_at(p),
+            wire: None,
+        };
+        if wires && h.source.is_none() && h.sink.is_none() && h.part.is_none() {
+            h.wire = self.wire_at(l, p, 6.0 * self.zoom.max(0.8));
+        }
+        h
+    }
+
+    /// The wire (by its input) passing within `hit` of screen point `p`.
+    fn wire_at(&self, l: &Layout, p: Pos2, hit: f32) -> Option<End> {
+        self.world
+            .wires()
+            .filter_map(|(from, to)| {
+                let (a, b) = (l.source_pos(from)?, l.sink_pos(to)?);
+                let pts = crate::canvas::draw::bezier_points(a, b, l.sink_dir(to));
+                let d = crate::canvas::draw::bezier_distance(pts, p);
+                (d < hit).then_some((to, d))
+            })
+            .min_by(|x, y| x.1.total_cmp(&y.1))
+            .map(|(to, _)| to)
+    }
+
+    /// Whether a wire may go from output `from` into input `to`.
+    fn fits(&self, l: &Layout, from: End, to: End) -> bool {
+        match (l.output_pin(from), l.input_pin(to)) {
+            (Some(f), Some(t)) => makine_world::compile::fits(f.width, t.width),
+            _ => false,
+        }
+    }
+
+    pub fn show(&mut self, ui: &mut Ui) {
+        let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
+        let board = response.rect;
+        self.board = board;
+        if std::mem::take(&mut self.fit) {
+            self.fit_to(board);
+        }
+        self.zoom_at_pointer(ui, &response);
+        let origin = board.min + self.offset;
+        self.origin = origin;
+        let l = self.layout(origin);
+        let painter = painter.with_clip_rect(board);
+        let pointer = ui
+            .ctx()
+            .pointer_interact_pos()
+            .filter(|p| board.contains(*p));
+        self.hover_pos = pointer.map(|p| l.to_world(p));
+        let hover = pointer.map_or_else(Hover::default, |p| {
+            self.hover_at(&l, p, self.drag == Drag::None)
+        });
+
+        self.keys(ui, &response, &hover);
+        self.gestures(ui, &response, &l, &hover);
+        self.clicks(ui, &response, &hover);
+        self.context_menu(ui, &response, &hover);
+        // Parts dropped from the side panel.
+        if let (Some(kind), Some(p)) = (response.dnd_release_payload::<PaletteItem>(), pointer) {
+            let id = self.add(kind.0.clone(), l.to_world(p) - vec2(30.0, 20.0));
+            self.selected = [id].into();
         }
 
-        // Keys. While a keyboard device is selected, typing goes to it.
+        self.sim.run_frame(&self.world);
+        self.screens = draw::read_screens(self);
+        // Layout again: this frame's edits moved or added parts.
+        let l = self.layout(origin);
+        self.draw(&painter, board, &l, &hover);
+        if let (Drag::Wire(from), Some(p)) = (self.drag, pointer) {
+            self.draw_new_wire(&painter, &l, from, p, &hover);
+        }
+        self.set_cursor(ui, &hover);
+        let clocks = self
+            .world
+            .parts()
+            .any(|(_, p)| matches!(p.kind, Kind::Clock { .. }));
+        if (self.sim.running && clocks) || self.typing() {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// The wheel (or a pinch) zooms around the pointer.
+    fn zoom_at_pointer(&mut self, ui: &Ui, response: &egui::Response) {
+        let Some(hp) = response.hover_pos() else {
+            return;
+        };
+        let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+        let f = zoom * (scroll * 0.0015).exp();
+        if f != 1.0 {
+            let new = (self.zoom * f).clamp(0.2, 3.0);
+            let at = hp - response.rect.min;
+            let world = (at - self.offset) / self.zoom;
+            self.offset = at - world * new;
+            self.zoom = new;
+        }
+    }
+
+    fn keys(&mut self, ui: &Ui, response: &egui::Response, hover: &Hover) {
         if self.typing() {
             let keys: Vec<u8> = ui.input(|i| {
                 let mut out = Vec::new();
@@ -441,193 +647,69 @@ impl WorldView {
                 out
             });
             if keys.contains(&27) {
-                self.selected = None;
-            } else {
-                if let Some(anchor) = self.selected {
-                    for k in keys {
-                        self.sim.press(anchor, k);
-                    }
+                self.selected.clear();
+            } else if let Some(id) = self.selected.first().copied() {
+                for k in keys {
+                    self.sim.press(id, k);
                 }
             }
-        } else if response.hovered() || response.has_focus() {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                if self.pasting.take().is_some() {
-                    self.status = None;
-                } else if self.selected.take().is_none() && self.selected_block.take().is_none() {
-                    self.selection = None;
-                }
-            }
-            // Clipboard: egui turns Ctrl+C/X/V into these events.
-            let events = ui.input(|i| i.events.clone());
-            for e in events {
-                match e {
-                    egui::Event::Copy => {
-                        if let Some(t) = self.copy() {
-                            ui.ctx().copy_text(t);
-                        }
-                    }
-                    egui::Event::Cut => {
-                        if let Some(t) = self.cut() {
-                            ui.ctx().copy_text(t);
-                        }
-                    }
-                    egui::Event::Paste(t) => self.start_paste(Some(&t)),
-                    _ => {}
-                }
-            }
-            if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-                self.delete_selection();
-            }
-            if self.selection.is_some() && self.pasting.is_none() {
-                let step = ui.input(|i| {
-                    let mut d = (0, 0);
-                    if i.key_pressed(egui::Key::ArrowRight) {
-                        d.0 += 1
-                    }
-                    if i.key_pressed(egui::Key::ArrowLeft) {
-                        d.0 -= 1
-                    }
-                    if i.key_pressed(egui::Key::ArrowDown) {
-                        d.1 += 1
-                    }
-                    if i.key_pressed(egui::Key::ArrowUp) {
-                        d.1 -= 1
-                    }
-                    d
-                });
-                if step != (0, 0) {
-                    self.move_selection(step.0, step.1);
-                }
-            }
-            let (rotate, back) = ui.input(|i| (i.key_pressed(egui::Key::R), i.modifiers.shift));
-            if rotate {
-                match &mut self.pasting {
-                    // Three turns clockwise are one counter-clockwise.
-                    Some(c) => {
-                        for _ in 0..if back { 3 } else { 1 } {
-                            *c = c.rotated();
-                        }
-                    }
-                    None if back => self.facing = self.facing.ccw(),
-                    None => self.facing = self.facing.cw(),
-                }
-            }
-            self.shortcut_keys(ui);
-            let (undo, redo) = ui.input(|i| {
-                let cmd = i.modifiers.command;
-                (
-                    cmd && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
-                    cmd && (i.key_pressed(egui::Key::Y)
-                        || (i.modifiers.shift && i.key_pressed(egui::Key::Z))),
-                )
-            });
-            if undo {
-                self.undo();
-            }
-            if redo {
-                self.redo();
-            }
+            return;
         }
-
-        // Pointer: which cell?
-        self.hover = response
-            .hover_pos()
-            .map(|p| self.pick(origin, p, self.layer));
-
-        // Pasting: a click puts the blocks down; right click stops.
-        let shift = ui.input(|i| i.modifiers.shift);
-        if self.pasting.is_some() && !space {
-            if let (true, Some(cell)) = (response.clicked(), self.hover) {
-                self.paste_at(cell);
-            }
-            if response.secondary_clicked() {
-                self.pasting = None;
-                self.status = None;
-            }
-        } else if (self.selecting() || shift) && !space {
-            // Selecting: drag a rectangle; a click selects one cell (and the
-            // device there).
-            if response.drag_started_by(egui::PointerButton::Primary) {
-                let press = ui.input(|i| i.pointer.press_origin());
-                self.sel_start = press.map(|p| self.pick(origin, p, self.layer));
-            }
-            if let (Some(a), Some(b)) = (self.sel_start, self.hover) {
-                if response.dragged_by(egui::PointerButton::Primary) {
-                    self.selection = Some(Region::between(a, b));
-                }
-            }
-            if response.drag_stopped() {
-                self.sel_start = None;
-            }
-            if let (true, Some(cell)) = (response.clicked(), self.hover) {
-                self.selection = Some(Region::between(cell, cell));
-                self.selected = self.world.device_at(cell).map(|d| d.0);
-            }
-            if response.secondary_clicked() {
-                self.selection = None;
-            }
-        } else if !space {
-            // A drag is only recognized once the pointer has moved; paint the
-            // cell where the press started too.
-            if response.drag_started() {
-                self.painted = None;
-                self.wire_end = None;
-                let press = ui.input(|i| i.pointer.press_origin());
-                if let Some(start) = press.map(|p| self.pick(origin, p, self.layer)) {
-                    if response.dragged_by(egui::PointerButton::Primary) {
-                        self.painted = Some(start);
-                        self.place(start, false);
-                    } else if response.dragged_by(egui::PointerButton::Secondary) {
-                        self.painted = Some(start);
-                        self.erase(start);
-                    }
-                }
-            }
-            if let Some(cell) = self.hover {
-                let primary =
-                    response.clicked() || response.dragged_by(egui::PointerButton::Primary);
-                let secondary = response.secondary_clicked()
-                    || response.dragged_by(egui::PointerButton::Secondary);
-                if response.clicked() || response.secondary_clicked() {
-                    self.painted = None;
-                    self.wire_end = None;
-                }
-                if primary && self.painted != Some(cell) {
-                    self.painted = Some(cell);
-                    self.place(cell, response.clicked());
-                } else if secondary && self.painted != Some(cell) {
-                    self.painted = Some(cell);
-                    self.erase(cell);
-                }
-            }
+        if !(response.hovered() || response.has_focus()) || ui.ctx().egui_wants_keyboard_input() {
+            return;
         }
-
-        // Large worlds recompile only when the pointer is released, so
-        // painting stays smooth.
-        let held = ui.input(|i| i.pointer.any_down());
-        self.defer = held && self.sim.slow();
-
-        // Simulate and draw.
-        self.sim.run_frame(&self.world, self.defer);
-        let screens = self.screens();
-        self.draw(&painter, origin, rect, &screens);
-        if self.sim.running
-            && self
-                .world
-                .blocks()
-                .any(|(_, b)| matches!(b, Block::Clock { .. }))
-            || self.typing()
-            || self.defer
-        {
-            ui.ctx().request_repaint();
-        }
-    }
-
-    /// Layers (Q/E, Page Up/Down), the palette (1–9), the select tool (V),
-    /// the clocks (P, N) and the whole world (Home). Not with Ctrl, Alt or
-    /// Cmd held: those keys belong to other shortcuts.
-    fn shortcut_keys(&mut self, ui: &Ui) {
         use egui::Key;
+        if ui.input(|i| i.key_pressed(Key::Escape)) && self.placing.take().is_none() {
+            self.selected.clear();
+        }
+        let events = ui.input(|i| i.events.clone());
+        for e in events {
+            match e {
+                egui::Event::Copy => {
+                    if let Some(t) = self.copy() {
+                        ui.ctx().copy_text(t);
+                    }
+                }
+                egui::Event::Cut => {
+                    if let Some(t) = self.cut() {
+                        ui.ctx().copy_text(t);
+                    }
+                }
+                egui::Event::Paste(t) => {
+                    let at = self.drop_point();
+                    self.paste(Some(&t), at);
+                }
+                _ => {}
+            }
+        }
+        if ui.input(|i| i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace)) {
+            if !self.selected.is_empty() {
+                self.delete_selected();
+            } else if let Some(to) = hover.wire {
+                self.edit(Edit::Wire { to, from: None });
+            }
+        }
+        let (undo, redo, dup, all) = ui.input(|i| {
+            let cmd = i.modifiers.command;
+            (
+                cmd && !i.modifiers.shift && i.key_pressed(Key::Z),
+                cmd && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z))),
+                cmd && i.key_pressed(Key::D),
+                cmd && i.key_pressed(Key::A),
+            )
+        });
+        if undo {
+            self.undo();
+        }
+        if redo {
+            self.redo();
+        }
+        if dup {
+            self.duplicate();
+        }
+        if all {
+            self.selected = self.world.parts().map(|(id, _)| id).collect();
+        }
         const DIGITS: [Key; 9] = [
             Key::Num1,
             Key::Num2,
@@ -639,37 +721,18 @@ impl WorldView {
             Key::Num8,
             Key::Num9,
         ];
-        let (layer, digit, select, pause, step, home) = ui.input(|i| {
+        let (digit, pause, step, home) = ui.input(|i| {
             let plain = !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt;
             let k = |key| plain && i.key_pressed(key);
             (
-                k(Key::E) as i32 + k(Key::PageUp) as i32
-                    - k(Key::Q) as i32
-                    - k(Key::PageDown) as i32,
                 DIGITS.iter().position(|d| k(*d)),
-                k(Key::V),
                 k(Key::P),
                 k(Key::N),
                 k(Key::Home),
             )
         });
-        if layer != 0 {
-            self.set_layer(self.layer + layer);
-        }
-        if let Some((_, b, _)) = digit.and_then(|d| palette().into_iter().nth(d)) {
-            self.brush = Some(Brush { block: b });
-            self.pasting = None;
-        }
-        if select {
-            if self.selecting() {
-                self.brush = self
-                    .last_brush
-                    .take()
-                    .or(Some(Brush { block: Block::Wire }));
-            } else {
-                self.last_brush = self.brush.take();
-                self.pasting = None;
-            }
+        if let Some(item) = digit.and_then(|d| palette().into_iter().nth(d)) {
+            self.placing = Some(item.kind);
         }
         if pause {
             self.sim.running = !self.sim.running;
@@ -682,142 +745,290 @@ impl WorldView {
         }
     }
 
-    /// Edit layer `z`. There is no limit, up or down.
-    pub fn set_layer(&mut self, z: i32) {
-        let lim = makine_world::world::MAX_COORD;
-        self.layer = z.clamp(-lim, lim);
-    }
-
-    /// Remove the block at `cell` (a whole device if it is part of one).
-    fn erase(&mut self, cell: Pos) {
-        if let Some(e) = self.world.remove(cell) {
-            if self.world.device_at(cell).map(|d| d.0) == self.selected {
-                self.selected = None;
-            }
-            self.edit(e);
-        }
-    }
-
-    /// Place the brush at `cell` (`click`: a single click, not a drag).
-    /// Clicking a device selects it, clicking a clock or a port selects it
-    /// for its settings, and clicking a switch toggles it unless the brush
-    /// is a switch facing another way (then it is replaced).
-    fn place(&mut self, cell: Pos, click: bool) {
-        if click
-            && matches!(
-                self.world.get(cell),
-                Some(Block::Clock { .. } | Block::Port { .. })
-            )
-        {
-            self.selected_block = Some(cell);
-            return;
-        }
-        // Devices are selected by clicking them, never painted over.
-        if let Some((anchor, _, _)) = self.world.device_at(cell) {
-            if click {
-                self.selected = Some(anchor);
-            }
-            return;
-        }
-        if let Some(Brush {
-            block: Block::Device { device, .. },
-        }) = &self.brush
-        {
-            if !click {
-                return;
-            }
-            match self.world.place_device(device.clone(), cell, self.facing) {
-                Some(e) => {
-                    self.edit(e);
-                    self.selected = Some(cell);
-                    self.status = None;
+    fn gestures(&mut self, ui: &Ui, response: &egui::Response, l: &Layout, hover: &Hover) {
+        let z = self.zoom;
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            // A drag is recognized only once the pointer has moved; look at
+            // what was under it when it was pressed.
+            let press = ui
+                .input(|i| i.pointer.press_origin())
+                .or(ui.ctx().pointer_interact_pos());
+            let at = press.map_or_else(Hover::default, |p| self.hover_at(l, p, false));
+            let shift = ui.input(|i| i.modifiers.shift);
+            let held = at
+                .sink
+                .and_then(|(to, _)| Some((to, self.world.wire_into(to)?)));
+            self.drag = if let Some((from, _)) = at.source {
+                Drag::Wire(from)
+            } else if let Some((to, from)) = held {
+                // Pulling a wire off an input: drop it on another input to
+                // move it, or on empty board to cut it.
+                self.edit(Edit::Wire { to, from: None });
+                Drag::Wire(from)
+            } else if let Some(id) = at.part.filter(|_| !shift) {
+                if !self.selected.contains(&id) {
+                    self.selected = [id].into();
                 }
-                None => {
-                    self.status = Some(format!("{} buraya sığmıyor", device.name()));
-                }
-            }
-            return;
-        }
-        if let (true, Some(Block::Switch { on, facing })) = (click, self.world.get(cell).cloned()) {
-            if !matches!(
-                self.brush.as_ref().map(|b| &b.block),
-                Some(Block::Switch { .. })
-            ) || self.world.get(cell).and_then(|b| b.facing()) == Some(self.facing)
-            {
-                self.edit(Edit::Set {
-                    pos: cell,
-                    block: Some(Block::Switch { on: !on, facing }),
-                });
-                return;
-            }
-        }
-        self.free_port_name(Some(cell));
-        let Some(brush) = &self.brush else { return };
-        if matches!(brush.block, Block::Wire) {
-            // Wires connect where they are drawn (see makine_world::wire).
-            let from = self.wire_end.filter(|_| !click);
-            let e = makine_world::wire::draw_wire(&self.world, from, cell, click);
-            self.edit(e);
-            self.wire_end = Some(cell);
-            return;
-        }
-        let mut block = brush.block.clone();
-        while block.facing().is_some_and(|f| f != self.facing) {
-            block = block.rotated();
-        }
-        if self.world.get(cell) != Some(&block) {
-            // The block and the wires beside it linking to its pins, as one
-            // edit (one undo).
-            let mut after = self.world.clone();
-            let set = Edit::Set {
-                pos: cell,
-                block: Some(block),
+                self.moving = Some(
+                    self.selected
+                        .iter()
+                        .filter_map(|id| Some((*id, self.world.part(*id)?.pos)))
+                        .collect(),
+                );
+                Drag::Parts
+            } else if shift {
+                Drag::Select(l.to_world(press.unwrap_or_default()))
+            } else {
+                Drag::Pan
             };
-            after.apply(set.clone());
-            let links = makine_world::wire::link_to_block(&after, cell);
-            self.edit(Edit::Batch(vec![set, links]));
-            self.next_port_name();
+        } else if response.drag_started_by(egui::PointerButton::Middle) {
+            self.drag = Drag::Pan;
+        }
+        if response.dragged() {
+            let d = response.drag_delta();
+            match self.drag {
+                Drag::Pan => self.offset += d,
+                Drag::Parts => {
+                    // Moved locally every frame; one edit when released.
+                    for id in self.selected.clone() {
+                        if let Some(mut p) = self.world.part(id).cloned() {
+                            p.pos = Pos::new(p.pos.x + d.x / z, p.pos.y + d.y / z);
+                            self.world.apply(Edit::Part { id, part: Some(p) });
+                        }
+                    }
+                }
+                Drag::Select(a) => {
+                    if let Some(b) = self.hover_pos {
+                        let r = Rect::from_two_pos(a, b);
+                        self.selected = l
+                            .parts
+                            .iter()
+                            .filter(|(id, _, _)| {
+                                l.part_rect(*id).is_some_and(|pr| r.intersects(pr))
+                            })
+                            .map(|(id, _, _)| *id)
+                            .collect();
+                    }
+                }
+                _ => {}
+            }
+        }
+        if response.drag_stopped() {
+            match self.drag {
+                Drag::Wire(from) => {
+                    if let Some((to, _)) = hover.sink {
+                        if self.fits(l, from, to) {
+                            self.edit(Edit::Wire {
+                                to,
+                                from: Some(from),
+                            });
+                        } else {
+                            self.status = Some("Bu iki ucun genişliği uymuyor.".into());
+                        }
+                    }
+                }
+                Drag::Parts => self.finish_move(),
+                _ => {}
+            }
+            self.drag = Drag::None;
         }
     }
 
-    /// After placing a port, the port in hand gets the next free name:
-    /// a, b, c … or x0, x1, x2 … (numbered names become one bus when the
-    /// world turns into a chip).
-    fn next_port_name(&mut self) {
-        if let Some(Brush {
-            block: Block::Port { name, .. },
-        }) = &mut self.brush
-        {
-            *name = next_name(name);
-        }
-        self.free_port_name(None);
-    }
-
-    /// If the port in hand has a name already used by another port (not the
-    /// one at `replacing`), move it on to the next free one.
-    pub fn free_port_name(&mut self, replacing: Option<Pos>) {
-        let Some(Brush {
-            block: Block::Port { name, .. },
-        }) = &mut self.brush
-        else {
+    /// End a move: put the parts back where they were and move them in one
+    /// edit, snapped to whole units.
+    fn finish_move(&mut self) {
+        let Some(start) = self.moving.take() else {
             return;
         };
-        let taken: std::collections::HashSet<String> = self
-            .world
-            .blocks()
-            .filter(|(p, _)| Some(*p) != replacing)
-            .filter_map(|(_, b)| match b {
-                Block::Port { name, .. } => Some(name.clone()),
-                _ => None,
-            })
-            .collect();
+        let mut edits = Vec::new();
+        for (id, from) in start {
+            let Some(mut p) = self.world.part(id).cloned() else {
+                continue;
+            };
+            let to = Pos::new(p.pos.x.round(), p.pos.y.round());
+            p.pos = from;
+            self.world.apply(Edit::Part {
+                id,
+                part: Some(p.clone()),
+            });
+            if to != from {
+                p.pos = to;
+                edits.push(Edit::Part { id, part: Some(p) });
+            }
+        }
+        if !edits.is_empty() {
+            self.edit(Edit::Batch(edits));
+        }
+    }
+
+    fn clicks(&mut self, ui: &Ui, response: &egui::Response, hover: &Hover) {
+        if !response.clicked() {
+            return;
+        }
+        if let Some(kind) = self.placing.clone() {
+            let at = self.drop_point() - vec2(30.0, 20.0);
+            let id = self.add(kind, at);
+            self.selected = [id].into();
+            // Keep the part in hand to place more; Esc lets go.
+            return;
+        }
+        let shift = ui.input(|i| i.modifiers.shift);
+        let Some(id) = hover.part else {
+            if !shift {
+                self.selected.clear();
+            }
+            return;
+        };
+        if shift {
+            if !self.selected.remove(&id) {
+                self.selected.insert(id);
+            }
+            return;
+        }
+        // Clicking a switch flips it, clicking an input changes its value.
+        let p = self.world.part(id).cloned();
+        let new = match p.as_ref().map(|p| &p.kind) {
+            Some(Kind::Switch { on }) => Some(Kind::Switch { on: !on }),
+            Some(Kind::Input { name, width, value }) => {
+                let v = if *width == 1 {
+                    value ^ 1
+                } else {
+                    value.wrapping_add(1) & mask(*width)
+                };
+                Some(Kind::Input {
+                    name: name.clone(),
+                    width: *width,
+                    value: v,
+                })
+            }
+            _ => None,
+        };
+        if let (Some(kind), Some(p)) = (new, p) {
+            self.edit(Edit::Part {
+                id,
+                part: Some(Placed { kind, pos: p.pos }),
+            });
+        }
+        self.selected = [id].into();
+    }
+
+    /// Right click: a part's or wire's menu.
+    fn context_menu(&mut self, ui: &Ui, response: &egui::Response, hover: &Hover) {
+        let menu_id = EguiId::unique("world-menu-target");
+        if response.secondary_clicked() {
+            if let Some(id) = hover.part {
+                if !self.selected.contains(&id) {
+                    self.selected = [id].into();
+                }
+            }
+            let target = match (hover.sink, hover.part, hover.wire) {
+                (Some((to, _)), _, _) if self.world.wire_into(to).is_some() => Menu::Wire(to),
+                (_, Some(_), _) => Menu::Part,
+                (_, _, Some(to)) => Menu::Wire(to),
+                _ => Menu::Board,
+            };
+            ui.ctx().data_mut(|d| d.insert_temp(menu_id, target));
+        }
+        response.context_menu(|ui| {
+            let target = ui
+                .ctx()
+                .data(|d| d.get_temp::<Menu>(menu_id))
+                .unwrap_or(Menu::Board);
+            match target {
+                Menu::Wire(to) => {
+                    if ui.button("✂ Kabloyu kes").clicked() {
+                        self.edit(Edit::Wire { to, from: None });
+                        ui.close();
+                    }
+                }
+                Menu::Part => {
+                    let n = self.selected.len();
+                    if ui.button("Çoğalt (Ctrl+D)").clicked() {
+                        self.duplicate();
+                        ui.close();
+                    }
+                    if ui.button("Kopyala (Ctrl+C)").clicked() {
+                        if let Some(t) = self.copy() {
+                            ui.ctx().copy_text(t);
+                        }
+                        ui.close();
+                    }
+                    let label = if n > 1 {
+                        format!("{n} parçayı sil")
+                    } else {
+                        "Sil".into()
+                    };
+                    if ui.button(label).clicked() {
+                        self.delete_selected();
+                        ui.close();
+                    }
+                }
+                Menu::Board => {
+                    if ui
+                        .add_enabled(self.clipboard.is_some(), egui::Button::new("Yapıştır"))
+                        .clicked()
+                    {
+                        let at = self.drop_point();
+                        self.paste(None, at);
+                        ui.close();
+                    }
+                    ui.label(
+                        egui::RichText::new(
+                            "Parça eklemek için sağdaki listeden sürükle ya da tıkla.",
+                        )
+                        .weak()
+                        .small(),
+                    );
+                }
+            }
+        });
+    }
+
+    fn set_cursor(&self, ui: &Ui, hover: &Hover) {
+        let icon = match self.drag {
+            Drag::Parts | Drag::Pan => egui::CursorIcon::Grabbing,
+            Drag::Wire(_) | Drag::Select(_) => egui::CursorIcon::Crosshair,
+            Drag::None if self.placing.is_some() => egui::CursorIcon::Copy,
+            Drag::None if hover.source.is_some() || hover.sink.is_some() => {
+                egui::CursorIcon::Crosshair
+            }
+            Drag::None if hover.wire.is_some() => egui::CursorIcon::PointingHand,
+            Drag::None => match hover.part.and_then(|id| self.world.part(id)) {
+                Some(Placed {
+                    kind: Kind::Switch { .. } | Kind::Input { .. },
+                    ..
+                }) => egui::CursorIcon::PointingHand,
+                Some(_) => egui::CursorIcon::Grab,
+                None => return,
+            },
+        };
+        ui.ctx().set_cursor_icon(icon);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Menu {
+    Board,
+    Part,
+    Wire(End),
+}
+
+/// `kind` with a port name no part of `world` uses yet (counting up: a, b,
+/// c …; x0, x1 …).
+pub fn free_name(world: &World, mut kind: Kind) -> Kind {
+    let taken: BTreeSet<String> = world
+        .parts()
+        .filter_map(|(_, p)| p.kind.port_name().map(str::to_string))
+        .collect();
+    if let Kind::Input { name, .. } | Kind::Output { name, .. } = &mut kind {
         for _ in 0..10_000 {
             if !taken.contains(name.as_str()) {
-                return;
+                break;
             }
             *name = next_name(name);
         }
     }
+    kind
 }
 
 /// The name after `name`: the number at its end counts up (`x0` → `x1`,

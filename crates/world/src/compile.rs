@@ -1,131 +1,68 @@
-//! World → circuit. The world becomes a [`ChipDef`] made of NAND gates, so
-//! the existing simulator (and its tests and packaging) runs it unchanged.
+//! Turning a world into a circuit.
 //!
-//! 1. Every connection point is a *node*: one per wire/via/lamp cell, two
-//!    per crossing (east-west and north-south), one per gate or device pin.
-//! 2. Touching nodes are merged (union-find) into *nets*.
-//! 3. Each net has at most one driver: a gate output, a switch, a clock or
-//!    an input port. Two drivers on one net are a short circuit.
-//! 4. Gates become NAND parts, switches/clocks/input ports become chip
-//!    inputs, devices become native parts or library chips, and every
-//!    driven net gets a chip output so the view can read any wire.
+//! Gates become NAND parts, devices native parts, library parts stay what
+//! they are. Switches, clocks and inputs become the chip's inputs. Every
+//! output pin that has a wire gets a chip output too (a *probe*), so the
+//! view can show the value on any wire.
 //!
-//! The world may be broken (a device cell overwritten by another player):
-//! pins that are gone are simply left unconnected.
+//! [`compile`] builds the circuit the world view runs; [`crate::chip`]
+//! builds a chip the player keeps, from the same parts.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt;
 
-use makine_sim::{ChipDef, Library, NativeDef, Part, PartKind, Pin, Sink, Source, Wire};
+use makine_sim::{ChipDef, Library, NativeDef, Part, PartKind, PartPins, Pin, Sink, Source, Wire};
 
-use crate::block::{Block, Dir, Gate};
-use crate::device::{self, Device};
-use crate::world::{Pos, World};
-
-/// Which signal of a cell: crossings carry two.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Lane {
-    /// The cell's only signal (or a crossing's east-west one).
-    Main,
-    /// A crossing's north-south signal.
-    Cross,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CompileError {
-    /// More than one output drives the same net; the positions are the
-    /// drivers.
-    ShortCircuit(Vec<Pos>),
-    /// Two ports with the same name.
-    DuplicatePort(String),
-}
-
-impl fmt::Display for CompileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CompileError::ShortCircuit(p) => write!(
-                f,
-                "kısa devre: {} çıkış aynı tele bağlı ({})",
-                p.len(),
-                p.iter()
-                    .map(|p| format!("{},{},{}", p.x, p.y, p.z))
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ),
-            CompileError::DuplicatePort(n) => write!(f, "'{n}' adında iki port var"),
-        }
-    }
-}
-
-impl std::error::Error for CompileError {}
+use crate::part::{Gate, Kind};
+use crate::world::{End, Id, World};
 
 /// Where a chip input's value comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputSource {
-    Switch(Pos),
-    Clock { pos: Pos, period: u32 },
-    Port(String),
+    Switch,
+    Clock { period: u32 },
+    Port,
 }
 
-/// The circuit of a world, plus how to find each cell's signal in it.
+/// Why a part or wire was left out of the circuit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Problem {
+    /// A chip that is not in the library.
+    MissingChip { part: Id, name: String },
+    /// A wire between pins of different widths (other than one bit fanned
+    /// out to every bit).
+    Width { to: End, from: u8, into: u8 },
+}
+
+impl fmt::Display for Problem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Problem::MissingChip { name, .. } => write!(f, "'{name}' çipi kütüphanende yok"),
+            Problem::Width { from, into, .. } => {
+                write!(f, "{from} bitlik bir tel {into} bitlik bir uca bağlı")
+            }
+        }
+    }
+}
+
+/// The circuit of a world, plus how to find each wire's value in it.
 #[derive(Clone, Debug)]
 pub struct Compiled {
     pub def: ChipDef,
-    /// Net of each (cell, lane). Gates and inputs map to the net they
-    /// drive, output ports and device pin cells to the net they read.
-    pub nets: HashMap<(Pos, Lane), usize>,
-    /// For each net, the chip output observing it (driven nets only).
-    pub net_output: Vec<Option<usize>>,
-    /// Chip inputs in order.
-    pub inputs: Vec<InputSource>,
-    /// Lamps: position and the chip outputs of the wires touching it (a
-    /// lamp is lit when any of them is 1).
-    pub lamps: Vec<(Pos, Vec<usize>)>,
-    /// Output ports: name and chip output.
-    pub ports: Vec<(String, usize)>,
-    /// Devices by anchor, with their native part's name (if they have
-    /// behaviour) and the chip outputs showing their input wires.
-    pub devices: Vec<DeviceInfo>,
-    /// Native parts the circuit uses, see [`Compiled::library`].
+    /// Chip inputs in order: the part setting each one.
+    pub inputs: Vec<(Id, InputSource)>,
+    /// The chip output showing each wired output pin.
+    pub probes: HashMap<End, usize>,
+    /// Native device parts: part id and native name.
+    pub devices: Vec<(Id, String)>,
+    /// Native parts the circuit uses, see [`Compiled::library_with`].
     pub natives: Vec<(String, NativeDef)>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DeviceInfo {
-    pub anchor: Pos,
-    pub device: Device,
-    pub native: Option<String>,
-    /// For each input pin: the chip output carrying its value, if driven.
-    /// (While building, this temporarily holds the pin's net.)
-    pub inputs: Vec<Option<usize>>,
+    /// Parts and wires left out.
+    pub problems: Vec<Problem>,
 }
 
 impl Compiled {
-    pub fn net_at(&self, pos: Pos, lane: Lane) -> Option<usize> {
-        self.nets.get(&(pos, lane)).copied()
-    }
-
-    /// The chip output showing a cell's value, if the cell is on a driven net.
-    pub fn output_at(&self, pos: Pos, lane: Lane) -> Option<usize> {
-        self.net_output[self.net_at(pos, lane)?]
-    }
-
-    /// Whether the lamp at `pos` is lit, given every chip output's value.
-    pub fn lamp_lit(&self, pos: Pos, values: &[u64]) -> bool {
-        self.lamps
-            .iter()
-            .find(|(p, _)| *p == pos)
-            .is_some_and(|(_, outs)| outs.iter().any(|&o| values.get(o) == Some(&1)))
-    }
-
-    /// The library to simulate [`Compiled::def`] with: the devices' native
-    /// parts.
-    pub fn library(&self) -> Library {
-        self.library_with(&Library::new())
-    }
-
-    /// `base` (the player's chips, for chip blocks) plus the devices'
-    /// native parts.
+    /// `base` (the player's chips) plus the devices' native parts.
     pub fn library_with(&self, base: &Library) -> Library {
         let mut lib = base.clone();
         for (name, n) in &self.natives {
@@ -133,517 +70,252 @@ impl Compiled {
         }
         lib
     }
-}
 
-struct Uf(Vec<usize>);
-
-impl Uf {
-    fn make(&mut self) -> usize {
-        self.0.push(self.0.len());
-        self.0.len() - 1
+    /// The chip output carrying output pin `end`, if it is wired.
+    pub fn probe(&self, end: End) -> Option<usize> {
+        self.probes.get(&end).copied()
     }
 
-    fn find(&mut self, mut n: usize) -> usize {
-        while self.0[n] != n {
-            self.0[n] = self.0[self.0[n]];
-            n = self.0[n];
-        }
-        n
-    }
-
-    fn union(&mut self, a: usize, b: usize) {
-        let (a, b) = (self.find(a), self.find(b));
-        if a != b {
-            self.0[b] = a;
-        }
-    }
-}
-
-fn is_conductor(b: &Block) -> bool {
-    matches!(
-        b,
-        Block::Wire | Block::Trace { .. } | Block::Straight { .. } | Block::Cross | Block::Via
-    )
-}
-
-/// The lane of a conductor that a wire on side `side` joins.
-fn lane(b: &Block, side: Dir) -> Lane {
-    match b {
-        Block::Cross if !side.is_horizontal() => Lane::Cross,
-        _ => Lane::Main,
-    }
-}
-
-/// Nets of a world: union-find over connection points.
-struct Nets {
-    uf: Uf,
-    /// Conductor cells, per lane.
-    cell: HashMap<(Pos, Lane), usize>,
-    /// Pins of gates, devices and other blocks, per side.
-    pin: HashMap<(Pos, Dir), usize>,
-}
-
-impl Nets {
-    fn build(world: &World, blocks: &BTreeMap<Pos, &Block>) -> Nets {
-        let mut n = Nets {
-            uf: Uf(Vec::new()),
-            cell: HashMap::new(),
-            pin: HashMap::new(),
-        };
-        for (&pos, &block) in blocks {
-            if is_conductor(block) {
-                n.cell.insert((pos, Lane::Main), n.uf.make());
-                if matches!(block, Block::Cross) {
-                    n.cell.insert((pos, Lane::Cross), n.uf.make());
-                }
-                continue;
-            }
-            for d in Dir::ALL {
-                if world.pin(pos, d).is_some() {
-                    n.pin.insert((pos, d), n.uf.make());
-                }
-            }
-        }
-        for (&pos, &block) in blocks {
-            for d in Dir::ALL {
-                n.join_neighbour(world, blocks, pos, block, d);
-            }
-            if matches!(block, Block::Via) && matches!(blocks.get(&pos.up()), Some(Block::Via)) {
-                let (a, b) = (n.cell[&(pos, Lane::Main)], n.cell[&(pos.up(), Lane::Main)]);
-                n.uf.union(a, b);
-            }
-        }
-        n
-    }
-
-    /// The node of the block at `pos` facing side `side`, if it connects.
-    fn node(&self, world: &World, pos: Pos, block: &Block, side: Dir) -> Option<usize> {
-        if is_conductor(block) {
-            block.accepts_wire_from(side).then_some(())?;
-            self.cell.get(&(pos, lane(block, side))).copied()
-        } else {
-            self.pin
-                .get(&(pos, side))
-                .copied()
-                .filter(|_| world.pin(pos, side).is_some())
-        }
-    }
-
-    fn join_neighbour(
-        &mut self,
-        world: &World,
-        blocks: &BTreeMap<Pos, &Block>,
-        pos: Pos,
-        block: &Block,
-        d: Dir,
-    ) {
-        let npos = pos.step(d);
-        let Some(&nb) = blocks.get(&npos) else { return };
-        // Pin to pin connects only an output to an input (gates back to
-        // back); two outputs or two inputs side by side do not touch.
-        if !is_conductor(block)
-            && !is_conductor(nb)
-            && world.pin(pos, d) == world.pin(npos, d.opposite())
-        {
-            return;
-        }
-        let here = self.node(world, pos, block, d);
-        let there = self.node(world, npos, nb, d.opposite());
-        if let (Some(a), Some(b)) = (here, there) {
-            self.uf.union(a, b);
-        }
-    }
-
-    /// Renumber nets densely: (cell nets, pin nets, net count).
-    #[allow(clippy::type_complexity)]
-    fn number(
-        mut self,
-    ) -> (
-        HashMap<(Pos, Lane), usize>,
-        HashMap<(Pos, Dir), usize>,
-        usize,
-    ) {
-        let mut root_net: HashMap<usize, usize> = HashMap::new();
-        let mut net_of = |uf: &mut Uf, n: usize| -> usize {
-            let r = uf.find(n);
-            let next = root_net.len();
-            *root_net.entry(r).or_insert(next)
-        };
-        let cell = self
-            .cell
+    /// The native name of device part `id`.
+    pub fn native(&self, id: Id) -> Option<&str> {
+        self.devices
             .iter()
-            .map(|(&k, &n)| (k, net_of(&mut self.uf, n)))
-            .collect();
-        let pin = self
-            .pin
-            .iter()
-            .map(|(&k, &n)| (k, net_of(&mut self.uf, n)))
-            .collect();
-        (cell, pin, root_net.len())
+            .find(|(d, _)| *d == id)
+            .map(|(_, n)| n.as_str())
     }
 }
 
-/// Builds the chip of a world, net by net.
-struct Builder {
-    def: ChipDef,
-    pin_net: HashMap<(Pos, Dir), usize>,
-    /// The driver of each net and where it is.
-    driver: Vec<Option<(Source, Pos)>>,
-    shorts: BTreeMap<usize, Vec<Pos>>,
-    /// Part inputs to wire from their net's driver once all are known.
-    pending: Vec<(Sink, usize)>,
-    port_names: Vec<String>,
+/// How the parts of a world are built.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// To run in the world view: switches, clocks and inputs are chip
+    /// inputs, every wire is probed.
+    Run,
+    /// To keep as a chip: input parts are its inputs, output parts its
+    /// outputs, switches constants.
+    Chip,
 }
 
-impl Builder {
-    fn net(&self, pos: Pos, side: Dir) -> Option<usize> {
-        self.pin_net.get(&(pos, side)).copied()
-    }
+/// What a part became: the sinks each input pin feeds and the source of
+/// each output pin.
+#[derive(Default)]
+struct Built {
+    inputs: Vec<Vec<Sink>>,
+    outputs: Vec<Source>,
+    pins: Option<PartPins>,
+}
 
-    /// `src` drives the net at (`pos`, `side`), if that pin is connected.
-    fn drive(&mut self, pos: Pos, side: Dir, src: Source) {
-        let Some(net) = self.net(pos, side) else {
-            return;
-        };
-        match self.driver[net] {
-            None => self.driver[net] = Some((src, pos)),
-            Some((_, first)) => self
-                .shorts
-                .entry(net)
-                .or_insert_with(|| vec![first])
-                .push(pos),
+pub(crate) struct Builder<'a> {
+    pub def: ChipDef,
+    lib: &'a Library,
+    mode: Mode,
+    built: HashMap<Id, Built>,
+    pub inputs: Vec<(Id, InputSource)>,
+    pub devices: Vec<(Id, String)>,
+    pub natives: Vec<(String, NativeDef)>,
+    pub problems: Vec<Problem>,
+}
+
+impl<'a> Builder<'a> {
+    pub fn new(name: &str, lib: &'a Library, mode: Mode) -> Self {
+        Self {
+            def: ChipDef::new(name, &[], &[]),
+            lib,
+            mode,
+            built: HashMap::new(),
+            inputs: Vec::new(),
+            devices: Vec::new(),
+            natives: Vec::new(),
+            problems: Vec::new(),
         }
     }
 
-    /// Part input `sink` reads the net at (`pos`, `side`) (0 if none).
-    fn read(&mut self, sink: Sink, pos: Pos, side: Dir) {
-        if let Some(net) = self.net(pos, side) {
-            self.pending.push((sink, net));
-        }
-    }
-
-    fn add_part(&mut self, kind: PartKind) -> usize {
-        self.def.parts.push(Part::new(kind));
+    fn add_part(&mut self, part: Part) -> usize {
+        self.def.parts.push(part);
         self.def.parts.len() - 1
     }
 
-    fn claim_port(&mut self, name: &str) -> Result<(), CompileError> {
-        if self.port_names.iter().any(|n| n == name) {
-            return Err(CompileError::DuplicatePort(name.to_string()));
-        }
-        self.port_names.push(name.to_string());
-        Ok(())
+    fn chip_input(&mut self, id: Id, pin: Pin, src: InputSource) -> Source {
+        self.def.inputs.push(pin);
+        self.inputs.push((id, src));
+        Source::Input(self.def.inputs.len() - 1)
     }
 
-    /// Switches, clocks and input ports become chip inputs.
-    fn input(&mut self, pos: Pos, block: &Block) -> Result<Option<InputSource>, CompileError> {
-        let (pin_name, source, facing) = match block {
-            Block::Switch { facing, .. } => (
-                format!("sw{},{},{}", pos.x, pos.y, pos.z),
-                InputSource::Switch(pos),
-                *facing,
-            ),
-            Block::Clock { facing, period } => (
-                format!("clk{},{},{}", pos.x, pos.y, pos.z),
-                InputSource::Clock {
-                    pos,
-                    period: *period,
-                },
-                *facing,
-            ),
-            Block::Port {
-                name,
-                output: false,
-                facing,
-            } => {
-                self.claim_port(name)?;
-                (name.clone(), InputSource::Port(name.clone()), *facing)
-            }
-            _ => return Ok(None),
-        };
-        let i = self.def.inputs.len();
-        self.def.inputs.push(Pin::new(pin_name, 1));
-        self.drive(pos, facing, Source::Input(i));
-        Ok(Some(source))
+    fn constant(&mut self, width: u8, value: u64) -> Source {
+        let part = self.add_part(Part::new(PartKind::Const { width, value }));
+        Source::Part { part, pin: 0 }
     }
 
-    /// A gate, as NAND parts.
-    fn gate(&mut self, pos: Pos, gate: Gate, facing: Dir) {
-        let sides = match gate.inputs() {
-            1 => vec![facing.opposite()],
-            _ => vec![facing.ccw(), facing.cw()],
-        };
-        let mut ins = Vec::new();
-        let out = gate_parts(&mut self.def, gate, sides.len(), &mut ins);
-        for (input, sink) in ins {
-            self.read(sink, pos, sides[input]);
-        }
-        self.drive(pos, facing, out);
-    }
-
-    /// A device: a native part, a library chip, or (a display) nothing but
-    /// the nets it reads. Pins whose cells were overwritten are left out.
-    fn device(&mut self, anchor: Pos, device: &Device, facing: Dir) -> DeviceInfo {
-        let l = device::layout(device, anchor, facing);
-        let in_nets: Vec<Option<usize>> = l.inputs.iter().map(|&(p, d)| self.net(p, d)).collect();
-        let native = device.native().map(|_| {
-            let name = device.native_name(anchor);
-            let part = self.add_part(PartKind::Chip(name.clone()));
-            for (pin, &(p, d)) in l.inputs.iter().enumerate() {
-                self.read(Sink::Part { part, pin }, p, d);
-            }
-            for (pin, &(p, d)) in l.outputs.iter().enumerate() {
-                self.drive(p, d, Source::Part { part, pin });
-            }
-            name
-        });
-        if let Device::Chip {
-            name,
-            inputs,
-            outputs,
-        } = device
-        {
-            self.chip(name, inputs, outputs, &l);
-        }
-        DeviceInfo {
-            anchor,
-            device: device.clone(),
-            native,
-            inputs: in_nets,
-        }
-    }
-
-    /// A library chip: one part, with a Join gathering each input bus from
-    /// its 1-bit cells and a Split fanning each output bus out to them.
-    fn chip(&mut self, name: &str, inputs: &[Pin], outputs: &[Pin], l: &device::Layout) {
-        let chip = self.add_part(PartKind::Chip(name.to_string()));
-        let mut cells = l.inputs.iter();
-        for (j, p) in inputs.iter().enumerate() {
-            let w = p.width as usize;
-            let (part, first) = if w == 1 {
-                (chip, j)
-            } else {
-                let join = self.add_part(PartKind::Join(vec![1; w]));
-                self.def.wires.push(Wire {
-                    from: Source::Part { part: join, pin: 0 },
-                    to: Sink::Part { part: chip, pin: j },
+    /// Add part `id` to the circuit.
+    pub fn part(&mut self, id: Id, kind: &Kind) {
+        let pins = kind.pins(self.lib);
+        if pins.is_none() {
+            if let Some(name) = kind.chip_name() {
+                self.problems.push(Problem::MissingChip {
+                    part: id,
+                    name: name.into(),
                 });
-                (join, 0)
-            };
-            for (bit, &(c, d)) in cells.by_ref().take(w).enumerate() {
-                self.read(
-                    Sink::Part {
-                        part,
-                        pin: first + bit,
-                    },
-                    c,
-                    d,
-                );
             }
+            return;
         }
-        let mut cells = l.outputs.iter();
-        for (j, p) in outputs.iter().enumerate() {
-            let w = p.width as usize;
-            let (part, first) = if w == 1 {
-                (chip, j)
-            } else {
-                let split = self.add_part(PartKind::Split(vec![1; w]));
-                self.def.wires.push(Wire {
-                    from: Source::Part { part: chip, pin: j },
-                    to: Sink::Part {
-                        part: split,
-                        pin: 0,
-                    },
-                });
-                (split, 0)
-            };
-            for (bit, &(c, d)) in cells.by_ref().take(w).enumerate() {
-                self.drive(
-                    c,
-                    d,
-                    Source::Part {
-                        part,
-                        pin: first + bit,
-                    },
-                );
+        let one = |name: &str| Pin::new(name, 1);
+        let mut b = Built {
+            pins,
+            ..Default::default()
+        };
+        match kind {
+            Kind::Gate(g) => {
+                let mut ins = Vec::new();
+                let out = gate_parts(&mut self.def, *g, &mut ins);
+                b.inputs = vec![Vec::new(); g.inputs()];
+                for (input, sink) in ins {
+                    b.inputs[input].push(sink);
+                }
+                b.outputs = vec![out];
             }
-        }
-    }
-
-    /// An output port: a named chip output, 0 if nothing drives it.
-    fn output_port(&mut self, pos: Pos, name: &str, facing: Dir) -> Result<usize, CompileError> {
-        self.claim_port(name)?;
-        let src = match self
-            .net(pos, facing.opposite())
-            .and_then(|n| self.driver[n])
-        {
-            Some((src, _)) => src,
-            None => Source::Part {
-                part: self.add_part(PartKind::Const { width: 1, value: 0 }),
-                pin: 0,
+            Kind::Switch { on } => {
+                let src = match self.mode {
+                    Mode::Run => self.chip_input(id, one(&format!("sw{id}")), InputSource::Switch),
+                    Mode::Chip => self.constant(1, *on as u64),
+                };
+                b.outputs = vec![src];
+            }
+            Kind::Clock { period } => {
+                // Rejected before building a chip.
+                let src = self.chip_input(
+                    id,
+                    one(&format!("clk{id}")),
+                    InputSource::Clock { period: *period },
+                );
+                b.outputs = vec![src];
+            }
+            Kind::Input { name, width, .. } => {
+                let pin_name = match self.mode {
+                    Mode::Run => format!("in{id}"),
+                    Mode::Chip => name.clone(),
+                };
+                let src = self.chip_input(id, Pin::new(pin_name, *width), InputSource::Port);
+                b.outputs = vec![src];
+            }
+            Kind::Lamp | Kind::Output { .. } => {
+                // They read the wire into them; nothing to build.
+                b.inputs = vec![Vec::new()];
+            }
+            Kind::Device(d) => match d.native() {
+                Some(n) => {
+                    let name = d.native_name(id);
+                    let part = self.add_part(Part::new(PartKind::Chip(name.clone())));
+                    b.inputs = (0..n.inputs.len())
+                        .map(|pin| vec![Sink::Part { part, pin }])
+                        .collect();
+                    b.outputs = (0..n.outputs.len())
+                        .map(|pin| Source::Part { part, pin })
+                        .collect();
+                    self.natives.push((name.clone(), n));
+                    self.devices.push((id, name));
+                }
+                // A display only reads its input.
+                None => b.inputs = vec![Vec::new()],
             },
-        };
-        let o = self.def.outputs.len();
-        self.def.outputs.push(Pin::new(name, 1));
-        self.def.wires.push(Wire {
+            Kind::Part(p) => {
+                let part = self.add_part(p.clone());
+                let pins = b.pins.as_ref().unwrap();
+                b.inputs = (0..pins.inputs.len())
+                    .map(|pin| vec![Sink::Part { part, pin }])
+                    .collect();
+                b.outputs = (0..pins.outputs.len())
+                    .map(|pin| Source::Part { part, pin })
+                    .collect();
+            }
+        }
+        self.built.insert(id, b);
+    }
+
+    /// The source of output pin `end`, and its width.
+    pub fn source(&self, end: End) -> Option<(Source, u8)> {
+        let b = self.built.get(&end.part)?;
+        let src = *b.outputs.get(end.pin)?;
+        let width = b.pins.as_ref()?.outputs.get(end.pin)?.width;
+        Some((src, width))
+    }
+
+    fn input_width(&self, end: End) -> Option<u8> {
+        let b = self.built.get(&end.part)?;
+        Some(b.pins.as_ref()?.inputs.get(end.pin)?.width)
+    }
+
+    /// Wire every input from its wire's source. Returns the wires that
+    /// connect (from, to).
+    pub fn wires(&mut self, world: &World) -> Vec<(End, End)> {
+        let mut ok = Vec::new();
+        for (from, to) in world.wires() {
+            let (Some((src, fw)), Some(tw)) = (self.source(from), self.input_width(to)) else {
+                continue;
+            };
+            if !fits(fw, tw) {
+                self.problems.push(Problem::Width {
+                    to,
+                    from: fw,
+                    into: tw,
+                });
+                continue;
+            }
+            for &sink in &self.built[&to.part].inputs[to.pin] {
+                self.def.wires.push(Wire {
+                    from: src,
+                    to: sink,
+                });
+            }
+            ok.push((from, to));
+        }
+        ok
+    }
+}
+
+/// Whether an output `from` bits wide may drive an input `into` bits wide:
+/// the same width, one bit fanned out to every bit, or any width into a
+/// lamp (stored as 0 bits wide: it reads any wire).
+pub fn fits(from: u8, into: u8) -> bool {
+    from == into || from == 1 || into == 0
+}
+
+/// The circuit the world view runs. `lib` holds the player's chips.
+pub fn compile(world: &World, lib: &Library) -> Compiled {
+    let mut b = Builder::new(&world.name, lib, Mode::Run);
+    for (id, p) in world.parts() {
+        b.part(id, &p.kind);
+    }
+    let wired = b.wires(world);
+    // A probe per wired output pin.
+    let mut probes = HashMap::new();
+    for (from, _) in wired {
+        if probes.contains_key(&from) {
+            continue;
+        }
+        let (src, width) = b.source(from).expect("wired above");
+        let o = b.def.outputs.len();
+        b.def
+            .outputs
+            .push(Pin::new(format!("p{}_{}", from.part, from.pin), width));
+        b.def.wires.push(Wire {
             from: src,
             to: Sink::Output(o),
         });
-        Ok(o)
+        probes.insert(from, o);
     }
-}
-
-pub fn compile(world: &World) -> Result<Compiled, CompileError> {
-    let blocks: BTreeMap<Pos, &Block> = world.blocks().collect();
-    let (mut nets, pin_net, net_count) = Nets::build(world, &blocks).number();
-    let mut b = Builder {
-        def: ChipDef::new(&world.name, &[], &[]),
-        pin_net,
-        driver: vec![None; net_count],
-        shorts: BTreeMap::new(),
-        pending: Vec::new(),
-        port_names: Vec::new(),
-    };
-
-    let mut inputs = Vec::new();
-    for (&pos, &block) in &blocks {
-        inputs.extend(b.input(pos, block)?);
-    }
-    let mut devices = Vec::new();
-    for (&pos, &block) in &blocks {
-        match block {
-            Block::Gate { gate, facing } => b.gate(pos, *gate, *facing),
-            Block::Device { device, facing } => devices.push(b.device(pos, device, *facing)),
-            _ => {}
-        }
-    }
-    if let Some((_, list)) = std::mem::take(&mut b.shorts).into_iter().next() {
-        return Err(CompileError::ShortCircuit(list));
-    }
-
-    // Wire part inputs from their nets' drivers; undriven nets read 0.
-    for (sink, net) in std::mem::take(&mut b.pending) {
-        if let Some((src, _)) = b.driver[net] {
-            b.def.wires.push(Wire {
-                from: src,
-                to: sink,
-            });
-        }
-    }
-
-    // Every driven net gets a chip output, so the view can show any wire.
-    let mut net_output: Vec<Option<usize>> = vec![None; net_count];
-    for (net, d) in b.driver.iter().enumerate() {
-        if let Some((src, _)) = d {
-            let o = b.def.outputs.len();
-            b.def.outputs.push(Pin::new(format!("n{net}"), 1));
-            b.def.wires.push(Wire {
-                from: *src,
-                to: Sink::Output(o),
-            });
-            net_output[net] = Some(o);
-        }
-    }
-    for d in &mut devices {
-        for o in &mut d.inputs {
-            *o = o.and_then(|n| net_output.get(n).copied().flatten());
-        }
-    }
-
-    let mut ports = Vec::new();
-    for (&pos, &block) in &blocks {
-        if let Block::Port {
-            name,
-            output: true,
-            facing,
-        } = block
-        {
-            ports.push((name.clone(), b.output_port(pos, name, *facing)?));
-        }
-    }
-
-    // A lamp reads each side separately, so it never joins two wires.
-    let lamps = blocks
-        .iter()
-        .filter(|(_, b)| matches!(b, Block::Lamp))
-        .map(|(&p, _)| {
-            let outs = Dir::ALL
-                .iter()
-                .filter_map(|&d| net_output[b.net(p, d)?])
-                .collect();
-            (p, outs)
-        })
-        .collect();
-
-    // Non-conductor cells show the net they drive (gates, inputs) or read
-    // (output ports, device pins).
-    for (&pos, &block) in &blocks {
-        if is_conductor(block) {
-            continue;
-        }
-        let net = match block {
-            Block::Port {
-                output: true,
-                facing,
-                ..
-            } => b.net(pos, facing.opposite()),
-            Block::Device { .. } | Block::Cover { .. } => {
-                Dir::ALL.iter().find_map(|&d| b.net(pos, d))
-            }
-            other => other.facing().and_then(|f| b.net(pos, f)),
-        };
-        if let Some(n) = net {
-            nets.insert((pos, Lane::Main), n);
-        }
-    }
-
-    let natives = devices
-        .iter()
-        .filter_map(|d| Some((d.native.clone()?, d.device.native()?)))
-        .collect();
-    Ok(Compiled {
+    Compiled {
         def: b.def,
-        nets,
-        net_output,
-        inputs,
-        lamps,
-        ports,
-        devices,
-        natives,
-    })
-}
-
-/// Check that every chip block matches its chip in `lib` (exists, same
-/// pins). A chip whose pins changed must be placed again.
-pub fn check_chips(world: &World, lib: &Library) -> Result<(), String> {
-    for (_, b) in world.blocks() {
-        let Block::Device {
-            device:
-                Device::Chip {
-                    name,
-                    inputs,
-                    outputs,
-                },
-            ..
-        } = b
-        else {
-            continue;
-        };
-        let pins = lib
-            .kind_pins(&PartKind::Chip(name.clone()))
-            .ok_or_else(|| format!("'{name}' çipi kütüphanende yok"))?;
-        if &pins.inputs != inputs || &pins.outputs != outputs {
-            return Err(format!(
-                "'{name}' çipinin uçları değişmiş: dünyadakini silip yeniden koy"
-            ));
-        }
+        inputs: b.inputs,
+        probes,
+        devices: b.devices,
+        natives: b.natives,
+        problems: b.problems,
     }
-    Ok(())
 }
 
-/// Add NAND parts computing `gate` with `n` inputs. Returns the output;
-/// the parts' external inputs are recorded in `ins` as (gate input, sink).
-fn gate_parts(def: &mut ChipDef, gate: Gate, n: usize, ins: &mut Vec<(usize, Sink)>) -> Source {
+/// Add NAND parts computing `gate`. Returns the output; the parts' external
+/// inputs are recorded in `ins` as (gate input, sink).
+fn gate_parts(def: &mut ChipDef, gate: Gate, ins: &mut Vec<(usize, Sink)>) -> Source {
     fn nand(def: &mut ChipDef) -> usize {
         def.parts.push(Part::new(PartKind::Nand));
         def.parts.len() - 1
@@ -657,7 +329,6 @@ fn gate_parts(def: &mut ChipDef, gate: Gate, n: usize, ins: &mut Vec<(usize, Sin
             to: Sink::Part { part: to, pin },
         });
     }
-    debug_assert_eq!(n, gate.inputs());
     let mut ext = |input: usize, part: usize, pin: usize| {
         ins.push((input, Sink::Part { part, pin }));
     };
@@ -716,5 +387,149 @@ fn gate_parts(def: &mut ChipDef, gate: Gate, n: usize, ins: &mut Vec<(usize, Sin
             link(def, r, o, 1);
             out(o)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::Device;
+    use crate::world::{Edit, Placed, Pos};
+    use makine_sim::Circuit;
+
+    pub(crate) fn put(w: &mut World, kind: Kind) -> Id {
+        let id = w.new_id();
+        w.apply(Edit::Part {
+            id,
+            part: Some(Placed {
+                kind,
+                pos: Pos::new(0.0, 0.0),
+            }),
+        });
+        id
+    }
+
+    pub(crate) fn wire(w: &mut World, from: (Id, usize), to: (Id, usize)) {
+        w.apply(Edit::Wire {
+            to: End::new(to.0, to.1),
+            from: Some(End::new(from.0, from.1)),
+        });
+    }
+
+    fn run(w: &World, lib: &Library, inputs: &[u64]) -> (Compiled, Circuit) {
+        let c = compile(w, lib);
+        let mut sim = Circuit::compile_def(&c.library_with(lib), &c.def).unwrap();
+        for (i, v) in inputs.iter().enumerate() {
+            sim.set_input(i, *v);
+        }
+        sim.eval().unwrap();
+        (c, sim)
+    }
+
+    #[test]
+    fn gates_follow_their_truth_tables() {
+        let lib = Library::new();
+        for g in Gate::ALL {
+            let mut w = World::new("g");
+            let a = put(&mut w, Kind::Switch { on: false });
+            let b = put(&mut w, Kind::Switch { on: false });
+            let gate = put(&mut w, Kind::Gate(g));
+            let lamp = put(&mut w, Kind::Lamp);
+            wire(&mut w, (a, 0), (gate, 0));
+            if g.inputs() == 2 {
+                wire(&mut w, (b, 0), (gate, 1));
+            }
+            wire(&mut w, (gate, 0), (lamp, 0));
+            for v in 0..4u64 {
+                let (x, y) = (v & 1, v >> 1);
+                // Inputs are in id order; find which is which.
+                let c = compile(&w, &lib);
+                let ins: Vec<u64> = c
+                    .inputs
+                    .iter()
+                    .map(|(id, _)| if *id == a { x } else { y })
+                    .collect();
+                let (c, sim) = run(&w, &lib, &ins);
+                let got = sim.output(c.probe(End::new(gate, 0)).unwrap());
+                let (x, y) = (x == 1, y == 1);
+                let want = match g {
+                    Gate::Not => !x,
+                    Gate::And => x & y,
+                    Gate::Or => x | y,
+                    Gate::Xor => x ^ y,
+                    Gate::Nand => !(x & y),
+                    Gate::Nor => !(x | y),
+                };
+                assert_eq!(got, want as u64, "{g:?} {x} {y}");
+            }
+        }
+    }
+
+    #[test]
+    fn buses_and_problems() {
+        let lib = Library::new();
+        let mut w = World::new("b");
+        let i = put(
+            &mut w,
+            Kind::Input {
+                name: "a".into(),
+                width: 4,
+                value: 0,
+            },
+        );
+        let not = put(&mut w, Kind::Gate(Gate::Not));
+        let disp = put(&mut w, Kind::Device(Device::Display { bits: 4 }));
+        wire(&mut w, (i, 0), (disp, 0));
+        // A 4-bit wire into a 1-bit gate is left out and reported.
+        wire(&mut w, (i, 0), (not, 0));
+        let missing = put(&mut w, Kind::Part(Part::new(PartKind::Chip("Yok".into()))));
+        let (c, mut sim) = run(&w, &lib, &[9]);
+        assert_eq!(sim.output(c.probe(End::new(i, 0)).unwrap()), 9);
+        assert!(c.problems.contains(&Problem::Width {
+            to: End::new(not, 0),
+            from: 4,
+            into: 1
+        }));
+        assert!(c
+            .problems
+            .iter()
+            .any(|p| matches!(p, Problem::MissingChip { part, .. } if *part == missing)));
+        sim.set_input(0, 3);
+        sim.eval().unwrap();
+        assert_eq!(sim.output(c.probe(End::new(i, 0)).unwrap()), 3);
+    }
+
+    #[test]
+    fn devices_and_library_parts() {
+        let lib = Library::new();
+        let mut w = World::new("d");
+        let rom = put(
+            &mut w,
+            Kind::Device(Device::Rom {
+                addr: 2,
+                data: 8,
+                words: vec![10, 20, 30, 40],
+            }),
+        );
+        let a = put(
+            &mut w,
+            Kind::Input {
+                name: "a".into(),
+                width: 2,
+                value: 0,
+            },
+        );
+        let split = put(&mut w, Kind::Part(Part::new(PartKind::Split(vec![4, 4]))));
+        wire(&mut w, (a, 0), (rom, 0));
+        wire(&mut w, (rom, 0), (split, 0));
+        let lamp = put(&mut w, Kind::Lamp);
+        wire(&mut w, (split, 1), (lamp, 0));
+        let (c, sim) = run(&w, &lib, &[2]);
+        assert_eq!(c.problems, vec![]);
+        assert_eq!(sim.output(c.probe(End::new(rom, 0)).unwrap()), 30);
+        // Only wired outputs are probed.
+        assert_eq!(c.probe(End::new(split, 0)), None);
+        assert_eq!(sim.output(c.probe(End::new(split, 1)).unwrap()), 30 >> 4);
+        assert!(c.native(rom).is_some());
     }
 }
