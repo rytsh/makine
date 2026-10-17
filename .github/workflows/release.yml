@@ -1,0 +1,68 @@
+name: release
+
+# Build makine for Windows and Linux, and Doom for makine. Runs on tags
+# like v0.1.0 (and can be started by hand); attaches the zips to a GitHub
+# release for tags.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            exe: makine.exe
+            archive: makine-windows-x64.zip
+          - os: ubuntu-latest
+            exe: makine
+            archive: makine-linux-x64.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxkbcommon-dev lld
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release -p makine
+
+      # Doom ships as a separate file next to the executable; the app finds
+      # it there. LLVM (clang, ld.lld) is preinstalled on both runners.
+      - name: Build Doom (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./examples/doom/build.ps1
+      - name: Build Doom (Linux)
+        if: runner.os == 'Linux'
+        run: examples/doom/build.sh
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/${{ matrix.exe }}, examples/doom/build/doom.elf, README.md, README.en.md, LICENSE, crates/app/fonts/LICENSE-DejaVu.txt dist/
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.archive }}

@@ -1,0 +1,194 @@
+# makine
+
+*[English](README.en.md)*
+
+NAND kapısından başlayıp çalışan bir bilgisayara kadar her şeyi kendin inşa ettiğin
+bir eğitim aracı. Son seviyede kendi yaptığın RISC-V işlemci gerçek programlar
+çalıştırıyor; derlenmiş C programları ve Doom dahil.
+
+## Çalıştırma
+
+```sh
+make run            # ya da: cargo run --release -p makine
+```
+
+Sık kullanılan komutlar Makefile'da; `make` yazınca listesi çıkar:
+
+| Komut | Ne yapar |
+|---|---|
+| `make run` | uygulamayı çalıştırır |
+| `make run-gl` | Vulkan/DirectX yerine OpenGL ile çalıştırır |
+| `make test` | testleri çalıştırır |
+| `make check` | biçim, clippy ve testler |
+| `make doom` | Doom'u derler |
+| `make c SRC=prog.c` | bir C programını derler |
+| `make windows` | Linux'tan Windows `.exe`'si derler |
+| `make dist-windows` | `.exe` + Doom'u `dist/makine-windows-x64.zip` yapar |
+| `make clean` | derleme çıktılarını siler |
+
+Grafik için wgpu kullanılır: Vulkan, DirectX 12, Metal ya da OpenGL'den hangisi
+çalışıyorsa onu seçer. Pencere açılmazsa `WGPU_BACKEND=gl` ile OpenGL zorlanabilir
+(Windows'ta: `set WGPU_BACKEND=gl` sonra `makine.exe`).
+
+İlerleme otomatik kaydedilir: Linux'ta `~/.local/share/makine/progress.json`,
+Windows'ta `%APPDATA%\makine\data\progress.json`.
+
+Hazır sürümler: [Releases](https://github.com/rytsh/makine/releases) sayfasında Windows
+ve Linux için zip dosyaları var (Doom dahil).
+
+### Windows
+
+1. [Rust](https://rustup.rs) kur (`rustup-init.exe`, varsayılan seçenekler). İstediğinde
+   "Visual Studio Build Tools"u da kur ("Desktop development with C++").
+2. Depoyu indir ve çalıştır:
+
+   ```powershell
+   git clone https://github.com/rytsh/makine
+   cd makine
+   cargo run --release -p makine
+   ```
+
+   Program `target\release\makine.exe` olarak oluşur; tek dosyadır, başka bir yere
+   kopyalanabilir.
+
+3. Doom ve C programları için [LLVM](https://github.com/llvm/llvm-project/releases)
+   gerekir (`clang` ve `ld.lld`): `winget install LLVM.LLVM`, sonra yeni bir terminal aç.
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File examples\doom\build.ps1
+   powershell -ExecutionPolicy Bypass -File sdk\build.ps1 examples\c\merhaba.c
+   ```
+
+   `doom.elf` dosyasını `makine.exe`'nin yanına koyarsan uygulama onu orada da bulur.
+
+Linux'tan Windows için derlemek istersen: `cargo install cargo-xwin`, sonra
+`cargo xwin build --release -p makine --target x86_64-pc-windows-msvc`. C çalışma
+zamanı statik bağlandığı için (`.cargo/config.toml`) `makine.exe` Visual C++
+Redistributable kurulu olmayan makinelerde de çalışır.
+
+## Nasıl oynanır
+
+- Soldaki "Parçalar" listesinden bir parçayı tuvale **sürükle**.
+- Bir çıkış ucundan bir giriş ucuna sürükleyerek **tel çek**.
+- Soldaki giriş kutularına **tıklayarak** değer değiştir; teller canlı olarak yanar.
+- Bir parçaya **sağ tıkla**: sil, tekrar sayısı (aynı parçadan yan yana N kopya),
+  bus grupları ya da sabit değer. Bir giriş ucuna sağ tıklamak teli koparır.
+- Tekerlek ile yakınlaştır, boş alanı sürükleyerek kaydır.
+- NOT, AND, OR, XOR, NAND ve MUX standart mantık sembolleriyle çizilir; soldaki
+  **Kapı sembolleri** kutusuyla kutu görünümüne dönülebilir.
+- **F11** pencereyi tam ekran yapar (soldaki **Tam ekran** kutusu da aynı işi görür ve
+  ayar hatırlanır).
+- **Test et** çipini kontrol eder. Geçersen çip sonraki seviyelerde parça olarak açılır.
+
+## Wiki
+
+Soldaki **📖 Wiki** bölümü, her parçanın arkasındaki fikri anlatır:
+transistörden NAND'e, De Morgan'dan toplayıcılara, flip-flop'tan RISC-V
+işlemciye. Her seviyenin altındaki **📖 Wiki'de oku** bağlantısı ilgili sayfayı
+açar; sayfalardaki seviye bağlantıları da seni o seviyeye götürür.
+
+Sayfalar `docs/wiki/` altında düz Markdown dosyalarıdır; GitHub'da da okunabilir.
+Programa gömülür, `.exe` tek dosya kalır. Yeni sayfa eklemek için:
+
+1. `docs/wiki/yeni.md` yaz. Başına, anlattığı seviyeleri yaz:
+   `<!--` / `seviyeler: Latch, DFF` / `-->`
+2. `crates/app/src/wiki.rs` içindeki `PAGES` listesine ekle.
+3. Resim kullanıyorsan `docs/wiki/img/`'e koy ve `IMAGES` listesine ekle.
+
+Testler eksik sayfa, kırık bağlantı, gömülmemiş resim ya da sayfası olmayan seviye
+olursa uyarır. Şemalar `docs/diagrams/make.py` ile çizilir (`make diagrams`);
+fotoğraflar yapay zekâ ile üretilmiştir.
+
+## Bölümler
+
+1. **Mantık:** NOT, AND, OR, XOR, MUX, DEMUX, 32-bit MUX
+2. **Aritmetik:** yarım/tam toplayıcı, 8 ve 32-bit toplayıcı, çıkarıcı
+3. **Hafıza:** SR mandal, D mandal, D flip-flop, 1-bit kayıt, 32-bit register,
+   program sayacı, 8 kelimelik RAM
+4. **ALU:** sıfır testi, karşılaştırıcı, sola/sağa kaydırıcı, ALU, register dosyası
+5. **İşlemci:** komut çözücü, kontrol birimi, dallanma, yükleme/saklama birimleri,
+   çarpma/bölme, ve hepsini birleştiren **RV32IM işlemci**
+
+İşlemci testi, gerçek programları senin işlemcinde ve bir referans işlemcide yan yana
+çalıştırır ve her komuttan sonra karşılaştırır. Bir fark olursa hangi komutun, hangi
+register'ın yanlış olduğunu söyler.
+
+## Bilgisayar
+
+İşlemciyi bitirince soldaki **Bilgisayar** açılır: senin işlemcin + 16 MB RAM +
+320×200 ekran + konsol + klavye. Örnek programlar (assembly) ya da kendi programın
+(assembly `.s` veya RISC-V ELF) yüklenebilir.
+
+- **⚡ Hızlı simülasyon:** testi geçmiş çipler kapı kapı değil, aynı davranışı gösteren
+  bir Rust modeliyle simüle edilir. Kapalıyken her şey NAND seviyesinde çalışır
+  (işlemci ~140 bin NAND, saniyede ~1500 komut). Açıkken saniyede ~100 bin komut.
+- **🚀 Turbo:** işlemcini testlerde karşılaştırdığımız referans emülatörü kullanır
+  (saniyede ~200 milyon komut). Doom için gerekli.
+- **🎮 Oyna:** sadece bilgisayarın ekranını gösterir ve tam ekrana geçer; bir oyun gibi.
+  Çıkmak için **F10**.
+
+### Doom
+
+```sh
+examples/doom/build.sh          # doomgeneric + DOOM1.WAD indirir, build/doom.elf üretir
+                                # Windows: examples\doom\build.ps1
+```
+
+Sonra Bilgisayar > **Doom**. Ekrana tıkla; oklar yürür, Ctrl ateş eder, boşluk kapı
+açar, Enter menüde seçer. Gerekenler: `clang`, `ld.lld`, `curl`, `git`.
+
+### Kendi C programın
+
+```sh
+sdk/build.sh examples/c/merhaba.c -o merhaba.elf
+# Windows: sdk\build.ps1 examples\c\merhaba.c -Out merhaba.elf
+```
+
+`sdk/` küçük bir libc (printf, malloc, string, dosyalar), başlangıç kodu ve linker
+betiği içerir. Cihazlar için `sdk/include/makine.h`'ye bak. İlk derlemede kayan nokta
+ve 64-bit bölme rutinleri LLVM compiler-rt'den indirilir.
+
+Bellek haritası:
+
+| Adres | Cihaz |
+|---|---|
+| `0x00000000` | RAM; programlar burada başlar |
+| `0x10000000` | konsol: yazılan bayt ekrana basılır, okuma sıradaki tuşu verir |
+| `0x10000004` | zaman: başlangıçtan beri geçen milisaniye |
+| `0x10000008` | klavye: sıradaki tuş olayı (bit 8 = basıldı, alt bayt = tuş) |
+| `0x1000000C` | yazınca ekranı gösterir |
+| `0x11000000` | ekran pikselleri, her biri bir `0x00RRGGBB` kelimesi, satır satır |
+
+## Yapı
+
+| Klasör | İçerik |
+|---|---|
+| `crates/sim` | Simülatör: çip modeli, NAND listesine derleme, 64 kanallı değerlendirme, yerel (Rust) parçalar |
+| `crates/levels` | Seviyeler, testler, örnek çözümler, hızlı modeller |
+| `crates/rv` | RV32IM: referans emülatör, assembler, disassembler, ELF yükleyici, makine (RAM + cihazlar) |
+| `crates/app` | egui masaüstü uygulaması |
+| `sdk` | C programları için libc, başlangıç kodu, linker betiği |
+| `examples` | C örneği ve Doom derleme betiği |
+
+```sh
+cargo test                                                       # bütün testler
+cargo test --release -p makine-levels -- --ignored               # işlemciyi NAND seviyesinde test et
+cargo run --release -p makine-rv --example run -- program.elf    # komut satırında çalıştır
+WGPU_BACKEND=vulkan cargo test -p makine screenshot -- --ignored # arayüz görüntüleri
+```
+
+## Sürüm yayınlama
+
+`v0.1.0` gibi bir etiket gönderince `.github/workflows/release.yml` çalışır: Windows ve
+Linux'ta makine'yi ve Doom'u test edip derler, zip'leri GitHub sürümüne ekler.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+## Lisanslar
+
+makine MIT lisanslıdır. Gömülü DejaVu fontları (`crates/app/fonts/`) Bitstream Vera
+lisanslıdır, bkz. `LICENSE-DejaVu.txt`. Doom derleme betiğinin indirdiği dosyalar kendi lisanslarıyla
+gelir ve depoya eklenmez: doomgeneric (GPL-2.0), DOOM1.WAD (id Software shareware,
+serbestçe dağıtılabilir), compiler-rt (Apache-2.0 with LLVM exception).
