@@ -345,11 +345,19 @@ impl App {
         ui.separator();
         let Some(w) = &mut self.world else { return };
         ui.label(
+            RichText::new(if w.locked {
+                "Fare dünyada. Esc: fareyi bırak (paneller için)."
+            } else {
+                "Dünyaya tıkla, içine gir."
+            })
+            .strong(),
+        );
+        ui.label(
             RichText::new(
-                "Sol tık: yerleştir (bir bloğun üstüne ya da yanına tıklarsan oraya koyar; \
-                 sürükleyerek katmana boya; Ctrl+tık: altına koy) · Sağ tık: sil · R: döndür · \
-                 Q/E: katman · Tekerlek: yakınlaştır · Orta tık ya da Alt+sürükle: kamerayı \
-                 döndür · Boşluk+sürükle ya da Shift+orta tık: kaydır · Anahtara tıkla: aç/kapa",
+                "Fare: etrafa bak · WASD ya da yön tuşları: uç · Boşluk: yüksel · Shift: alçal · \
+                 Ctrl: hızlı · Sol tık: kır · Sağ tık: koy (bakılan yüzün önüne; anahtara: \
+                 aç/kapa, Shift+sağ tık: yine de koy) · Orta tık: bakılan bloğu eline al · \
+                 1–9 ya da tekerlek: blok seç · Bloklar baktığın yöne döner.",
             )
             .weak()
             .small(),
@@ -442,32 +450,19 @@ impl App {
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label("Yön:");
-            let arrow = match w.facing {
-                makine_world::Dir::East => "↘ doğu",
-                makine_world::Dir::South => "↙ güney",
-                makine_world::Dir::West => "↖ batı",
-                makine_world::Dir::North => "↗ kuzey",
-            };
-            if ui.button(arrow).on_hover_text("R ile de döner").clicked() {
-                w.facing = w.facing.cw();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label(format!("Katman: {}", w.layer));
-            if ui.small_button("▼").on_hover_text("Q").clicked() {
+            ui.label(format!("Zemin katmanı: {}", w.layer));
+            if ui.small_button("▼").on_hover_text("Page Down").clicked() {
                 w.set_layer(w.layer - 1);
             }
-            if ui.small_button("▲").on_hover_text("E").clicked() {
+            if ui.small_button("▲").on_hover_text("Page Up").clicked() {
                 w.set_layer(w.layer + 1);
             }
         });
-        ui.checkbox(&mut w.show_above, "Üst katmanları cam gibi göster");
         ui.label(
             RichText::new(
-                "Katman sınırı yok: yukarı da aşağı da istediğin kadar kurabilirsin. Üst \
-                 katmanlar gizlenir, alttakiler görünür. Katmanlar arası bağlantı için iki \
-                 katmana da 'Geçiş' koy.",
+                "Dünyanın sınırı yok, yukarı da aşağı da. Zemin, boşlukta blok koyabilmen \
+                 için görünmez bir tabandır (ızgara). Katmanlar arası bağlantı için üst üste \
+                 'Geçiş' koy.",
             )
             .weak()
             .small(),

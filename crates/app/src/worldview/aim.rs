@@ -1,12 +1,12 @@
 //! What the pointer aims at: the block under it and the cell a new block
 //! would go into, found by walking the pointer's ray through the grid.
 //!
-//! Like in Minecraft, clicking a face of a block builds next to that face:
-//! on top of it, or beside it. Wires are flat, like paint on the floor:
-//! aiming at one aims at its own cell, so a wire can be painted over (with
-//! a gate, say). Blocks above the edited layer are hidden and cannot be hit;
-//! the edited layer's floor stops the ray, so empty cells there are built in
-//! directly, from above or (with the camera underground) from below.
+//! Like in Minecraft, building against a face of a block puts the new block
+//! next to that face: on top of it, beside it or under it. Wires are flat,
+//! like paint on the floor: aiming at one aims at its own cell, so a wire
+//! can be painted over (with a gate, say). The floor layer is an invisible
+//! ground that stops the ray, so blocks can be built in empty space there,
+//! from above or from below.
 
 use glam::DVec3;
 use makine_world::block::Block;
@@ -14,8 +14,8 @@ use makine_world::{Pos, World};
 
 use super::camera::Ray;
 
-/// How many cells the ray may cross before giving up.
-const MAX_STEPS: usize = 2000;
+/// How far the player reaches, in cells.
+pub const REACH: f64 = 64.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Aim {
@@ -86,8 +86,8 @@ fn enter_box(ray: &Ray, lo: DVec3, hi: DVec3) -> Option<(f64, usize)> {
     (t0 <= t1 && t1 >= 0.0).then_some((t0.max(0.0), axis))
 }
 
-/// What `ray` aims at, building on layer `layer` (layers above it are
-/// hidden).
+/// What `ray` aims at, within [`REACH`], with the invisible floor at layer
+/// `layer`.
 pub fn aim(world: &World, ray: &Ray, layer: i32) -> Option<Aim> {
     let lim = makine_world::world::MAX_COORD as f64;
     if ray.from.abs().max_element() > lim {
@@ -113,13 +113,9 @@ pub fn aim(world: &World, ray: &Ray, layer: i32) -> Option<Aim> {
     }
     // Whether the ray came up into the current cell through its floor.
     let mut came_up = false;
-    for _ in 0..MAX_STEPS {
+    loop {
         let p = Pos::new(cell.x as i32, cell.y as i32, cell.z as i32);
-        // Above the edited layer everything is hidden.
-        if p.z > layer && step.z >= 0.0 {
-            return None;
-        }
-        if p.z <= layer {
+        {
             if let Some(b) = world.get(p) {
                 let lo = cell;
                 let hi = cell + DVec3::new(1.0, 1.0, height(world, p, b));
@@ -156,6 +152,9 @@ pub fn aim(world: &World, ray: &Ray, layer: i32) -> Option<Aim> {
         } else {
             2
         };
+        if next[axis] > REACH {
+            return None;
+        }
         // Going down through the edited layer's floor: an empty cell there.
         if axis == 2 && step.z < 0.0 && p.z == layer {
             return Some(Aim {
@@ -170,7 +169,6 @@ pub fn aim(world: &World, ray: &Ray, layer: i32) -> Option<Aim> {
             return None;
         }
     }
-    None
 }
 
 #[cfg(test)]
@@ -260,11 +258,27 @@ mod tests {
     }
 
     #[test]
-    fn hidden_layers_are_not_hit() {
+    fn blocks_above_the_floor_are_hit() {
         let mut w = World::new("a");
         set(&mut w, Pos::new(2, 2, 1), Block::Lamp);
-        let a = aim(&w, &down_at(2.5, 2.5), 0).unwrap();
-        assert_eq!(a.target, None, "layer 1 is hidden while editing 0");
+        let r = Ray {
+            from: DVec3::new(2.5, 2.5, 10.0),
+            dir: DVec3::new(0.0, 0.0, -1.0),
+        };
+        let a = aim(&w, &r, 0).unwrap();
+        assert_eq!(a.target, Some(Pos::new(2, 2, 1)));
+        assert_eq!(a.place, Pos::new(2, 2, 2));
+    }
+
+    #[test]
+    fn reach_is_limited() {
+        let w = World::new("a");
+        let r = Ray {
+            from: DVec3::new(0.5, 0.5, 100.0),
+            dir: DVec3::new(0.0, 0.0, -1.0),
+        };
+        assert_eq!(aim(&w, &r, 0), None);
+        assert!(aim(&w, &r, 50).is_some());
     }
 
     #[test]
@@ -291,7 +305,7 @@ mod tests {
         // Another layer's floor, from below.
         let a = aim(&w, &up(9.5, 9.5), -3).unwrap();
         assert_eq!(a.place.z, -3);
-        // Looking up from above the edited layer finds nothing.
+        // Looking up from above the floor finds nothing.
         assert_eq!(aim(&w, &up(9.5, 9.5), -10), None);
     }
 

@@ -204,16 +204,20 @@ mod editor {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world.png")).unwrap();
 
-        // The same world from underground.
+        // Inside the world, flying: crosshair and hotbar.
         {
             let mut a = app.borrow_mut();
             let w = a.world.as_mut().unwrap();
-            w.camera.pitch = -0.6;
-            w.camera.dist *= 0.8;
+            w.locked = true;
+            w.camera.look_from(
+                glam::DVec3::new(7.5, 6.0, 2.2),
+                glam::DVec3::new(5.5, 1.5, 0.3),
+            );
         }
         harness.run_steps(2);
         let img = harness.render().unwrap();
-        img.save(format!("{dir}/makine-world-below.png")).unwrap();
+        img.save(format!("{dir}/makine-world-play.png")).unwrap();
+        app.borrow_mut().world.as_mut().unwrap().locked = false;
 
         // Devices: a keyboard into a display, and a screen with a pattern.
         {

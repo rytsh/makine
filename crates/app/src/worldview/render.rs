@@ -2,15 +2,11 @@
 //! and names and numbers are drawn over it by egui.
 //!
 //! One cell is a unit cube; layer `z` sits between heights `z` and `z + 1`.
-//! Only blocks near the camera are drawn, so the world can be endless.
-//! Layers above the one being edited are hidden (or shown as glass), so
-//! the player can always see where they build.
+//! Only blocks near the eye are drawn, so the world can be endless.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[cfg(test)]
-use egui::Pos2;
 use egui::{Align2, Color32, FontId, Rect};
 use glam::DVec3;
 use makine_world::block::{Block, Dir};
@@ -18,14 +14,13 @@ use makine_world::compile::{CompileError, Compiled, Lane};
 use makine_world::device::{self, Device};
 use makine_world::Pos;
 
-use super::camera::{render, Camera};
+use super::camera::{render, VIEW_DIST};
 use super::gpu::{self, Mesh, Scene, Vertex};
 use super::WorldView;
 use crate::worldsim::SimError;
 
 pub(super) const BG: Color32 = Color32::from_rgb(20, 22, 27);
 const GRID: Color32 = Color32::from_rgb(52, 57, 68);
-const FLOOR: Color32 = Color32::from_rgba_premultiplied(9, 10, 12, 40);
 const WIRE_OFF: Color32 = Color32::from_rgb(110, 60, 55);
 const WIRE_ON: Color32 = Color32::from_rgb(255, 80, 60);
 const GATE: Color32 = Color32::from_rgb(200, 205, 215);
@@ -39,11 +34,6 @@ const PORT: Color32 = Color32::from_rgb(90, 200, 140);
 const ERROR: Color32 = Color32::from_rgb(255, 70, 70);
 const SELECT: Color32 = Color32::from_rgb(255, 210, 80);
 const PASTE: Color32 = Color32::from_rgb(120, 200, 255);
-
-/// How far from the camera's target blocks are drawn, in cells.
-fn reach(cam: &Camera) -> i32 {
-    (cam.dist * 2.5).clamp(24.0, 256.0) as i32
-}
 
 fn shade(c: Color32, f: f32) -> Color32 {
     let [r, g, b, a] = c.to_srgba_unmultiplied();
@@ -182,6 +172,24 @@ impl Builder {
         }
     }
 
+    /// The edges of a box, as hairlines (bars a thirtieth of a cell wide).
+    fn thin_box(&mut self, lo: DVec3, hi: DVec3, c: Color32) {
+        let w = 0.012;
+        let (a, b) = (lo, hi);
+        let bar = |s: &mut Self, p: DVec3, q: DVec3| {
+            s.cuboid(p.min(q) - DVec3::splat(w), p.max(q) + DVec3::splat(w), c)
+        };
+        for z in [a.z, b.z] {
+            bar(self, corner(a.x, a.y, z), corner(b.x, a.y, z));
+            bar(self, corner(b.x, a.y, z), corner(b.x, b.y, z));
+            bar(self, corner(a.x, b.y, z), corner(b.x, b.y, z));
+            bar(self, corner(a.x, a.y, z), corner(a.x, b.y, z));
+        }
+        for (x, y) in [(a.x, a.y), (b.x, a.y), (b.x, b.y), (a.x, b.y)] {
+            bar(self, corner(x, y, a.z), corner(x, y, b.z));
+        }
+    }
+
     /// A box inside cell `p`, `h` tall, inset by `m` on each side.
     fn block(&mut self, p: Pos, m: f64, h: f64, c: Color32) {
         let (x, y, z) = (p.x as f64, p.y as f64, p.z as f64);
@@ -212,34 +220,25 @@ struct Label {
 }
 
 impl WorldView {
-    /// Centre the camera on the world (or the current layer if it is
-    /// empty).
+    /// Put the eye where the whole world shows (or above the floor if the
+    /// world is empty).
     pub(super) fn fit_camera(&mut self) {
         match self.world.bounds() {
             Some((lo, hi)) => {
                 let lo = corner(lo.x as f64, lo.y as f64, lo.z as f64);
                 let hi = corner(hi.x as f64 + 1.0, hi.y as f64 + 1.0, hi.z as f64 + 1.0);
                 self.camera.fit(lo, hi);
-                self.camera.target.z = self.layer as f64;
             }
             None => {
-                self.camera = Camera {
-                    target: corner(0.0, 0.0, self.layer as f64),
-                    ..Camera::default()
-                };
+                let o = corner(0.5, 0.5, self.layer as f64);
+                self.camera.look_from(o + corner(-6.0, -6.0, 7.0), o);
             }
         }
     }
 
-    /// Fit the camera to the world at the next frame.
+    /// Put the eye where the whole world shows, at the next frame.
     pub fn refit(&mut self) {
         self.fit = true;
-    }
-
-    /// Where the centre of `cell`'s floor is on screen (last frame's view).
-    #[cfg(test)]
-    pub(super) fn cell_on_screen(&self, cell: Pos) -> Pos2 {
-        self.camera.cell_center(self.rect, cell).unwrap()
     }
 
     pub(super) fn draw(
@@ -267,7 +266,7 @@ impl WorldView {
             mesh: Arc::new(b.mesh),
             view_proj: cam.view_proj((rect.width() / rect.height()) as f64),
             eye: cam.eye_rel(),
-            fog: reach(cam) as f32 * 1.2,
+            fog: VIEW_DIST as f32,
             background: BG,
             size,
             target: gpu::target_format(painter.ctx()),
@@ -275,9 +274,8 @@ impl WorldView {
         .paint(painter, rect);
 
         // Names and numbers over the scene, scaled with distance.
-        let px_per_cell =
-            |w: DVec3| rect.height() as f64 / (0.83 * (cam.eye() - w).length().max(0.1));
-        let eye = cam.eye();
+        let px_per_cell = |w: DVec3| rect.height() as f64 / (1.4 * (cam.eye - w).length().max(0.1));
+        let eye = cam.eye;
         for l in labels {
             // Labels lie on top faces: hidden when looking from below.
             if eye.z < l.at.z {
@@ -298,33 +296,22 @@ impl WorldView {
         }
     }
 
-    /// Grid lines on the layer being edited, and a faint glass floor that
-    /// shows what lies below it.
+    /// Grid lines on the floor layer, around the eye.
     fn build_floor(&self, b: &mut Builder) {
         let cam = &self.camera;
-        let r = reach(cam).min(48) as f64;
         let z = self.layer as f64 + 0.002;
-        let (cx, cy) = (cam.target.x.floor(), cam.target.y.floor());
+        let height = (cam.eye.z - z).abs();
+        let r = (height * 3.0 + 24.0).min(64.0).floor();
+        let (cx, cy) = (cam.eye.x.floor(), cam.eye.y.floor());
         let (x0, x1, y0, y1) = (cx - r, cx + r, cy - r, cy + r);
         for i in 0..=(2.0 * r) as i32 {
             let k = i as f64;
             b.floor_line(corner(x0 + k, y0, z), corner(x0 + k, y1, z), GRID);
             b.floor_line(corner(x0, y0 + k, z), corner(x1, y0 + k, z), GRID);
         }
-        if self.world.bounds().is_some_and(|(lo, _)| lo.z < self.layer) {
-            b.quad(
-                [
-                    corner(x0, y0, z - 0.001),
-                    corner(x1, y0, z - 0.001),
-                    corner(x1, y1, z - 0.001),
-                    corner(x0, y1, z - 0.001),
-                ],
-                FLOOR,
-            );
-        }
     }
 
-    /// Every block near the camera.
+    /// Every block near the eye.
     fn build_blocks(
         &self,
         b: &mut Builder,
@@ -345,25 +332,23 @@ impl WorldView {
                 WIRE_OFF
             }
         };
-        let r = reach(cam);
-        let (cx, cy) = (cam.target.x.floor() as i32, cam.target.y.floor() as i32);
-        let top = if self.show_above {
-            i32::MAX - 1
-        } else {
-            self.layer
-        };
-        let lo = Pos::new(cx - r, cy - r, (self.layer - r).min(top));
-        let hi = Pos::new(cx + r, cy + r, top.min(self.layer + r));
-        let near = cam.dist < 45.0;
+        let r = VIEW_DIST as i32;
+        let e = cam.eye.floor();
+        let (ex, ey, ez) = (e.x as i32, e.y as i32, e.z as i32);
+        let lo = Pos::new(ex - r, ey - r, ez - r);
+        let hi = Pos::new(ex + r, ey + r, ez + r);
+        let ahead = cam.forward();
 
         for (p, block) in self.world.blocks_in(lo, hi) {
-            // Above the edited layer: glass. Below: a little darker.
-            let tint = |c: Color32| match p.z.cmp(&self.layer) {
-                std::cmp::Ordering::Greater => with_alpha(c, 60),
-                std::cmp::Ordering::Less => shade(c, 0.8),
-                std::cmp::Ordering::Equal => c,
-            };
-            let labelled = near && p.z == self.layer;
+            let centre = corner(p.x as f64 + 0.5, p.y as f64 + 0.5, p.z as f64 + 0.5);
+            let to = centre - cam.eye;
+            let far = to.length();
+            // Too far, or well behind the eye.
+            if far > VIEW_DIST || (far > 8.0 && to.dot(ahead) < -0.2 * far) {
+                continue;
+            }
+            let tint = |c: Color32| c;
+            let labelled = far < 24.0;
             let (x, y, z) = (p.x as f64, p.y as f64, p.z as f64);
             match block {
                 Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via => {
@@ -395,8 +380,7 @@ impl WorldView {
                     match block {
                         Block::Via => {
                             // A post; it reaches the via above, if any.
-                            let up =
-                                matches!(self.world.get(p.up()), Some(Block::Via)) && (p.z < top);
+                            let up = matches!(self.world.get(p.up()), Some(Block::Via));
                             b.block(p, 0.32, if up { 1.0 } else { 0.35 }, tint(VIA));
                         }
                         Block::Cross => b.block(p, 0.36, 0.26, tint(BASE)),
@@ -428,7 +412,7 @@ impl WorldView {
                 Block::Lamp => {
                     let on = self.sim.lamp_lit(p);
                     b.block(p, 0.12, 0.75, tint(if on { LAMP_ON } else { LAMP_OFF }));
-                    if on && p.z <= self.layer {
+                    if on {
                         b.block(p, -0.08, 0.95, with_alpha(LAMP_ON, 45));
                     }
                 }
@@ -619,23 +603,25 @@ impl WorldView {
                 ),
             )
         };
-        // The block aimed at, outlined; the cell a block would go into is
-        // shown below.
-        if let Some(t) = self.target.filter(|t| Some(*t) != self.hover) {
-            let (lo, hi) = cell_box(t, 0.02, 1.0);
-            b.wire_box(lo, hi, Color32::from_white_alpha(90));
+        // The block looked at, outlined thinly; the cell a block would go
+        // into, shaded (with the way the block would face).
+        if let Some(t) = self.target {
+            let (lo, hi) = cell_box(t, 0.01, 1.0);
+            b.thin_box(lo, hi, Color32::from_black_alpha(200));
         }
-        if let Some(cell) = self.hover.filter(|_| self.pasting.is_none()) {
-            let (lo, hi) = cell_box(cell, 0.0, 1.0);
-            b.wire_box(lo, hi, Color32::from_white_alpha(200));
+        if let Some(cell) = self
+            .hover
+            .filter(|c| self.pasting.is_none() && Some(*c) != self.target)
+        {
+            let (lo, hi) = cell_box(cell, -0.02, 0.0);
             b.quad(
                 [
-                    corner(lo.x, lo.y, lo.z + 0.004),
-                    corner(hi.x, lo.y, lo.z + 0.004),
-                    corner(hi.x, hi.y, lo.z + 0.004),
-                    corner(lo.x, hi.y, lo.z + 0.004),
+                    corner(lo.x, lo.y, lo.z + 0.006),
+                    corner(hi.x, lo.y, lo.z + 0.006),
+                    corner(hi.x, hi.y, lo.z + 0.006),
+                    corner(lo.x, hi.y, lo.z + 0.006),
                 ],
-                Color32::from_white_alpha(28),
+                Color32::from_white_alpha(40),
             );
             if self
                 .brush
@@ -646,22 +632,14 @@ impl WorldView {
             }
         }
 
-        // The selection spans every layer of its rectangle: show it from the
-        // lowest block up to the edited layer.
+        // The selection spans every layer of its rectangle: show it around
+        // its blocks (or on the floor).
         if let Some(r) = self.selection {
-            let bottom = r
-                .blocks(&self.world)
-                .iter()
-                .map(|(p, _)| p.z)
-                .min()
-                .unwrap_or(self.layer)
-                .min(self.layer);
+            let zs: Vec<i32> = r.blocks(&self.world).iter().map(|(p, _)| p.z).collect();
+            let bottom = zs.iter().copied().min().unwrap_or(self.layer);
+            let top = zs.iter().copied().max().unwrap_or(self.layer);
             let lo = corner(r.x0 as f64, r.y0 as f64, bottom as f64);
-            let hi = corner(
-                r.x1 as f64 + 1.0,
-                r.y1 as f64 + 1.0,
-                self.layer as f64 + 1.0,
-            );
+            let hi = corner(r.x1 as f64 + 1.0, r.y1 as f64 + 1.0, top as f64 + 1.0);
             b.cuboid(lo, hi, with_alpha(SELECT, 30));
             b.wire_box(lo, hi, SELECT);
         }
@@ -706,6 +684,96 @@ impl WorldView {
         }
     }
 
+    /// The crosshair and the hotbar: the palette along the bottom, the
+    /// block in hand raised.
+    pub(super) fn draw_hud(&self, painter: &egui::Painter, rect: Rect) {
+        use egui::{pos2, vec2, CornerRadius, Stroke, StrokeKind};
+        if !self.locked {
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "Dünyaya girmek için tıkla",
+                FontId::proportional(18.0),
+                Color32::from_white_alpha(200),
+            );
+            return;
+        }
+        let c = rect.center();
+        let cross = Stroke::new(2.0, Color32::from_white_alpha(220));
+        let shadow = Stroke::new(4.0, Color32::from_black_alpha(120));
+        for s in [shadow, cross] {
+            painter.line_segment([c - vec2(9.0, 0.0), c + vec2(9.0, 0.0)], s);
+            painter.line_segment([c - vec2(0.0, 9.0), c + vec2(0.0, 9.0)], s);
+        }
+
+        let items = super::palette();
+        let hand = self.hotbar_index();
+        let gap = 3.0;
+        let n = items.len() as f32;
+        let size = ((rect.width() - 16.0 - gap * (n - 1.0)) / n).clamp(30.0, 46.0);
+        let width = items.len() as f32 * (size + gap) - gap;
+        let y = rect.bottom() - size - 12.0;
+        let x0 = rect.center().x - width / 2.0;
+        for (i, (name, block, _)) in items.iter().enumerate() {
+            let chosen = hand == Some(i);
+            let r = Rect::from_min_size(
+                pos2(
+                    x0 + i as f32 * (size + gap),
+                    y - if chosen { 6.0 } else { 0.0 },
+                ),
+                vec2(size, size),
+            );
+            painter.rect_filled(r, CornerRadius::same(5), Color32::from_black_alpha(170));
+            painter.rect_stroke(
+                r,
+                CornerRadius::same(5),
+                if chosen {
+                    Stroke::new(2.5, Color32::WHITE)
+                } else {
+                    Stroke::new(1.0, Color32::from_white_alpha(60))
+                },
+                StrokeKind::Inside,
+            );
+            let sw = size * 0.35;
+            painter.rect_filled(
+                Rect::from_center_size(r.center() - vec2(0.0, size * 0.12), vec2(sw, sw)),
+                CornerRadius::same(3),
+                swatch(block),
+            );
+            painter.text(
+                r.center_bottom() - vec2(0.0, 3.0),
+                Align2::CENTER_BOTTOM,
+                *name,
+                FontId::proportional((size * 0.2).min(9.0)),
+                Color32::from_white_alpha(if chosen { 255 } else { 170 }),
+            );
+            if i < 9 {
+                painter.text(
+                    r.left_top() + vec2(4.0, 2.0),
+                    Align2::LEFT_TOP,
+                    format!("{}", i + 1),
+                    FontId::proportional(9.0),
+                    Color32::from_white_alpha(120),
+                );
+            }
+        }
+        // Something else in hand (a device, a chip, the select tool).
+        let other = match &self.brush {
+            None => Some("Seç aracı".to_string()),
+            Some(b) if hand.is_none() => Some(b.block.label()),
+            _ => None,
+        };
+        if let Some(text) = other {
+            painter.text(
+                pos2(rect.center().x, y - 14.0),
+                Align2::CENTER_BOTTOM,
+                format!("Elinde: {text}"),
+                FontId::proportional(14.0),
+                Color32::WHITE,
+            );
+        }
+    }
+
     /// Pixels of every screen device, by anchor.
     pub(super) fn screens(&mut self) -> HashMap<Pos, Vec<bool>> {
         let Some(c) = self.sim.compiled() else {
@@ -724,5 +792,20 @@ impl WorldView {
             .into_iter()
             .filter_map(|(a, n)| Some((a, device::screen(sim, &n)?)))
             .collect()
+    }
+}
+
+/// The colour a palette block shows in the hotbar.
+fn swatch(b: &Block) -> Color32 {
+    match b {
+        Block::Wire | Block::Straight { .. } => WIRE_ON,
+        Block::Cross => BASE,
+        Block::Via => VIA,
+        Block::Gate { .. } => GATE,
+        Block::Switch { .. } => SWITCH_OFF,
+        Block::Lamp => LAMP_ON,
+        Block::Clock { .. } => Color32::from_rgb(230, 160, 80),
+        Block::Port { .. } => PORT,
+        Block::Device { .. } | Block::Cover { .. } => Color32::from_rgb(70, 110, 170),
     }
 }
