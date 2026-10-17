@@ -84,6 +84,9 @@ impl Chunk {
 /// `None` for blocks that cannot be stored.
 fn sanitize(block: Block) -> Option<Block> {
     match block {
+        Block::Trace { sides } => Some(Block::Trace {
+            sides: sides & crate::block::ALL_SIDES,
+        }),
         Block::Device { device, facing } => Some(Block::Device {
             device: device.normalized()?,
             facing,

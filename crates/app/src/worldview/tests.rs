@@ -339,6 +339,68 @@ mod ui_tests {
     }
 }
 
+mod wire_tests {
+    use crate::worldview::*;
+
+    /// Two wires dragged side by side stay apart; a third dragged across
+    /// them joins both.
+    #[test]
+    fn drag_parallel_then_join() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), WorldView::default());
+        h.run();
+        let origin = egui::pos2(400.0, 80.0);
+        let drag = |h: &mut egui_kittest::Harness<'_, WorldView>, cells: &[(i32, i32)]| {
+            let at = |h: &egui_kittest::Harness<'_, WorldView>, (x, y): (i32, i32)| {
+                h.state().to_screen(origin, x as f32 + 0.5, y as f32 + 0.5)
+            };
+            let first = at(h, cells[0]);
+            h.drag_at(first);
+            h.run();
+            for &c in &cells[1..] {
+                let p = at(h, c);
+                h.hover_at(p);
+                h.run();
+            }
+            let last = at(h, *cells.last().unwrap());
+            h.drop_at(last);
+            h.run();
+        };
+        drag(&mut h, &[(0, 0), (1, 0), (2, 0), (3, 0)]);
+        drag(&mut h, &[(0, 1), (1, 1), (2, 1), (3, 1)]);
+        let w = &h.state().world;
+        assert_eq!(w.len(), 8);
+        assert!(!w.accepts_wire(Pos::new(1, 0, 0), Dir::South), "apart");
+
+        // Across both, top to bottom at x = 2.
+        drag(&mut h, &[(2, -1), (2, 0), (2, 1), (2, 2)]);
+        let w = &h.state().world;
+        for y in [0, 1] {
+            assert!(w.accepts_wire(Pos::new(2, y, 0), Dir::North));
+            assert!(w.accepts_wire(Pos::new(2, y, 0), Dir::South));
+            assert!(w.accepts_wire(Pos::new(2, y, 0), Dir::East));
+        }
+        // They are one net now: a switch on the top wire lights the bottom
+        // one. (Before the join, the bottom one would read nothing.)
+        let v = h.state_mut();
+        v.brush = Some(Brush {
+            block: Block::Switch {
+                on: true,
+                facing: Dir::East,
+            },
+        });
+        v.facing = Dir::East;
+        v.place(Pos::new(-1, 0, 0), false);
+        let c = makine_world::compile(&v.world).unwrap();
+        let lane = makine_world::compile::Lane::Main;
+        let top = c.output_at(Pos::new(0, 0, 0), lane);
+        let bottom = c.output_at(Pos::new(3, 1, 0), lane);
+        assert!(top.is_some());
+        assert_eq!(top, bottom);
+    }
+}
+
 mod device_tests {
     use crate::worldview::*;
     use std::{cell::RefCell, rc::Rc};

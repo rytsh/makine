@@ -162,7 +162,7 @@ impl Uf {
 fn is_conductor(b: &Block) -> bool {
     matches!(
         b,
-        Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via
+        Block::Wire | Block::Trace { .. } | Block::Straight { .. } | Block::Cross | Block::Via
     )
 }
 

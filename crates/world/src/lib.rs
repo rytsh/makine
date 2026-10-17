@@ -17,6 +17,7 @@ pub mod compile;
 pub mod device;
 pub mod draw;
 pub mod region;
+pub mod wire;
 pub mod world;
 
 pub use block::{Block, Dir, Gate};

@@ -82,6 +82,8 @@ pub struct WorldView {
     /// The last cell painted in the current drag, so dragging does not
     /// repaint the same cell every frame.
     painted: Option<Pos>,
+    /// The last cell of the wire being drawn: the next one links to it.
+    wire_end: Option<Pos>,
     /// Centre the camera on the world at the next frame.
     fit: bool,
     /// The tool before V switched to selecting, to switch back.
@@ -143,6 +145,7 @@ impl WorldView {
             defer: false,
             hover: None,
             painted: None,
+            wire_end: None,
             fit: true,
             last_brush: None,
             selected: None,
@@ -568,6 +571,7 @@ impl WorldView {
             // cell where the press started too.
             if response.drag_started() {
                 self.painted = None;
+                self.wire_end = None;
                 let press = ui.input(|i| i.pointer.press_origin());
                 if let Some(start) = press.map(|p| self.pick(origin, p, self.layer)) {
                     if response.dragged_by(egui::PointerButton::Primary) {
@@ -586,6 +590,7 @@ impl WorldView {
                     || response.dragged_by(egui::PointerButton::Secondary);
                 if response.clicked() || response.secondary_clicked() {
                     self.painted = None;
+                    self.wire_end = None;
                 }
                 if primary && self.painted != Some(cell) {
                     self.painted = Some(cell);
@@ -748,15 +753,29 @@ impl WorldView {
         }
         self.free_port_name(Some(cell));
         let Some(brush) = &self.brush else { return };
+        if matches!(brush.block, Block::Wire) {
+            // Wires connect where they are drawn (see makine_world::wire).
+            let from = self.wire_end.filter(|_| !click);
+            let e = makine_world::wire::draw_wire(&self.world, from, cell, click);
+            self.edit(e);
+            self.wire_end = Some(cell);
+            return;
+        }
         let mut block = brush.block.clone();
         while block.facing().is_some_and(|f| f != self.facing) {
             block = block.rotated();
         }
         if self.world.get(cell) != Some(&block) {
-            self.edit(Edit::Set {
+            // The block and the wires beside it linking to its pins, as one
+            // edit (one undo).
+            let mut after = self.world.clone();
+            let set = Edit::Set {
                 pos: cell,
                 block: Some(block),
-            });
+            };
+            after.apply(set.clone());
+            let links = makine_world::wire::link_to_block(&after, cell);
+            self.edit(Edit::Batch(vec![set, links]));
             self.next_port_name();
         }
     }

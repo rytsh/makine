@@ -176,7 +176,11 @@ impl WorldView {
         };
         let font = |s: f32| FontId::proportional(s * z);
         match block {
-            Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via => {
+            Block::Wire
+            | Block::Trace { .. }
+            | Block::Straight { .. }
+            | Block::Cross
+            | Block::Via => {
                 let w = 6.0 * z;
                 for d in Dir::ALL {
                     if !(self.world.accepts_wire(p, d)
@@ -202,6 +206,10 @@ impl WorldView {
                         // The vertical lane hops over the horizontal one.
                         painter.circle_filled(c, w * 1.1, fade(BG));
                         painter.circle_stroke(c, w * 1.1, Stroke::new(1.5 * z, fade(GATE_LINE)));
+                    }
+                    // A wire end with no connection yet: a dot to grab.
+                    Block::Trace { sides: 0 } => {
+                        painter.circle_filled(c, w * 0.9, fade(lit(Lane::Main)));
                     }
                     _ => {
                         painter.circle_filled(c, w * 0.5, fade(lit(Lane::Main)));

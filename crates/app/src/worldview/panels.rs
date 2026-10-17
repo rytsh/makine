@@ -16,7 +16,12 @@ pub fn palette() -> Vec<(&'static str, Block, &'static str)> {
         facing: Dir::East,
     };
     vec![
-        ("Tel", Block::Wire, "Komşu tellere bağlanır"),
+        (
+            "Tel",
+            Block::Wire,
+            "Çektiğin yöne bağlanır: yan yana çekilen teller birleşmez, bir telin üstünden \
+             geçersen birleşir",
+        ),
         (
             "Düz tel",
             Block::Straight { facing: Dir::East },

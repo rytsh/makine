@@ -51,7 +51,20 @@ impl Dir {
     pub fn is_horizontal(self) -> bool {
         matches!(self, Dir::East | Dir::West)
     }
+
+    /// This direction's bit in a [`Block::Trace`]'s `sides`.
+    pub fn bit(self) -> u8 {
+        match self {
+            Dir::East => 1,
+            Dir::South => 2,
+            Dir::West => 4,
+            Dir::North => 8,
+        }
+    }
 }
+
+/// All four sides, as [`Block::Trace`] bits.
+pub const ALL_SIDES: u8 = 0b1111;
 
 /// Built-in gates. Two-input gates read from the two sides of their back
 /// (left and right of the facing direction); NOT and buffers read from the
@@ -109,9 +122,14 @@ impl Gate {
 /// One cell.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Block {
-    /// Connects to wires, vias and pins in the four neighbouring cells on
-    /// the same layer.
+    /// A wire that connects on all four sides (worlds made before
+    /// [`Block::Trace`]; tests and text drawings).
     Wire,
+    /// A wire that connects only on the sides in `sides` (bits of
+    /// [`Dir::bit`]). Two traces touch only if both have the side between
+    /// them, so wires drawn side by side stay apart; drawing over a wire
+    /// joins it.
+    Trace { sides: u8 },
     /// A wire that connects only along its axis (front and back), so
     /// straight wires laid side by side form a bus without touching.
     Straight { facing: Dir },
@@ -168,6 +186,12 @@ impl Block {
             | Block::Port { facing, .. }
             | Block::Straight { facing }
             | Block::Device { facing, .. } => *facing = facing.cw(),
+            Block::Trace { sides } => {
+                *sides = Dir::ALL
+                    .iter()
+                    .filter(|d| *sides & d.bit() != 0)
+                    .fold(0, |s, d| s | d.cw().bit());
+            }
             _ => {}
         }
         b
@@ -180,6 +204,7 @@ impl Block {
     pub fn accepts_wire_from(&self, d: Dir) -> bool {
         match self {
             Block::Wire | Block::Cross | Block::Via | Block::Lamp => true,
+            Block::Trace { sides } => sides & d.bit() != 0,
             Block::Straight { facing } => d == *facing || d == facing.opposite(),
             Block::Gate { gate, facing } => {
                 d == *facing
@@ -219,7 +244,7 @@ impl Block {
 
     pub fn label(&self) -> String {
         match self {
-            Block::Wire => "Tel".into(),
+            Block::Wire | Block::Trace { .. } => "Tel".into(),
             Block::Straight { .. } => "Düz tel".into(),
             Block::Cross => "Köprü".into(),
             Block::Via => "Geçiş".into(),
