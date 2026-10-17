@@ -134,8 +134,22 @@ pub struct WorldView {
     compiled: Option<Result<(Compiled, Circuit), String>>,
     compiled_rev: u64,
     /// Ticks since start, for clocks.
-    tick: u64,
+    pub tick: u64,
     pub running: bool,
+    /// Simulation steps per frame; 0 means as many as fit in the frame
+    /// budget.
+    pub speed: u32,
+    /// Steps per second measured over the last second, for display.
+    pub rate: f64,
+    rate_window: (std::time::Instant, u64),
+    /// One step requested while paused.
+    step_once: bool,
+    /// Chip output values after the last step.
+    values: Vec<u64>,
+    /// How long the last world compile took; slow compiles wait for the
+    /// end of a drag.
+    compile_cost: std::time::Duration,
+    defer_compile: bool,
     /// Cell under the pointer last frame.
     hover: Option<Pos>,
     /// The last cell painted in the current drag, so dragging does not
@@ -194,6 +208,13 @@ impl WorldView {
             compiled_rev: u64::MAX,
             tick: 0,
             running: true,
+            speed: 1,
+            rate: 0.0,
+            rate_window: (std::time::Instant::now(), 0),
+            step_once: false,
+            values: Vec::new(),
+            compile_cost: std::time::Duration::ZERO,
+            defer_compile: false,
             hover: None,
             painted: None,
             fit: true,
@@ -710,7 +731,8 @@ impl WorldView {
     /// view can show them.
     /// Device contents (memory, screen, keys) carry over to the new circuit.
     fn circuit(&mut self) -> Option<&mut (Compiled, Circuit)> {
-        if self.compiled_rev != self.world.revision() {
+        if self.compiled_rev != self.world.revision() && !self.defer_compile {
+            let started = std::time::Instant::now();
             self.compiled_rev = self.world.revision();
             let mut saved = Vec::new();
             if let Some(Ok((c, sim))) = &mut self.compiled {
@@ -733,6 +755,7 @@ impl WorldView {
                         Ok((c, sim))
                     }),
             );
+            self.compile_cost = started.elapsed();
         }
         self.compiled.as_mut()?.as_mut().ok()
     }
@@ -744,13 +767,58 @@ impl WorldView {
         }
     }
 
+    /// Run this frame's steps: `speed` of them, or as many as fit in a few
+    /// milliseconds; one when paused (so switches still respond), counting
+    /// time only when running or single-stepping.
+    pub fn run_frame(&mut self) {
+        let advance = self.running || std::mem::take(&mut self.step_once);
+        if !advance {
+            // Paused: re-evaluate at the same tick.
+            let t = self.tick;
+            self.values = self.step();
+            self.tick = t;
+            return;
+        }
+        let start = std::time::Instant::now();
+        let budget = std::time::Duration::from_millis(8);
+        let n = if self.running { self.speed } else { 1 };
+        let mut done = 0u64;
+        loop {
+            self.values = self.step();
+            done += 1;
+            if self.values.is_empty() && self.error().is_some() {
+                break;
+            }
+            let more = if n == 0 {
+                start.elapsed() < budget
+            } else {
+                done < n as u64 && start.elapsed() < budget * 4
+            };
+            if !more {
+                break;
+            }
+        }
+        let (since, count) = self.rate_window;
+        let count = count + done;
+        let dt = since.elapsed().as_secs_f64();
+        if dt >= 0.5 {
+            self.rate = count as f64 / dt;
+            self.rate_window = (std::time::Instant::now(), 0);
+        } else {
+            self.rate_window = (since, count);
+        }
+    }
+
+    /// Advance one step while paused.
+    pub fn single_step(&mut self) {
+        self.step_once = true;
+    }
+
     /// Advance the simulation one tick: set switch and clock inputs from the
     /// world, evaluate. Returns the value of every chip output.
     fn step(&mut self) -> Vec<u64> {
         let tick = self.tick;
-        if self.running {
-            self.tick += 1;
-        }
+        self.tick += 1;
         let switches: HashMap<Pos, bool> = self
             .world
             .blocks()
@@ -1018,16 +1086,24 @@ impl WorldView {
             }
         }
 
+        // Large worlds recompile only when the pointer is released, so
+        // painting stays smooth.
+        let held = ui.input(|i| i.pointer.any_down());
+        self.defer_compile = held && self.compile_cost > std::time::Duration::from_millis(15);
+
         // Simulate and draw.
-        let values = self.step();
+        self.run_frame();
+        let values = std::mem::take(&mut self.values);
         let screens = self.screens();
         self.draw(&painter, origin, rect, &values, &screens);
+        self.values = values;
         if self.running
             && self
                 .world
                 .blocks()
                 .any(|(_, b)| matches!(b, Block::Clock { .. }))
             || self.typing()
+            || self.defer_compile
         {
             ui.ctx().request_repaint();
         }
@@ -2121,5 +2197,55 @@ mod selection_tests {
         // Undo brings it back in one step.
         view.borrow_mut().undo();
         assert_eq!(view.borrow().world.len(), 8);
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    use super::*;
+
+    fn clock_world() -> WorldView {
+        let mut w = World::new("s");
+        w.apply(Edit::Set {
+            pos: Pos::new(0, 0, 0),
+            block: Some(Block::Clock {
+                period: 1,
+                facing: Dir::East,
+            }),
+        });
+        w.apply(Edit::Set {
+            pos: Pos::new(1, 0, 0),
+            block: Some(Block::Lamp),
+        });
+        WorldView::new(w)
+    }
+
+    #[test]
+    fn speed_and_single_step() {
+        let mut v = clock_world();
+        v.run_frame();
+        assert_eq!(v.tick, 1);
+        v.speed = 100;
+        v.run_frame();
+        assert_eq!(v.tick, 101);
+        v.speed = 0;
+        v.run_frame();
+        assert!(v.tick > 1000, "as fast as possible: {}", v.tick);
+        // Paused: frames do not advance, a single step does.
+        v.running = false;
+        let t = v.tick;
+        v.run_frame();
+        v.run_frame();
+        assert_eq!(v.tick, t);
+        v.single_step();
+        v.run_frame();
+        assert_eq!(v.tick, t + 1);
+        // The lamp follows the clock (period 1: toggles every step).
+        let (c, _) = v.circuit().unwrap();
+        let o = c.lamps[0].1.unwrap();
+        let before = v.values[o];
+        v.single_step();
+        v.run_frame();
+        assert_ne!(v.values[o], before);
     }
 }

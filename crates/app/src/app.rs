@@ -1101,7 +1101,50 @@ impl App {
                 w.refit();
             }
         });
-        ui.label(RichText::new(format!("{} blok", w.world.len())).weak());
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!w.running, egui::Button::new("⏭ Bir adım"))
+                .on_hover_text("Durmuşken saati bir adım ilerlet")
+                .clicked()
+            {
+                w.single_step();
+            }
+            let l = ui.label("Hız").id;
+            let name = |v: u32| match v {
+                0 => "En hızlı".to_string(),
+                v => format!("{v} adım/kare"),
+            };
+            egui::ComboBox::from_id_salt("world-speed")
+                .selected_text(name(w.speed))
+                .show_ui(ui, |ui| {
+                    for v in [1, 10, 100, 1000, 0] {
+                        ui.selectable_value(&mut w.speed, v, name(v));
+                    }
+                })
+                .response
+                .labelled_by(l);
+        });
+        ui.label(
+            RichText::new(format!(
+                "{} blok · adım {} · {}",
+                w.world.len(),
+                w.tick,
+                if w.running {
+                    format!("{:.0} adım/sn", w.rate)
+                } else {
+                    "durdu".into()
+                }
+            ))
+            .weak(),
+        );
+        ui.label(
+            RichText::new(
+                "Saat bloğu her 'periyot' adımda bir değişir. Hızı artırınca saat ve ona \
+                 bağlı devreler hızlanır.",
+            )
+            .weak()
+            .small(),
+        );
         if let Some(e) = w.error() {
             ui.colored_label(Color32::LIGHT_RED, e);
         }

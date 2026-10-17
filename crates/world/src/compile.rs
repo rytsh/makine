@@ -152,12 +152,37 @@ fn is_conductor(b: &Block) -> bool {
     )
 }
 
-/// Whether `b`'s pin on side `d` is an output (drives the net).
-fn is_output_pin(world: &World, pos: Pos, b: &Block, d: Dir) -> bool {
-    match b {
-        Block::Device { .. } | Block::Cover { .. } => {
-            world.device_at(pos).is_some_and(|(_, _, f)| f == d)
+/// Device pins of a world, computed once per compile: (cell, side) ->
+/// whether it is an output.
+struct DevicePins(HashMap<(Pos, Dir), bool>);
+
+impl DevicePins {
+    fn new(world: &World) -> Self {
+        let mut m = HashMap::new();
+        for (anchor, b) in world.blocks() {
+            if let Block::Device { device, facing } = b {
+                let l = device::layout(device, anchor, *facing);
+                m.extend(l.inputs.iter().map(|&k| (k, false)));
+                m.extend(l.outputs.iter().map(|&k| (k, true)));
+            }
         }
+        DevicePins(m)
+    }
+
+    /// Whether the block at `pos` connects to a wire on side `side`.
+    fn accepts(&self, world: &World, pos: Pos, side: Dir) -> bool {
+        match world.get(pos) {
+            Some(Block::Device { .. } | Block::Cover { .. }) => self.0.contains_key(&(pos, side)),
+            Some(b) => b.accepts_wire_from(side),
+            None => false,
+        }
+    }
+}
+
+/// Whether `b`'s pin on side `d` is an output (drives the net).
+fn is_output_pin(pins: &DevicePins, pos: Pos, b: &Block, d: Dir) -> bool {
+    match b {
+        Block::Device { .. } | Block::Cover { .. } => pins.0.get(&(pos, d)) == Some(&true),
         Block::Gate { facing, .. }
         | Block::Switch { facing, .. }
         | Block::Clock { facing, .. }
@@ -178,8 +203,15 @@ struct Nodes {
 impl Nodes {
     /// The node of `block` (at `pos`) that a neighbour on side `side`
     /// connects to, if any.
-    fn facing(&self, world: &World, block: &Block, pos: Pos, side: Dir) -> Option<usize> {
-        if !world.accepts_wire(pos, side) {
+    fn facing(
+        &self,
+        world: &World,
+        pins: &DevicePins,
+        block: &Block,
+        pos: Pos,
+        side: Dir,
+    ) -> Option<usize> {
+        if !pins.accepts(world, pos, side) {
             return None;
         }
         match block {
@@ -201,6 +233,7 @@ impl Nodes {
 
 pub fn compile(world: &World) -> Result<Compiled, CompileError> {
     let blocks: BTreeMap<Pos, &Block> = world.blocks().collect();
+    let pins = DevicePins::new(world);
     let mut uf = Uf(Vec::new());
     let mut nodes = Nodes {
         cell: HashMap::new(),
@@ -218,7 +251,7 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
             }
             _ => {
                 for d in Dir::ALL {
-                    if world.accepts_wire(pos, d) {
+                    if pins.accepts(world, pos, d) {
                         nodes.pin.insert((pos, d), uf.make());
                     }
                 }
@@ -228,7 +261,7 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
 
     for (&pos, block) in &blocks {
         for d in Dir::ALL {
-            let Some(here) = nodes.facing(world, block, pos, d) else {
+            let Some(here) = nodes.facing(world, &pins, block, pos, d) else {
                 continue;
             };
             let npos = pos.step(d);
@@ -239,12 +272,12 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
             // back); two outputs or two inputs side by side do not touch.
             if !is_conductor(block)
                 && !is_conductor(nb)
-                && is_output_pin(world, pos, block, d)
-                    == is_output_pin(world, npos, nb, d.opposite())
+                && is_output_pin(&pins, pos, block, d)
+                    == is_output_pin(&pins, npos, nb, d.opposite())
             {
                 continue;
             }
-            if let Some(there) = nodes.facing(world, nb, npos, d.opposite()) {
+            if let Some(there) = nodes.facing(world, &pins, nb, npos, d.opposite()) {
                 uf.union(here, there);
             }
         }
