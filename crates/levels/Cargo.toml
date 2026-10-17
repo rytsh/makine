@@ -1,0 +1,10 @@
+[package]
+name = "makine-levels"
+description = "Level definitions and solution checking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+makine-sim = { path = "../sim" }
+makine-rv = { path = "../rv" }
