@@ -76,17 +76,67 @@ mod stacking {
     use glam::DVec3;
 
     fn click(h: &mut egui_kittest::Harness<'_, WorldView>, p: egui::Pos2) {
+        click_with(h, p, egui::Modifiers::NONE);
+    }
+
+    fn click_with(
+        h: &mut egui_kittest::Harness<'_, WorldView>,
+        p: egui::Pos2,
+        modifiers: egui::Modifiers,
+    ) {
         h.event(egui::Event::PointerMoved(p));
         h.run();
+        h.event(egui::Event::ModifiersChanged(modifiers));
         for pressed in [true, false] {
             h.event(egui::Event::PointerButton {
                 pos: p,
                 button: egui::PointerButton::Primary,
                 pressed,
-                modifiers: egui::Modifiers::NONE,
+                modifiers,
             });
         }
         h.run();
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.run();
+    }
+
+    /// Ctrl+click builds under a block; from underground, clicking a
+    /// block's bottom does too.
+    #[test]
+    fn build_below() {
+        let mut v = WorldView::new(World::new("s"));
+        v.brush = Some(Brush { block: Block::Lamp });
+        v.edit(Edit::Set {
+            pos: Pos::new(0, 0, 0),
+            block: Some(Block::Lamp),
+        });
+        v.camera = Camera {
+            target: DVec3::new(0.5, 0.5, 0.0),
+            pitch: 1.2,
+            dist: 12.0,
+            ..Camera::default()
+        };
+        v.fit = false;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), v);
+        h.run();
+        let at = |h: &egui_kittest::Harness<'_, WorldView>, x: f64, y: f64, z: f64| {
+            let v = h.state();
+            v.camera.project(v.rect, DVec3::new(x, y, z)).unwrap()
+        };
+        let p = at(&h, 0.5, 0.5, 0.75);
+        click_with(&mut h, p, egui::Modifiers::COMMAND);
+        assert_eq!(h.state().world.get(Pos::new(0, 0, -1)), Some(&Block::Lamp));
+        assert_eq!(h.state().world.len(), 2);
+
+        // Underground, looking up at the bottom of the lower lamp.
+        h.state_mut().set_layer(-1);
+        h.state_mut().camera.pitch = -1.2;
+        h.run();
+        let p = at(&h, 0.5, 0.5, -1.0);
+        click(&mut h, p);
+        assert_eq!(h.state().world.get(Pos::new(0, 0, -2)), Some(&Block::Lamp));
     }
 
     /// Clicking the top of a block builds on it and climbs a layer;

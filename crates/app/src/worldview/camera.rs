@@ -151,7 +151,19 @@ impl Camera {
     /// Turn around the target.
     pub fn orbit(&mut self, dx: f32, dy: f32) {
         self.yaw -= dx as f64 * 0.008;
-        self.pitch = (self.pitch + dy as f64 * 0.008).clamp(0.12, 1.55);
+        // Below zero the camera looks up from underground. Level with the
+        // floor nothing of it shows, so the camera jumps across that band
+        // in the direction it is moving.
+        let old = self.pitch;
+        let new = (old + dy as f64 * 0.008).clamp(-1.55, 1.55);
+        const LEVEL: f64 = 0.08;
+        self.pitch = if new.abs() >= LEVEL {
+            new
+        } else if new > old {
+            LEVEL
+        } else {
+            -LEVEL
+        };
     }
 
     /// Slide the target so the ground point under `from` ends up under

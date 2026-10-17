@@ -347,7 +347,7 @@ impl App {
         ui.label(
             RichText::new(
                 "Sol tık: yerleştir (bir bloğun üstüne ya da yanına tıklarsan oraya koyar; \
-                 sürükleyerek katmana boya) · Sağ tık: sil · R: döndür · \
+                 sürükleyerek katmana boya; Ctrl+tık: altına koy) · Sağ tık: sil · R: döndür · \
                  Q/E: katman · Tekerlek: yakınlaştır · Orta tık ya da Alt+sürükle: kamerayı \
                  döndür · Boşluk+sürükle ya da Shift+orta tık: kaydır · Anahtara tıkla: aç/kapa",
             )

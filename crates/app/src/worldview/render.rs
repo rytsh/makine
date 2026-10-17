@@ -277,7 +277,12 @@ impl WorldView {
         // Names and numbers over the scene, scaled with distance.
         let px_per_cell =
             |w: DVec3| rect.height() as f64 / (0.83 * (cam.eye() - w).length().max(0.1));
+        let eye = cam.eye();
         for l in labels {
+            // Labels lie on top faces: hidden when looking from below.
+            if eye.z < l.at.z {
+                continue;
+            }
             let px = (l.size * px_per_cell(l.at)) as f32;
             if px < 7.0 {
                 continue;

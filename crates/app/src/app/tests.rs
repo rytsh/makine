@@ -204,6 +204,17 @@ mod editor {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world.png")).unwrap();
 
+        // The same world from underground.
+        {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            w.camera.pitch = -0.6;
+            w.camera.dist *= 0.8;
+        }
+        harness.run_steps(2);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-world-below.png")).unwrap();
+
         // Devices: a keyboard into a display, and a screen with a pattern.
         {
             use makine_world::device::Device;

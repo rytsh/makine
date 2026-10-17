@@ -6,7 +6,7 @@
 //! aiming at one aims at its own cell, so a wire can be painted over (with
 //! a gate, say). Blocks above the edited layer are hidden and cannot be hit;
 //! the edited layer's floor stops the ray, so empty cells there are built in
-//! directly.
+//! directly, from above or (with the camera underground) from below.
 
 use glam::DVec3;
 use makine_world::block::Block;
@@ -111,8 +111,14 @@ pub fn aim(world: &World, ray: &Ray, layer: i32) -> Option<Aim> {
             f64::INFINITY
         };
     }
+    // Whether the ray came up into the current cell through its floor.
+    let mut came_up = false;
     for _ in 0..MAX_STEPS {
         let p = Pos::new(cell.x as i32, cell.y as i32, cell.z as i32);
+        // Above the edited layer everything is hidden.
+        if p.z > layer && step.z >= 0.0 {
+            return None;
+        }
         if p.z <= layer {
             if let Some(b) = world.get(p) {
                 let lo = cell;
@@ -135,6 +141,14 @@ pub fn aim(world: &World, ray: &Ray, layer: i32) -> Option<Aim> {
                 }
             }
         }
+        // Coming up from below through the edited layer's floor: an empty
+        // cell there.
+        if came_up && p.z == layer {
+            return Some(Aim {
+                target: None,
+                place: p,
+            });
+        }
         let axis = if next.x < next.y && next.x < next.z {
             0
         } else if next.y < next.z {
@@ -151,6 +165,7 @@ pub fn aim(world: &World, ray: &Ray, layer: i32) -> Option<Aim> {
         }
         cell[axis] += step[axis];
         next[axis] += delta[axis];
+        came_up = axis == 2 && step.z > 0.0;
         if cell.abs().max_element() > lim {
             return None;
         }
@@ -250,6 +265,34 @@ mod tests {
         set(&mut w, Pos::new(2, 2, 1), Block::Lamp);
         let a = aim(&w, &down_at(2.5, 2.5), 0).unwrap();
         assert_eq!(a.target, None, "layer 1 is hidden while editing 0");
+    }
+
+    #[test]
+    fn from_below() {
+        let mut w = World::new("a");
+        let up = |x: f64, y: f64| Ray {
+            from: DVec3::new(x - 2.0, y - 2.0, -6.0),
+            dir: DVec3::new(2.0, 2.0, 6.0).normalize(),
+        };
+        // Empty: the edited layer's floor, seen from below.
+        let a = aim(&w, &up(2.5, 2.5), 0).unwrap();
+        assert_eq!(
+            a,
+            Aim {
+                target: None,
+                place: Pos::new(2, 2, 0)
+            }
+        );
+        // The bottom of a block builds under it.
+        set(&mut w, Pos::new(2, 2, 0), Block::Lamp);
+        let a = aim(&w, &up(2.5, 2.5), 0).unwrap();
+        assert_eq!(a.target, Some(Pos::new(2, 2, 0)));
+        assert_eq!(a.place, Pos::new(2, 2, -1));
+        // Another layer's floor, from below.
+        let a = aim(&w, &up(9.5, 9.5), -3).unwrap();
+        assert_eq!(a.place.z, -3);
+        // Looking up from above the edited layer finds nothing.
+        assert_eq!(aim(&w, &up(9.5, 9.5), -10), None);
     }
 
     #[test]

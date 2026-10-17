@@ -9,7 +9,9 @@
 //! Controls: left click places the selected block (drag to paint) or, on a
 //! device, selects it. Clicking a face of a block builds against that face,
 //! on top of it or beside it (see `aim.rs`); building on top climbs to the
-//! next layer. Right click removes the block under the pointer; R turns the block being placed
+//! next layer; Ctrl+click (Cmd on a Mac) builds under it. The camera can
+//! also go underground, where clicking a block's bottom builds under it.
+//! Right click removes the block under the pointer; R turns the block being placed
 //! (or the blocks being pasted); Page Up/Down or Q/E change layer;
 //! middle-drag or Alt+drag turns the camera, Space+drag or Shift+middle-drag
 //! pans; the wheel zooms. With the select tool, dragging selects a region
@@ -651,8 +653,9 @@ impl WorldView {
         }
         if response.clicked() {
             self.painted = None;
+            let below = ui.input(|i| i.modifiers.command);
             if let Some(a) = aimed {
-                self.click(a);
+                self.click(a, below);
             }
             return;
         }
@@ -678,8 +681,14 @@ impl WorldView {
         }
     }
 
-    /// A left click at what the pointer aims at.
-    fn click(&mut self, a: aim::Aim) {
+    /// A left click at what the pointer aims at; `below` builds under the
+    /// block (or under the empty cell) instead.
+    fn click(&mut self, a: aim::Aim, below: bool) {
+        if below {
+            let over = a.target.unwrap_or(a.place);
+            self.place(Pos::new(over.x, over.y, over.z - 1), true);
+            return;
+        }
         if let Some(t) = a
             .target
             .filter(|t| self.world.get(*t).is_some_and(aim::interactive))
