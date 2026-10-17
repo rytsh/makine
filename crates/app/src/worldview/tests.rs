@@ -63,6 +63,74 @@ mod basics {
     }
 
     #[test]
+    fn port_names_count_up() {
+        assert_eq!(next_name("a"), "b");
+        assert_eq!(next_name("z"), "aa");
+        assert_eq!(next_name("az"), "ba");
+        assert_eq!(next_name("Q"), "R");
+        assert_eq!(next_name("x0"), "x1");
+        assert_eq!(next_name("q9"), "q10");
+        assert_eq!(next_name("sel_"), "sel_1");
+
+        // Placing ports: the one in hand moves on, skipping names in use.
+        let mut v = WorldView::new(World::new("p"));
+        v.edit(Edit::Set {
+            pos: Pos::new(5, 5, 0),
+            block: Some(Block::Port {
+                name: "b".into(),
+                output: false,
+                facing: Dir::East,
+            }),
+        });
+        v.brush = Some(Brush {
+            block: Block::Port {
+                name: "a".into(),
+                output: false,
+                facing: Dir::East,
+            },
+        });
+        let names: Vec<String> = (0..3)
+            .map(|y| {
+                v.place(Pos::new(0, y, 0), false);
+                match v.world.get(Pos::new(0, y, 0)) {
+                    Some(Block::Port { name, .. }) => name.clone(),
+                    _ => panic!(),
+                }
+            })
+            .collect();
+        assert_eq!(names, ["a", "c", "d"]);
+        // Choosing the port again from the palette starts at "a" again,
+        // which is taken: the next placed port still gets a free name.
+        v.brush = Some(Brush {
+            block: Block::Port {
+                name: "a".into(),
+                output: false,
+                facing: Dir::East,
+            },
+        });
+        v.place(Pos::new(0, 9, 0), false);
+        assert!(matches!(
+            v.world.get(Pos::new(0, 9, 0)),
+            Some(Block::Port { name, .. }) if name == "e"
+        ));
+        // Numbered names count up: a bus.
+        v.brush = Some(Brush {
+            block: Block::Port {
+                name: "x0".into(),
+                output: false,
+                facing: Dir::East,
+            },
+        });
+        for y in 10..13 {
+            v.place(Pos::new(0, y, 0), false);
+        }
+        assert!(matches!(
+            v.world.get(Pos::new(0, 12, 0)),
+            Some(Block::Port { name, .. }) if name == "x2"
+        ));
+    }
+
+    #[test]
     fn edits_undo_redo() {
         let mut v = WorldView::default();
         v.edit(Edit::Set {

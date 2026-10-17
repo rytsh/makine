@@ -384,6 +384,23 @@ impl App {
                 }
             }
         });
+        // The name the next port gets; it counts up as ports are placed.
+        if let Some(crate::worldview::Brush {
+            block: makine_world::Block::Port { name, .. },
+        }) = &mut w.brush
+        {
+            ui.horizontal(|ui| {
+                let l = ui.label("Sıradaki port adı").id;
+                let mut text = name.clone();
+                ui.add(egui::TextEdit::singleline(&mut text).desired_width(70.0))
+                    .labelled_by(l)
+                    .on_hover_text("Koydukça kendiliğinden ilerler: a, b, c … ya da x0, x1, x2 …");
+                let text = text.trim();
+                if !text.is_empty() && text.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    *name = text.to_string();
+                }
+            });
+        }
         ui.add_space(4.0);
         ui.label(RichText::new("Cihazlar").strong());
         w.device_palette_ui(ui);

@@ -746,6 +746,7 @@ impl WorldView {
                 return;
             }
         }
+        self.free_port_name(Some(cell));
         let Some(brush) = &self.brush else { return };
         let mut block = brush.block.clone();
         while block.facing().is_some_and(|f| f != self.facing) {
@@ -756,6 +757,84 @@ impl WorldView {
                 pos: cell,
                 block: Some(block),
             });
+            self.next_port_name();
         }
     }
+
+    /// After placing a port, the port in hand gets the next free name:
+    /// a, b, c … or x0, x1, x2 … (numbered names become one bus when the
+    /// world turns into a chip).
+    fn next_port_name(&mut self) {
+        if let Some(Brush {
+            block: Block::Port { name, .. },
+        }) = &mut self.brush
+        {
+            *name = next_name(name);
+        }
+        self.free_port_name(None);
+    }
+
+    /// If the port in hand has a name already used by another port (not the
+    /// one at `replacing`), move it on to the next free one.
+    pub fn free_port_name(&mut self, replacing: Option<Pos>) {
+        let Some(Brush {
+            block: Block::Port { name, .. },
+        }) = &mut self.brush
+        else {
+            return;
+        };
+        let taken: std::collections::HashSet<String> = self
+            .world
+            .blocks()
+            .filter(|(p, _)| Some(*p) != replacing)
+            .filter_map(|(_, b)| match b {
+                Block::Port { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        for _ in 0..10_000 {
+            if !taken.contains(name.as_str()) {
+                return;
+            }
+            *name = next_name(name);
+        }
+    }
+}
+
+/// The name after `name`: the number at its end counts up (`x0` → `x1`,
+/// `q9` → `q10`), else its last letter does (`a` → `b`, `z` → `aa`).
+pub fn next_name(name: &str) -> String {
+    let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    if digits > 0 {
+        let (base, num) = name.split_at(name.len() - digits);
+        if let Ok(n) = num.parse::<u64>() {
+            return format!("{base}{}", n + 1);
+        }
+    }
+    let mut chars: Vec<char> = name.chars().collect();
+    // Count like a spreadsheet's columns over a..z (A..Z keeps its case).
+    let mut i = chars.len();
+    loop {
+        if i == 0 {
+            let first = if chars.first().is_some_and(|c| c.is_ascii_uppercase()) {
+                'A'
+            } else {
+                'a'
+            };
+            chars.insert(0, first);
+            break;
+        }
+        i -= 1;
+        match chars[i] {
+            'z' => chars[i] = 'a',
+            'Z' => chars[i] = 'A',
+            c if c.is_ascii_alphabetic() => {
+                chars[i] = (c as u8 + 1) as char;
+                break;
+            }
+            // Something else at the end (`_`): start numbering.
+            _ => return format!("{name}1"),
+        }
+    }
+    chars.into_iter().collect()
 }
