@@ -22,4 +22,4 @@ pub mod world;
 pub use block::{Block, Dir, Gate};
 pub use compile::{compile, CompileError, Compiled};
 pub use device::Device;
-pub use world::{Edit, Pos, World};
+pub use world::{Change, Edit, Pos, World};

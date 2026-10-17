@@ -19,7 +19,7 @@ use makine_world::device::{self, Device};
 
 use makine_world::region::{self, Clip, Region};
 use makine_world::world::MAX_LAYER;
-use makine_world::{Edit, Pos, World};
+use makine_world::{Change, Edit, Pos, World};
 
 use crate::worldsim::WorldSim;
 
@@ -46,8 +46,10 @@ pub struct WorldView {
     pub facing: Dir,
     pan: Vec2,
     zoom: f32,
-    undo: Vec<Edit>,
-    redo: Vec<Edit>,
+    /// This player's changes, newest last. Undo only takes back cells
+    /// nobody else has changed since.
+    undo: Vec<Change>,
+    redo: Vec<Change>,
     /// The running circuit of the world.
     pub sim: WorldSim,
     /// Rebuilding the circuit waits for the end of a drag (large worlds).
@@ -305,40 +307,58 @@ impl WorldView {
         if self.sharing {
             self.outbox.push(e.clone());
         }
-        let inv = self.world.apply(e);
-        self.undo.push(inv);
+        let change = self.world.apply_change(e);
+        if change.is_empty() {
+            return;
+        }
+        self.undo.push(change);
         self.redo.clear();
         if self.undo.len() > 500 {
             self.undo.remove(0);
         }
     }
 
+    /// Take back this player's last change, skipping changes that other
+    /// players have entirely overwritten.
     pub fn undo(&mut self) {
-        if let Some(e) = self.undo.pop() {
-            if self.sharing {
-                self.outbox.push(e.clone());
-            }
-            let inv = self.world.apply(e);
-            self.redo.push(inv);
-        }
+        self.step_history(true);
     }
 
     pub fn redo(&mut self) {
-        if let Some(e) = self.redo.pop() {
+        self.step_history(false);
+    }
+
+    fn step_history(&mut self, back: bool) {
+        let (from, to) = if back {
+            (&mut self.undo, &mut self.redo)
+        } else {
+            (&mut self.redo, &mut self.undo)
+        };
+        while let Some(change) = from.pop() {
+            let Some(e) = self.world.revert(&change, back) else {
+                continue;
+            };
             if self.sharing {
                 self.outbox.push(e.clone());
             }
-            let inv = self.world.apply(e);
-            self.undo.push(inv);
+            self.world.apply(e);
+            to.push(change);
+            return;
         }
     }
 
+    /// Whether undo would change anything (others may have overwritten
+    /// all of this player's changes).
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
+        self.undo
+            .iter()
+            .any(|c| self.world.revert(c, true).is_some())
     }
 
     pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
+        self.redo
+            .iter()
+            .any(|c| self.world.revert(c, false).is_some())
     }
 
     pub fn show(&mut self, ui: &mut Ui) {

@@ -115,6 +115,20 @@ pub enum Edit {
     Batch(Vec<Edit>),
 }
 
+/// What an edit changed, cell by cell: (cell, before, after). Undoing it
+/// restores only cells that still hold what the edit left there, so it
+/// never overwrites what someone else did since (see [`World::revert`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Change {
+    cells: Vec<(Pos, Option<Block>, Option<Block>)>,
+}
+
+impl Change {
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct World {
     pub name: String,
@@ -142,6 +156,59 @@ impl World {
 
     pub fn get(&self, pos: Pos) -> Option<&Block> {
         self.chunks.get(&pos.chunk())?.cells[pos.index()].as_ref()
+    }
+
+    /// Apply an edit and record what it changed, for undo.
+    pub fn apply_change(&mut self, edit: Edit) -> Change {
+        let mut cells: Vec<(Pos, Option<Block>, Option<Block>)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        self.record(edit, &mut |pos, before| {
+            // A cell set twice keeps its first `before`.
+            if seen.insert(pos) {
+                cells.push((pos, before, None));
+            }
+        });
+        for c in &mut cells {
+            c.2 = self.get(c.0).cloned();
+        }
+        cells.retain(|(_, before, after)| before != after);
+        Change { cells }
+    }
+
+    fn record(&mut self, edit: Edit, seen: &mut impl FnMut(Pos, Option<Block>)) {
+        match edit {
+            Edit::Set { pos, block } => {
+                seen(pos, self.get(pos).cloned());
+                self.put(pos, block);
+            }
+            Edit::Batch(edits) => {
+                for e in edits {
+                    self.record(e, seen);
+                }
+            }
+        }
+    }
+
+    /// The edit undoing `change` (`back`) or doing it again (`!back`),
+    /// limited to cells nobody has changed since. `None` if there is
+    /// nothing left to do.
+    pub fn revert(&self, change: &Change, back: bool) -> Option<Edit> {
+        let edits: Vec<Edit> = change
+            .cells
+            .iter()
+            .filter_map(|(pos, before, after)| {
+                let (expect, to) = if back {
+                    (after, before)
+                } else {
+                    (before, after)
+                };
+                (self.get(*pos) == expect.as_ref()).then(|| Edit::Set {
+                    pos: *pos,
+                    block: to.clone(),
+                })
+            })
+            .collect();
+        (!edits.is_empty()).then_some(Edit::Batch(edits))
     }
 
     /// Apply an edit; returns the edit that undoes it.
@@ -555,6 +622,72 @@ mod tests {
         // A wrong count is recomputed.
         let text = w.to_json().replace("\"count\":1", "\"count\":0");
         assert_eq!(World::from_json(&text).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn undo_keeps_other_players_work() {
+        let mut w = World::new("t");
+        let (a, b) = (Pos::new(0, 0, 0), Pos::new(1, 0, 0));
+        // I paint two wires.
+        let mine = w.apply_change(Edit::Batch(vec![
+            Edit::Set {
+                pos: a,
+                block: Some(Block::Wire),
+            },
+            Edit::Set {
+                pos: b,
+                block: Some(Block::Wire),
+            },
+        ]));
+        // Someone else turns one into a lamp.
+        w.apply(Edit::Set {
+            pos: b,
+            block: Some(Block::Lamp),
+        });
+        // Undoing mine removes my wire, not their lamp.
+        let undo = w.revert(&mine, true).unwrap();
+        w.apply(undo);
+        assert_eq!(w.get(a), None);
+        assert_eq!(w.get(b), Some(&Block::Lamp));
+        // Redo puts my wire back where it is still free.
+        let redo = w.revert(&mine, false).unwrap();
+        w.apply(redo);
+        assert_eq!(w.get(a), Some(&Block::Wire));
+        assert_eq!(w.get(b), Some(&Block::Lamp));
+        // Nothing left to undo if everything was overwritten.
+        w.apply(Edit::Set {
+            pos: a,
+            block: Some(Block::Via),
+        });
+        assert_eq!(w.revert(&mine, true), None);
+    }
+
+    #[test]
+    fn change_records_first_before_and_last_after() {
+        let mut w = World::new("t");
+        let a = Pos::new(0, 0, 0);
+        w.apply(Edit::Set {
+            pos: a,
+            block: Some(Block::Lamp),
+        });
+        let c = w.apply_change(Edit::Batch(vec![
+            Edit::Set {
+                pos: a,
+                block: None,
+            },
+            Edit::Set {
+                pos: a,
+                block: Some(Block::Wire),
+            },
+            // Out of bounds: not a change.
+            Edit::Set {
+                pos: Pos::new(0, 0, 99),
+                block: Some(Block::Wire),
+            },
+        ]));
+        assert_eq!(c.cells, vec![(a, Some(Block::Lamp), Some(Block::Wire))]);
+        w.apply(w.revert(&c, true).unwrap());
+        assert_eq!(w.get(a), Some(&Block::Lamp));
     }
 
     #[test]

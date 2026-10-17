@@ -67,6 +67,63 @@ mod basics {
     }
 }
 
+mod history {
+    use crate::worldview::*;
+
+    fn wire(v: &mut WorldView, x: i32, b: Block) {
+        v.edit(Edit::Set {
+            pos: Pos::new(x, 0, 0),
+            block: Some(b),
+        });
+    }
+
+    /// In a shared world, undo takes back only what this player did and
+    /// what nobody has changed since.
+    #[test]
+    fn undo_respects_other_players() {
+        let mut v = WorldView::new(World::new("h"));
+        v.sharing = true;
+        wire(&mut v, 0, Block::Wire);
+        wire(&mut v, 1, Block::Wire);
+        // Another player puts a lamp on my second wire.
+        v.apply_remote(Edit::Set {
+            pos: Pos::new(1, 0, 0),
+            block: Some(Block::Lamp),
+        });
+        v.outbox.clear();
+        // My last edit was entirely overwritten: undo skips it and takes
+        // back the first one.
+        v.undo();
+        assert_eq!(v.world.get(Pos::new(0, 0, 0)), None);
+        assert_eq!(v.world.get(Pos::new(1, 0, 0)), Some(&Block::Lamp));
+        // What was undone is shared with the others.
+        assert_eq!(
+            v.outbox,
+            vec![Edit::Batch(vec![Edit::Set {
+                pos: Pos::new(0, 0, 0),
+                block: None
+            }])]
+        );
+        v.redo();
+        assert_eq!(v.world.get(Pos::new(0, 0, 0)), Some(&Block::Wire));
+        // Nothing of mine is left to undo except that wire.
+        v.undo();
+        v.undo();
+        assert_eq!(v.world.len(), 1, "the lamp stays");
+    }
+
+    /// Edits that change nothing do not fill the history.
+    #[test]
+    fn no_op_edits_are_not_recorded() {
+        let mut v = WorldView::new(World::new("h"));
+        wire(&mut v, 0, Block::Wire);
+        wire(&mut v, 0, Block::Wire);
+        v.undo();
+        assert!(v.world.is_empty());
+        assert!(!v.can_undo());
+    }
+}
+
 mod ui_tests {
     use super::*;
     use crate::worldview::*;
