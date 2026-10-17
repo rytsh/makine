@@ -71,6 +71,84 @@ mod basics {
     }
 }
 
+mod stacking {
+    use crate::worldview::*;
+    use glam::DVec3;
+
+    fn click(h: &mut egui_kittest::Harness<'_, WorldView>, p: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(p));
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run();
+    }
+
+    /// Clicking the top of a block builds on it and climbs a layer;
+    /// clicking its side builds beside it; right click removes the block
+    /// under the pointer, wherever it is.
+    #[test]
+    fn click_builds_on_faces() {
+        let mut v = WorldView::new(World::new("s"));
+        v.brush = Some(Brush { block: Block::Lamp });
+        v.camera = Camera {
+            target: DVec3::new(0.5, 0.5, 0.0),
+            pitch: 1.2,
+            dist: 12.0,
+            ..Camera::default()
+        };
+        v.fit = false;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), v);
+        h.run();
+        let at = |h: &egui_kittest::Harness<'_, WorldView>, x: f64, y: f64, z: f64| {
+            let v = h.state();
+            v.camera.project(v.rect, DVec3::new(x, y, z)).unwrap()
+        };
+
+        let p = at(&h, 0.5, 0.5, 0.0);
+        click(&mut h, p);
+        assert_eq!(h.state().world.get(Pos::new(0, 0, 0)), Some(&Block::Lamp));
+
+        // The top of the lamp (height 0.75).
+        let p = at(&h, 0.5, 0.5, 0.75);
+        click(&mut h, p);
+        assert_eq!(h.state().world.get(Pos::new(0, 0, 1)), Some(&Block::Lamp));
+        assert_eq!(h.state().layer, 1, "climbed to the new block");
+
+        // Back on layer 0: the side of the bottom lamp facing the camera
+        // (south-east, so its +x face).
+        h.state_mut().set_layer(0);
+        h.run();
+        let p = at(&h, 1.0, 0.5, 0.35);
+        click(&mut h, p);
+        assert_eq!(h.state().world.get(Pos::new(1, 0, 0)), Some(&Block::Lamp));
+        assert_eq!(h.state().world.len(), 3);
+
+        // Right click on that lamp removes it.
+        let p = at(&h, 1.5, 0.5, 0.75);
+        h.event(egui::Event::PointerMoved(p));
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+        }
+        h.run();
+        assert_eq!(h.state().world.get(Pos::new(1, 0, 0)), None);
+        assert_eq!(h.state().world.len(), 2);
+    }
+}
+
 mod history {
     use crate::worldview::*;
 

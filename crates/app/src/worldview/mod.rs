@@ -7,7 +7,9 @@
 //! player sees what they build on.
 //!
 //! Controls: left click places the selected block (drag to paint) or, on a
-//! device, selects it; right click removes; R turns the block being placed
+//! device, selects it. Clicking a face of a block builds against that face,
+//! on top of it or beside it (see `aim.rs`); building on top climbs to the
+//! next layer. Right click removes the block under the pointer; R turns the block being placed
 //! (or the blocks being pasted); Page Up/Down or Q/E change layer;
 //! middle-drag or Alt+drag turns the camera, Space+drag or Shift+middle-drag
 //! pans; the wheel zooms. With the select tool, dragging selects a region
@@ -23,6 +25,7 @@ use makine_world::{Change, Edit, Pos, World};
 
 use crate::worldsim::WorldSim;
 
+mod aim;
 mod camera;
 pub mod gpu;
 mod panels;
@@ -59,8 +62,10 @@ pub struct WorldView {
     pub sim: WorldSim,
     /// Rebuilding the circuit waits for the end of a drag (large worlds).
     defer: bool,
-    /// Cell under the pointer last frame.
+    /// Cell under the pointer last frame: where a block would go.
     hover: Option<Pos>,
+    /// The block under the pointer last frame, when building.
+    target: Option<Pos>,
     /// The last cell painted in the current drag, so dragging does not
     /// repaint the same cell every frame.
     painted: Option<Pos>,
@@ -123,6 +128,7 @@ impl WorldView {
             sim: WorldSim::default(),
             defer: false,
             hover: None,
+            target: None,
             painted: None,
             fit: true,
             selected: None,
@@ -494,16 +500,24 @@ impl WorldView {
             }
         }
 
-        // Pointer: which cell?
-        self.hover = response
-            .hover_pos()
-            .and_then(|p| self.camera.pick(rect, p, self.layer));
+        // Pointer: which cell? Selecting and pasting work on the edited
+        // layer; building aims at the blocks themselves.
+        let shift = ui.input(|i| i.modifiers.shift);
+        let building = self.pasting.is_none() && !self.selecting() && !shift;
         let pick = |v: &Self, p: egui::Pos2| v.camera.pick(rect, p, v.layer);
+        let aim_at = |v: &Self, p: egui::Pos2| aim::aim(&v.world, &v.camera.ray(rect, p), v.layer);
+        let aimed = response.hover_pos().and_then(|p| aim_at(self, p));
+        if building {
+            self.hover = aimed.map(|a| a.place);
+            self.target = aimed.and_then(|a| a.target);
+        } else {
+            self.hover = response.hover_pos().and_then(|p| pick(self, p));
+            self.target = None;
+        }
         // Buttons used to move the camera do not build.
         let space = space || camera_drag;
 
         // Pasting: a click puts the blocks down; right click stops.
-        let shift = ui.input(|i| i.modifiers.shift);
         if self.pasting.is_some() && !space {
             if let (true, Some(cell)) = (response.clicked(), self.hover) {
                 self.paste_at(cell);
@@ -535,37 +549,7 @@ impl WorldView {
                 self.selection = None;
             }
         } else if !space {
-            // A drag is only recognized once the pointer has moved; paint the
-            // cell where the press started too.
-            if response.drag_started() {
-                self.painted = None;
-                let press = ui.input(|i| i.pointer.press_origin());
-                if let Some(start) = press.and_then(|p| pick(self, p)) {
-                    if response.dragged_by(egui::PointerButton::Primary) {
-                        self.painted = Some(start);
-                        self.place(start, false);
-                    } else if response.dragged_by(egui::PointerButton::Secondary) {
-                        self.painted = Some(start);
-                        self.erase(start);
-                    }
-                }
-            }
-            if let Some(cell) = self.hover {
-                let primary =
-                    response.clicked() || response.dragged_by(egui::PointerButton::Primary);
-                let secondary = response.secondary_clicked()
-                    || response.dragged_by(egui::PointerButton::Secondary);
-                if response.clicked() || response.secondary_clicked() {
-                    self.painted = None;
-                }
-                if primary && self.painted != Some(cell) {
-                    self.painted = Some(cell);
-                    self.place(cell, response.clicked());
-                } else if secondary && self.painted != Some(cell) {
-                    self.painted = Some(cell);
-                    self.erase(cell);
-                }
-            }
+            self.build_input(ui, &response, aimed, aim_at, pick);
         }
 
         // Large worlds recompile only when the pointer is released, so
@@ -634,6 +618,81 @@ impl WorldView {
             self.camera.orbit(d.x, d.y);
         }
         (space, alt && primary)
+    }
+
+    /// Building with the pointer. A click builds against the face under the
+    /// pointer (or uses a switch, clock, port or device there); a drag
+    /// paints on the edited layer only, so it never stacks up towers. Right
+    /// click and right drag remove what is under the pointer.
+    fn build_input(
+        &mut self,
+        ui: &Ui,
+        response: &egui::Response,
+        aimed: Option<aim::Aim>,
+        aim_at: impl Fn(&Self, egui::Pos2) -> Option<aim::Aim>,
+        floor: impl Fn(&Self, egui::Pos2) -> Option<Pos>,
+    ) {
+        use egui::PointerButton::{Primary, Secondary};
+        // A drag is only recognized once the pointer has moved; act on the
+        // cell where the press started too.
+        // Cells to paint (on the edited layer's floor) and blocks to remove.
+        let (mut paint, mut remove) = (Vec::new(), Vec::new());
+        let pointer = response.interact_pointer_pos();
+        if response.drag_started() {
+            self.painted = None;
+            let press = ui.input(|i| i.pointer.press_origin());
+            if let Some(p) = press {
+                if response.dragged_by(Primary) {
+                    paint.extend(floor(self, p));
+                } else if response.dragged_by(Secondary) {
+                    remove.extend(aim_at(self, p).and_then(|a| a.target));
+                }
+            }
+        }
+        if response.clicked() {
+            self.painted = None;
+            if let Some(a) = aimed {
+                self.click(a);
+            }
+            return;
+        }
+        if response.secondary_clicked() {
+            self.painted = None;
+            remove.extend(aimed.and_then(|a| a.target));
+        } else if response.dragged_by(Primary) {
+            paint.extend(pointer.and_then(|p| floor(self, p)));
+        } else if response.dragged_by(Secondary) {
+            remove.extend(aimed.and_then(|a| a.target));
+        }
+        for cell in paint {
+            if self.painted != Some(cell) {
+                self.painted = Some(cell);
+                self.place(cell, false);
+            }
+        }
+        for t in remove {
+            if self.painted != Some(t) {
+                self.painted = Some(t);
+                self.erase(t);
+            }
+        }
+    }
+
+    /// A left click at what the pointer aims at.
+    fn click(&mut self, a: aim::Aim) {
+        if let Some(t) = a
+            .target
+            .filter(|t| self.world.get(*t).is_some_and(aim::interactive))
+        {
+            self.place(t, true);
+            return;
+        }
+        let before = self.world.revision();
+        self.place(a.place, true);
+        // Building on top climbs to that layer, so the new block shows.
+        if a.place.z > self.layer && self.world.revision() != before {
+            self.set_layer(a.place.z);
+        }
     }
 
     /// Remove the block at `cell` (a whole device if it is part of one).

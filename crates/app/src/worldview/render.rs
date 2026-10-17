@@ -614,6 +614,12 @@ impl WorldView {
                 ),
             )
         };
+        // The block aimed at, outlined; the cell a block would go into is
+        // shown below.
+        if let Some(t) = self.target.filter(|t| Some(*t) != self.hover) {
+            let (lo, hi) = cell_box(t, 0.02, 1.0);
+            b.wire_box(lo, hi, Color32::from_white_alpha(90));
+        }
         if let Some(cell) = self.hover.filter(|_| self.pasting.is_none()) {
             let (lo, hi) = cell_box(cell, 0.0, 1.0);
             b.wire_box(lo, hi, Color32::from_white_alpha(200));
