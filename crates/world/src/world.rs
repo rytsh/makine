@@ -29,8 +29,13 @@ impl Pos {
         Pos::new(self.x, self.y, self.z + 1)
     }
 
-    pub fn down(self) -> Pos {
-        Pos::new(self.x, self.y, self.z - 1)
+    /// Whether a block may be stored here: on a layer, and far enough from
+    /// the edge of `i32` that neighbour and device arithmetic never
+    /// overflows.
+    pub fn in_bounds(self) -> bool {
+        (0..=MAX_LAYER).contains(&self.z)
+            && (-MAX_COORD..=MAX_COORD).contains(&self.x)
+            && (-MAX_COORD..=MAX_COORD).contains(&self.y)
     }
 
     fn chunk(self) -> ChunkKey {
@@ -49,6 +54,8 @@ impl Pos {
 pub const CHUNK: i32 = 16;
 /// Layers allowed: 0 (ground) to MAX_LAYER.
 pub const MAX_LAYER: i32 = 7;
+/// Cells allowed: x and y within ±MAX_COORD.
+pub const MAX_COORD: i32 = 1 << 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ChunkKey {
@@ -74,8 +81,31 @@ impl Chunk {
     }
 }
 
+/// A block as it may be stored: devices normalized, covers pointing nearby.
+/// `None` for blocks that cannot be stored.
+fn sanitize(block: Block) -> Option<Block> {
+    match block {
+        Block::Device { device, facing } => Some(Block::Device {
+            device: device.normalized()?,
+            facing,
+        }),
+        Block::Cover { dx, dy }
+            if dx.unsigned_abs() > device::MAX_SPAN as u32
+                || dy.unsigned_abs() > device::MAX_SPAN as u32 =>
+        {
+            None
+        }
+        b => Some(b),
+    }
+}
+
 /// A change to the world. Applying an edit returns its inverse, so edits can
 /// be undone and replayed; a server would order and broadcast them.
+///
+/// Edits may come from files or other players, so the world checks them:
+/// cells out of bounds and blocks that cannot be stored are ignored. A
+/// device whose cells were overwritten keeps working with the pins it has
+/// left; a cover without its device is inert.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Edit {
     /// Put `block` at `pos` (replacing whatever was there), or clear the cell
@@ -114,8 +144,7 @@ impl World {
         self.chunks.get(&pos.chunk())?.cells[pos.index()].as_ref()
     }
 
-    /// Apply an edit; returns the edit that undoes it. Cells outside the
-    /// allowed layers are ignored.
+    /// Apply an edit; returns the edit that undoes it.
     pub fn apply(&mut self, edit: Edit) -> Edit {
         match edit {
             Edit::Set { pos, block } => {
@@ -130,8 +159,20 @@ impl World {
         }
     }
 
+    /// Write one cell; returns what was there. Refused writes change
+    /// nothing and return the cell as it is, so their inverse is a no-op.
     fn put(&mut self, pos: Pos, block: Option<Block>) -> Option<Block> {
-        if !(0..=MAX_LAYER).contains(&pos.z) {
+        let block = match block {
+            Some(b) => match sanitize(b) {
+                Some(b) => Some(b),
+                None => return self.get(pos).cloned(),
+            },
+            None => None,
+        };
+        if !pos.in_bounds() {
+            return None;
+        }
+        if self.get(pos) == block.as_ref() {
             return block;
         }
         let key = pos.chunk();
@@ -185,7 +226,7 @@ impl World {
     }
 
     /// The anchor of the device covering `pos`, with the device and its
-    /// facing.
+    /// facing. A cover only counts if the device there really covers it.
     pub fn device_at(&self, pos: Pos) -> Option<(Pos, &Device, Dir)> {
         let anchor = match self.get(pos)? {
             Block::Device { .. } => pos,
@@ -193,7 +234,11 @@ impl World {
             _ => return None,
         };
         match self.get(anchor)? {
-            Block::Device { device, facing } => Some((anchor, device, *facing)),
+            Block::Device { device, facing }
+                if device::local(device, anchor, *facing, pos).is_some() =>
+            {
+                Some((anchor, device, *facing))
+            }
             _ => None,
         }
     }
@@ -201,28 +246,32 @@ impl World {
     /// Whether the block at `pos` connects to a wire on its side `side`.
     /// Unlike [`Block::accepts_wire_from`] this knows device pins.
     pub fn accepts_wire(&self, pos: Pos, side: Dir) -> bool {
-        match self.get(pos) {
-            None => false,
-            Some(Block::Device { .. } | Block::Cover { .. }) => {
-                let Some((anchor, device, facing)) = self.device_at(pos) else {
-                    return false;
-                };
-                let l = device::layout(device, anchor, facing);
-                l.inputs
-                    .iter()
-                    .chain(&l.outputs)
-                    .any(|&(p, d)| p == pos && d == side)
+        self.pin(pos, side).is_some()
+    }
+
+    /// The connection of the block at `pos` on side `side`: `Some(true)`
+    /// for an output that drives the wire there, `Some(false)` for an input
+    /// or a conductor, `None` if nothing connects on that side.
+    pub fn pin(&self, pos: Pos, side: Dir) -> Option<bool> {
+        match self.get(pos)? {
+            Block::Device { .. } | Block::Cover { .. } => {
+                let (anchor, device, facing) = self.device_at(pos)?;
+                let uv = device::local(device, anchor, facing, pos)?;
+                device::pin_at(device, facing, uv, side)
             }
-            Some(b) => b.accepts_wire_from(side),
+            b => b.accepts_wire_from(side).then(|| b.drives(side)),
         }
     }
 
     /// The edit placing `device` with its anchor at `anchor`, or `None` if
     /// a cell it needs is taken or outside the allowed layers.
     pub fn place_device(&self, device: Device, anchor: Pos, facing: Dir) -> Option<Edit> {
-        let device = device.clamped();
+        let device = device.normalized()?;
         let l = device::layout(&device, anchor, facing);
-        if !(0..=MAX_LAYER).contains(&anchor.z) || l.cells.iter().any(|&c| self.get(c).is_some()) {
+        if l.cells
+            .iter()
+            .any(|&c| !c.in_bounds() || self.get(c).is_some())
+        {
             return None;
         }
         let mut edits: Vec<Edit> = l
@@ -255,11 +304,7 @@ impl World {
         Some(Edit::Batch(
             cells
                 .into_iter()
-                .filter(|&c| match self.get(c) {
-                    Some(Block::Cover { dx, dy }) => Pos::new(c.x + dx, c.y + dy, c.z) == anchor,
-                    Some(Block::Device { .. }) => c == anchor,
-                    _ => false,
-                })
+                .filter(|&c| self.device_at(c).is_some_and(|d| d.0 == anchor))
                 .map(|c| Edit::Set {
                     pos: c,
                     block: None,
@@ -278,7 +323,8 @@ impl World {
 }
 
 mod chunk_list {
-    use super::{Chunk, ChunkKey};
+    use super::{sanitize, Block, Chunk, ChunkKey, Pos, CHUNK};
+    use serde::de::Error;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::collections::BTreeMap;
 
@@ -289,12 +335,35 @@ mod chunk_list {
         map.iter().collect::<Vec<_>>().serialize(s)
     }
 
+    /// Chunks come from files and other players: check their shape and
+    /// store every block as [`World::put`] would.
     pub fn deserialize<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<BTreeMap<ChunkKey, Chunk>, D::Error> {
-        Ok(Vec::<(ChunkKey, Chunk)>::deserialize(d)?
-            .into_iter()
-            .collect())
+        let mut out = BTreeMap::new();
+        for (key, chunk) in Vec::<(ChunkKey, Chunk)>::deserialize(d)? {
+            if chunk.cells.len() != (CHUNK * CHUNK) as usize {
+                return Err(Error::custom("bozuk dünya parçası"));
+            }
+            let origin = Pos::new(
+                key.cx.saturating_mul(CHUNK),
+                key.cy.saturating_mul(CHUNK),
+                key.z,
+            );
+            if !origin.in_bounds() {
+                continue;
+            }
+            let cells: Vec<Option<Block>> = chunk
+                .cells
+                .into_iter()
+                .map(|b| b.and_then(sanitize))
+                .collect();
+            let count = cells.iter().filter(|c| c.is_some()).count() as u32;
+            if count > 0 {
+                out.insert(key, Chunk { cells, count });
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -401,6 +470,91 @@ mod tests {
         let e = w.remove(far).unwrap();
         w.apply(e);
         assert!(w.is_empty());
+    }
+
+    #[test]
+    fn bad_input_is_ignored() {
+        let mut w = World::new("t");
+        let far = Pos::new(MAX_COORD + 1, 0, 0);
+        let undo = w.apply(Edit::Set {
+            pos: far,
+            block: Some(Block::Wire),
+        });
+        assert!(w.is_empty());
+        w.apply(undo);
+        assert!(w.is_empty());
+        // Oversized devices are clamped; impossible ones refused.
+        w.apply(Edit::Set {
+            pos: Pos::new(0, 0, 0),
+            block: Some(Block::Device {
+                device: Device::Screen { bits: 200 },
+                facing: Dir::East,
+            }),
+        });
+        assert!(matches!(
+            w.get(Pos::new(0, 0, 0)),
+            Some(Block::Device {
+                device: Device::Screen { bits: 5 },
+                ..
+            })
+        ));
+        let rev = w.revision();
+        w.apply(Edit::Set {
+            pos: Pos::new(1, 0, 0),
+            block: Some(Block::Cover {
+                dx: i32::MIN,
+                dy: 0,
+            }),
+        });
+        assert!(w.get(Pos::new(1, 0, 0)).is_none());
+        // Writing what is already there is not a change.
+        w.apply(Edit::Set {
+            pos: Pos::new(0, 0, 0),
+            block: w.get(Pos::new(0, 0, 0)).cloned(),
+        });
+        assert_eq!(w.revision(), rev);
+    }
+
+    #[test]
+    fn broken_devices_are_inert() {
+        // A device whose cover was overwritten by a wire, and a stray cover.
+        let mut w = World::new("t");
+        let e = w.place_device(
+            Device::Ram { addr: 2, data: 2 },
+            Pos::new(0, 0, 0),
+            Dir::East,
+        );
+        w.apply(e.unwrap());
+        w.apply(Edit::Set {
+            pos: Pos::new(0, 1, 0),
+            block: Some(Block::Wire),
+        });
+        w.apply(Edit::Set {
+            pos: Pos::new(9, 9, 0),
+            block: Some(Block::Cover { dx: 1, dy: 0 }),
+        });
+        assert!(w.device_at(Pos::new(9, 9, 0)).is_none());
+        assert!(!w.accepts_wire(Pos::new(9, 9, 0), Dir::West));
+        crate::compile::compile(&w).unwrap();
+        // Removing the device leaves the wire.
+        w.apply(w.remove(Pos::new(0, 0, 0)).unwrap());
+        assert_eq!(w.blocks().count(), 2);
+    }
+
+    #[test]
+    fn corrupt_files() {
+        assert!(World::from_json(
+            r#"{"name":"x","chunks":[[{"cx":0,"cy":0,"z":0},{"cells":[],"count":5}]]}"#
+        )
+        .is_err());
+        let mut w = World::new("t");
+        w.apply(Edit::Set {
+            pos: Pos::new(1, 1, 0),
+            block: Some(Block::Wire),
+        });
+        // A wrong count is recomputed.
+        let text = w.to_json().replace("\"count\":1", "\"count\":0");
+        assert_eq!(World::from_json(&text).unwrap().len(), 1);
     }
 
     #[test]

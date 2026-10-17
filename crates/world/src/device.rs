@@ -26,6 +26,10 @@ use crate::world::Pos;
 pub const MAX_ADDR: u8 = 8;
 pub const MAX_DATA: u8 = 16;
 pub const MAX_SCREEN_BITS: u8 = 5;
+/// Most pin cells along one edge of a chip block.
+pub const MAX_CHIP_PINS: usize = 128;
+/// No device is longer or wider than this, so cover offsets stay small.
+pub const MAX_SPAN: i32 = MAX_CHIP_PINS as i32;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Device {
@@ -126,6 +130,27 @@ impl Device {
         }
     }
 
+    /// The device as it may be stored in a world: sizes clamped, or `None`
+    /// for a chip block whose pins cannot be laid out.
+    pub fn normalized(&self) -> Option<Device> {
+        if let Device::Chip {
+            name,
+            inputs,
+            outputs,
+        } = self
+        {
+            let ok = |pins: &[Pin]| {
+                pins.iter()
+                    .all(|p| (1..=makine_sim::MAX_WIDTH).contains(&p.width))
+                    && pins.iter().map(|p| p.width as usize).sum::<usize>() <= MAX_CHIP_PINS
+            };
+            if name.is_empty() || name.len() > 64 || !ok(inputs) || !ok(outputs) {
+                return None;
+            }
+        }
+        Some(self.clamped())
+    }
+
     /// The same device with its sizes clamped to what is supported.
     pub fn clamped(&self) -> Device {
         let c = |v: u8, max: u8| v.clamp(1, max);
@@ -191,9 +216,31 @@ impl Device {
         }
     }
 
+    /// Number of input pins (cells along the back edge).
+    pub fn input_count(&self) -> usize {
+        match self {
+            Device::Ram { addr, data } => (addr + data) as usize + 2,
+            Device::Rom { addr, .. } => *addr as usize,
+            Device::Screen { bits } => 2 * *bits as usize + 3,
+            Device::Keyboard => 1,
+            Device::Display { bits } => *bits as usize,
+            Device::Chip { inputs, .. } => inputs.iter().map(|p| p.width as usize).sum(),
+        }
+    }
+
+    /// Number of output pins (cells along the front edge).
+    pub fn output_count(&self) -> usize {
+        match self {
+            Device::Ram { data, .. } | Device::Rom { data, .. } => *data as usize,
+            Device::Keyboard => 8,
+            Device::Screen { .. } | Device::Display { .. } => 0,
+            Device::Chip { outputs, .. } => outputs.iter().map(|p| p.width as usize).sum(),
+        }
+    }
+
     /// Size in cells: (length along the facing direction, width across it).
     pub fn size(&self) -> (i32, i32) {
-        let rows = self.inputs().len().max(self.outputs().len()).max(2) as i32;
+        let rows = self.input_count().max(self.output_count()).max(2) as i32;
         match self {
             Device::Screen { .. } => (rows, rows),
             Device::Display { bits } => ((*bits as i32 + 3) / 4 + 2, rows),
@@ -286,6 +333,31 @@ pub struct Layout {
     pub outputs: Vec<(Pos, Dir)>,
 }
 
+/// Where `pos` is relative to a device at `anchor` facing `facing`: (u, v)
+/// with u along the facing and v across it, or `None` if outside it.
+pub fn local(device: &Device, anchor: Pos, facing: Dir, pos: Pos) -> Option<(i32, i32)> {
+    let (dx, dy) = (pos.x - anchor.x, pos.y - anchor.y);
+    let (fx, fy) = facing.delta();
+    let (sx, sy) = facing.cw().delta();
+    let (u, v) = (dx * fx + dy * fy, dx * sx + dy * sy);
+    let (len, wide) = device.size();
+    (pos.z == anchor.z && (0..len).contains(&u) && (0..wide).contains(&v)).then_some((u, v))
+}
+
+/// Whether the device cell at local (u, v) has a pin on side `side`, and
+/// if so whether it is an output.
+pub fn pin_at(device: &Device, facing: Dir, (u, v): (i32, i32), side: Dir) -> Option<bool> {
+    let (len, _) = device.size();
+    let v = v as usize;
+    if u == 0 && side == facing.opposite() && v < device.input_count() {
+        Some(false)
+    } else if u == len - 1 && side == facing && v < device.output_count() {
+        Some(true)
+    } else {
+        None
+    }
+}
+
 pub fn layout(device: &Device, anchor: Pos, facing: Dir) -> Layout {
     let (len, wide) = device.size();
     let (fx, fy) = facing.delta();
@@ -301,10 +373,10 @@ pub fn layout(device: &Device, anchor: Pos, facing: Dir) -> Layout {
         .flat_map(|u| (0..wide).map(move |v| (u, v)))
         .map(|(u, v)| at(u, v))
         .collect();
-    let inputs = (0..device.inputs().len() as i32)
+    let inputs = (0..device.input_count() as i32)
         .map(|v| (at(0, v), facing.opposite()))
         .collect();
-    let outputs = (0..device.outputs().len() as i32)
+    let outputs = (0..device.output_count() as i32)
         .map(|v| (at(len - 1, v), facing))
         .collect();
     Layout {
@@ -497,8 +569,7 @@ mod tests {
             ]
         );
         assert_eq!(l.outputs[2], (Pos::new(2, 2, 0), Dir::East));
-        // Facing north: inputs on the south edge going west... from the
-        // anchor, `cw` of north is east, so pins run east along the edge.
+        // Facing north, pins run east from the anchor (`cw` of north).
         let l = layout(&d, Pos::new(0, 0, 0), Dir::North);
         assert_eq!(l.inputs[1], (Pos::new(1, 0, 0), Dir::South));
         assert_eq!(l.outputs[0], (Pos::new(0, -2, 0), Dir::North));
@@ -512,6 +583,64 @@ mod tests {
         );
         assert!(parse_words("zz").is_err());
         assert_eq!(words_text(&[1, 0xAB], 8), "01 AB");
+    }
+
+    #[test]
+    fn counts_match_names_and_local_matches_layout() {
+        let devices = [
+            Device::Ram { addr: 3, data: 5 },
+            Device::Rom {
+                addr: 2,
+                data: 7,
+                words: vec![],
+            },
+            Device::Screen { bits: 3 },
+            Device::Keyboard,
+            Device::Display { bits: 9 },
+            Device::Chip {
+                name: "C".into(),
+                inputs: makine_sim::parse_pins(&["a", "b[4]"]),
+                outputs: makine_sim::parse_pins(&["q[3]"]),
+            },
+        ];
+        for d in devices {
+            assert_eq!(d.input_count(), d.inputs().len(), "{d:?}");
+            assert_eq!(d.output_count(), d.outputs().len(), "{d:?}");
+            for facing in Dir::ALL {
+                let anchor = Pos::new(3, -2, 1);
+                let l = layout(&d, anchor, facing);
+                for &c in &l.cells {
+                    let uv = local(&d, anchor, facing, c).expect("cell inside");
+                    for side in Dir::ALL {
+                        let want = if l.inputs.contains(&(c, side)) {
+                            Some(false)
+                        } else if l.outputs.contains(&(c, side)) {
+                            Some(true)
+                        } else {
+                            None
+                        };
+                        assert_eq!(pin_at(&d, facing, uv, side), want);
+                    }
+                }
+                assert_eq!(local(&d, anchor, facing, Pos::new(100, 0, 1)), None);
+            }
+        }
+    }
+
+    #[test]
+    fn bad_chips_are_refused() {
+        let chip = |w: u8, n: usize| Device::Chip {
+            name: "C".into(),
+            inputs: (0..n).map(|i| Pin::new(format!("p{i}"), w)).collect(),
+            outputs: vec![],
+        };
+        assert!(chip(8, 4).normalized().is_some());
+        assert!(chip(0, 1).normalized().is_none());
+        assert!(chip(64, 3).normalized().is_none(), "too many pin cells");
+        assert_eq!(
+            Device::Screen { bits: 0 }.normalized(),
+            Some(Device::Screen { bits: 2 })
+        );
     }
 
     #[test]

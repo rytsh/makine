@@ -7,8 +7,11 @@
 //! 3. Each net has at most one driver: a gate output, a switch, a clock or
 //!    an input port. Two drivers on one net are a short circuit.
 //! 4. Gates become NAND parts, switches/clocks/input ports become chip
-//!    inputs, and every driven net gets a chip output so the view can read
-//!    any wire.
+//!    inputs, devices become native parts or library chips, and every
+//!    driven net gets a chip output so the view can read any wire.
+//!
+//! The world may be broken (a device cell overwritten by another player):
+//! pins that are gone are simply left unconnected.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -68,7 +71,8 @@ pub enum InputSource {
 #[derive(Clone, Debug)]
 pub struct Compiled {
     pub def: ChipDef,
-    /// Net of each (cell, lane). Gates and devices map to their output net.
+    /// Net of each (cell, lane). Gates and inputs map to the net they
+    /// drive, output ports and device pin cells to the net they read.
     pub nets: HashMap<(Pos, Lane), usize>,
     /// For each net, the chip output observing it (driven nets only).
     pub net_output: Vec<Option<usize>>,
@@ -91,6 +95,7 @@ pub struct DeviceInfo {
     pub device: Device,
     pub native: Option<String>,
     /// For each input pin: the chip output carrying its value, if driven.
+    /// (While building, this temporarily holds the pin's net.)
     pub inputs: Vec<Option<usize>>,
 }
 
@@ -152,177 +157,177 @@ fn is_conductor(b: &Block) -> bool {
     )
 }
 
-/// Device pins of a world, computed once per compile: (cell, side) ->
-/// whether it is an output.
-struct DevicePins(HashMap<(Pos, Dir), bool>);
-
-impl DevicePins {
-    fn new(world: &World) -> Self {
-        let mut m = HashMap::new();
-        for (anchor, b) in world.blocks() {
-            if let Block::Device { device, facing } = b {
-                let l = device::layout(device, anchor, *facing);
-                m.extend(l.inputs.iter().map(|&k| (k, false)));
-                m.extend(l.outputs.iter().map(|&k| (k, true)));
-            }
-        }
-        DevicePins(m)
-    }
-
-    /// Whether the block at `pos` connects to a wire on side `side`.
-    fn accepts(&self, world: &World, pos: Pos, side: Dir) -> bool {
-        match world.get(pos) {
-            Some(Block::Device { .. } | Block::Cover { .. }) => self.0.contains_key(&(pos, side)),
-            Some(b) => b.accepts_wire_from(side),
-            None => false,
-        }
-    }
-}
-
-/// Whether `b`'s pin on side `d` is an output (drives the net).
-fn is_output_pin(pins: &DevicePins, pos: Pos, b: &Block, d: Dir) -> bool {
+/// The lane of a conductor that a wire on side `side` joins.
+fn lane(b: &Block, side: Dir) -> Lane {
     match b {
-        Block::Device { .. } | Block::Cover { .. } => pins.0.get(&(pos, d)) == Some(&true),
-        Block::Gate { facing, .. }
-        | Block::Switch { facing, .. }
-        | Block::Clock { facing, .. }
-        | Block::Port {
-            output: false,
-            facing,
-            ..
-        } => d == *facing,
-        _ => false,
+        Block::Cross if !side.is_horizontal() => Lane::Cross,
+        _ => Lane::Main,
     }
 }
 
-struct Nodes {
+/// Nets of a world: union-find over connection points.
+struct Nets {
+    uf: Uf,
+    /// Conductor cells, per lane.
     cell: HashMap<(Pos, Lane), usize>,
+    /// Pins of gates, devices and other blocks, per side.
     pin: HashMap<(Pos, Dir), usize>,
 }
 
-impl Nodes {
-    /// The node of `block` (at `pos`) that a neighbour on side `side`
-    /// connects to, if any.
-    fn facing(
-        &self,
-        world: &World,
-        pins: &DevicePins,
-        block: &Block,
-        pos: Pos,
-        side: Dir,
-    ) -> Option<usize> {
-        if !pins.accepts(world, pos, side) {
-            return None;
-        }
-        match block {
-            Block::Wire | Block::Straight { .. } | Block::Via | Block::Lamp => {
-                self.cell.get(&(pos, Lane::Main)).copied()
+impl Nets {
+    fn build(world: &World, blocks: &BTreeMap<Pos, &Block>) -> Nets {
+        let mut n = Nets {
+            uf: Uf(Vec::new()),
+            cell: HashMap::new(),
+            pin: HashMap::new(),
+        };
+        for (&pos, &block) in blocks {
+            if is_conductor(block) {
+                n.cell.insert((pos, Lane::Main), n.uf.make());
+                if matches!(block, Block::Cross) {
+                    n.cell.insert((pos, Lane::Cross), n.uf.make());
+                }
+                continue;
             }
-            Block::Cross => {
-                let lane = if side.is_horizontal() {
-                    Lane::Main
-                } else {
-                    Lane::Cross
-                };
-                self.cell.get(&(pos, lane)).copied()
-            }
-            _ => self.pin.get(&(pos, side)).copied(),
-        }
-    }
-}
-
-pub fn compile(world: &World) -> Result<Compiled, CompileError> {
-    let blocks: BTreeMap<Pos, &Block> = world.blocks().collect();
-    let pins = DevicePins::new(world);
-    let mut uf = Uf(Vec::new());
-    let mut nodes = Nodes {
-        cell: HashMap::new(),
-        pin: HashMap::new(),
-    };
-
-    for (&pos, block) in &blocks {
-        match block {
-            Block::Wire | Block::Straight { .. } | Block::Via | Block::Lamp => {
-                nodes.cell.insert((pos, Lane::Main), uf.make());
-            }
-            Block::Cross => {
-                nodes.cell.insert((pos, Lane::Main), uf.make());
-                nodes.cell.insert((pos, Lane::Cross), uf.make());
-            }
-            _ => {
-                for d in Dir::ALL {
-                    if pins.accepts(world, pos, d) {
-                        nodes.pin.insert((pos, d), uf.make());
-                    }
+            for d in Dir::ALL {
+                if world.pin(pos, d).is_some() {
+                    n.pin.insert((pos, d), n.uf.make());
                 }
             }
         }
-    }
-
-    for (&pos, block) in &blocks {
-        for d in Dir::ALL {
-            let Some(here) = nodes.facing(world, &pins, block, pos, d) else {
-                continue;
-            };
-            let npos = pos.step(d);
-            let Some(nb) = blocks.get(&npos) else {
-                continue;
-            };
-            // Pin to pin connects only output to input (gates placed back to
-            // back); two outputs or two inputs side by side do not touch.
-            if !is_conductor(block)
-                && !is_conductor(nb)
-                && is_output_pin(&pins, pos, block, d)
-                    == is_output_pin(&pins, npos, nb, d.opposite())
-            {
-                continue;
+        for (&pos, &block) in blocks {
+            for d in Dir::ALL {
+                n.join_neighbour(world, blocks, pos, block, d);
             }
-            if let Some(there) = nodes.facing(world, &pins, nb, npos, d.opposite()) {
-                uf.union(here, there);
+            if matches!(block, Block::Via) && matches!(blocks.get(&pos.up()), Some(Block::Via)) {
+                let (a, b) = (n.cell[&(pos, Lane::Main)], n.cell[&(pos.up(), Lane::Main)]);
+                n.uf.union(a, b);
             }
         }
-        if matches!(block, Block::Via) && matches!(blocks.get(&pos.up()), Some(Block::Via)) {
-            uf.union(
-                nodes.cell[&(pos, Lane::Main)],
-                nodes.cell[&(pos.up(), Lane::Main)],
-            );
+        n
+    }
+
+    /// The node of the block at `pos` facing side `side`, if it connects.
+    fn node(&self, world: &World, pos: Pos, block: &Block, side: Dir) -> Option<usize> {
+        if is_conductor(block) {
+            block.accepts_wire_from(side).then_some(())?;
+            self.cell.get(&(pos, lane(block, side))).copied()
+        } else {
+            self.pin
+                .get(&(pos, side))
+                .copied()
+                .filter(|_| world.pin(pos, side).is_some())
         }
     }
 
-    // Dense net numbers.
-    let mut root_net: HashMap<usize, usize> = HashMap::new();
-    let mut net_of = |uf: &mut Uf, n: usize| -> usize {
-        let r = uf.find(n);
-        let next = root_net.len();
-        *root_net.entry(r).or_insert(next)
-    };
-    let mut nets: HashMap<(Pos, Lane), usize> = nodes
-        .cell
-        .iter()
-        .map(|(&k, &n)| (k, net_of(&mut uf, n)))
-        .collect();
-    let pin_net: HashMap<(Pos, Dir), usize> = nodes
-        .pin
-        .iter()
-        .map(|(&k, &n)| (k, net_of(&mut uf, n)))
-        .collect();
-    let net_count = root_net.len();
-
-    let mut def = ChipDef::new(&world.name, &[], &[]);
-    let mut driver: Vec<Option<(Source, Pos)>> = vec![None; net_count];
-    let mut shorts: BTreeMap<usize, Vec<Pos>> = BTreeMap::new();
-    let mut drive =
-        |driver: &mut Vec<Option<(Source, Pos)>>, net: usize, src: Source, pos: Pos| match driver
-            [net]
+    fn join_neighbour(
+        &mut self,
+        world: &World,
+        blocks: &BTreeMap<Pos, &Block>,
+        pos: Pos,
+        block: &Block,
+        d: Dir,
+    ) {
+        let npos = pos.step(d);
+        let Some(&nb) = blocks.get(&npos) else { return };
+        // Pin to pin connects only an output to an input (gates back to
+        // back); two outputs or two inputs side by side do not touch.
+        if !is_conductor(block)
+            && !is_conductor(nb)
+            && world.pin(pos, d) == world.pin(npos, d.opposite())
         {
-            None => driver[net] = Some((src, pos)),
-            Some((_, first)) => shorts.entry(net).or_insert_with(|| vec![first]).push(pos),
-        };
+            return;
+        }
+        let here = self.node(world, pos, block, d);
+        let there = self.node(world, npos, nb, d.opposite());
+        if let (Some(a), Some(b)) = (here, there) {
+            self.uf.union(a, b);
+        }
+    }
 
-    // Inputs.
-    let mut inputs = Vec::new();
-    let mut port_names: Vec<String> = Vec::new();
-    for (&pos, block) in &blocks {
+    /// Renumber nets densely: (cell nets, pin nets, net count).
+    #[allow(clippy::type_complexity)]
+    fn number(
+        mut self,
+    ) -> (
+        HashMap<(Pos, Lane), usize>,
+        HashMap<(Pos, Dir), usize>,
+        usize,
+    ) {
+        let mut root_net: HashMap<usize, usize> = HashMap::new();
+        let mut net_of = |uf: &mut Uf, n: usize| -> usize {
+            let r = uf.find(n);
+            let next = root_net.len();
+            *root_net.entry(r).or_insert(next)
+        };
+        let cell = self
+            .cell
+            .iter()
+            .map(|(&k, &n)| (k, net_of(&mut self.uf, n)))
+            .collect();
+        let pin = self
+            .pin
+            .iter()
+            .map(|(&k, &n)| (k, net_of(&mut self.uf, n)))
+            .collect();
+        (cell, pin, root_net.len())
+    }
+}
+
+/// Builds the chip of a world, net by net.
+struct Builder {
+    def: ChipDef,
+    pin_net: HashMap<(Pos, Dir), usize>,
+    /// The driver of each net and where it is.
+    driver: Vec<Option<(Source, Pos)>>,
+    shorts: BTreeMap<usize, Vec<Pos>>,
+    /// Part inputs to wire from their net's driver once all are known.
+    pending: Vec<(Sink, usize)>,
+    port_names: Vec<String>,
+}
+
+impl Builder {
+    fn net(&self, pos: Pos, side: Dir) -> Option<usize> {
+        self.pin_net.get(&(pos, side)).copied()
+    }
+
+    /// `src` drives the net at (`pos`, `side`), if that pin is connected.
+    fn drive(&mut self, pos: Pos, side: Dir, src: Source) {
+        let Some(net) = self.net(pos, side) else {
+            return;
+        };
+        match self.driver[net] {
+            None => self.driver[net] = Some((src, pos)),
+            Some((_, first)) => self
+                .shorts
+                .entry(net)
+                .or_insert_with(|| vec![first])
+                .push(pos),
+        }
+    }
+
+    /// Part input `sink` reads the net at (`pos`, `side`) (0 if none).
+    fn read(&mut self, sink: Sink, pos: Pos, side: Dir) {
+        if let Some(net) = self.net(pos, side) {
+            self.pending.push((sink, net));
+        }
+    }
+
+    fn add_part(&mut self, kind: PartKind) -> usize {
+        self.def.parts.push(Part::new(kind));
+        self.def.parts.len() - 1
+    }
+
+    fn claim_port(&mut self, name: &str) -> Result<(), CompileError> {
+        if self.port_names.iter().any(|n| n == name) {
+            return Err(CompileError::DuplicatePort(name.to_string()));
+        }
+        self.port_names.push(name.to_string());
+        Ok(())
+    }
+
+    /// Switches, clocks and input ports become chip inputs.
+    fn input(&mut self, pos: Pos, block: &Block) -> Result<Option<InputSource>, CompileError> {
         let (pin_name, source, facing) = match block {
             Block::Switch { facing, .. } => (
                 format!("sw{},{},{}", pos.x, pos.y, pos.z),
@@ -342,116 +347,211 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
                 output: false,
                 facing,
             } => {
-                if port_names.contains(name) {
-                    return Err(CompileError::DuplicatePort(name.clone()));
-                }
-                port_names.push(name.clone());
+                self.claim_port(name)?;
                 (name.clone(), InputSource::Port(name.clone()), *facing)
             }
-            _ => continue,
+            _ => return Ok(None),
         };
-        let i = def.inputs.len();
-        def.inputs.push(Pin::new(pin_name, 1));
-        inputs.push(source);
-        drive(&mut driver, pin_net[&(pos, facing)], Source::Input(i), pos);
+        let i = self.def.inputs.len();
+        self.def.inputs.push(Pin::new(pin_name, 1));
+        self.drive(pos, facing, Source::Input(i));
+        Ok(Some(source))
     }
 
-    // Gates, as NAND parts. Their inputs are wired once all drivers are known.
-    let mut gate_inputs: Vec<(Sink, usize)> = Vec::new();
-    for (&pos, block) in &blocks {
-        let Block::Gate { gate, facing } = block else {
-            continue;
+    /// A gate, as NAND parts.
+    fn gate(&mut self, pos: Pos, gate: Gate, facing: Dir) {
+        let sides = match gate.inputs() {
+            1 => vec![facing.opposite()],
+            _ => vec![facing.ccw(), facing.cw()],
         };
-        let ins: Vec<usize> = match gate.inputs() {
-            1 => vec![pin_net[&(pos, facing.opposite())]],
-            _ => vec![pin_net[&(pos, facing.ccw())], pin_net[&(pos, facing.cw())]],
-        };
-        let out = gate_parts(&mut def, *gate, &ins, &mut gate_inputs);
-        drive(&mut driver, pin_net[&(pos, *facing)], out, pos);
+        let mut ins = Vec::new();
+        let out = gate_parts(&mut self.def, gate, sides.len(), &mut ins);
+        for (input, sink) in ins {
+            self.read(sink, pos, sides[input]);
+        }
+        self.drive(pos, facing, out);
     }
 
-    // Devices: native parts, outputs drive their nets; inputs are wired
-    // like gate inputs.
-    let mut devices = Vec::new();
-    let mut natives = Vec::new();
-    for (&pos, block) in &blocks {
-        let Block::Device { device, facing } = block else {
-            continue;
-        };
-        let l = device::layout(device, pos, *facing);
-        let in_nets: Vec<usize> = l.inputs.iter().map(|k| pin_net[k]).collect();
-        let native = device.native().map(|n| {
-            let name = device.native_name(pos);
-            let part = def.parts.len();
-            def.parts.push(Part::new(PartKind::Chip(name.clone())));
-            for (i, &net) in in_nets.iter().enumerate() {
-                gate_inputs.push((Sink::Part { part, pin: i }, net));
+    /// A device: a native part, a library chip, or (a display) nothing but
+    /// the nets it reads. Pins whose cells were overwritten are left out.
+    fn device(&mut self, anchor: Pos, device: &Device, facing: Dir) -> DeviceInfo {
+        let l = device::layout(device, anchor, facing);
+        let in_nets: Vec<Option<usize>> = l.inputs.iter().map(|&(p, d)| self.net(p, d)).collect();
+        let native = device.native().map(|_| {
+            let name = device.native_name(anchor);
+            let part = self.add_part(PartKind::Chip(name.clone()));
+            for (pin, &(p, d)) in l.inputs.iter().enumerate() {
+                self.read(Sink::Part { part, pin }, p, d);
             }
-            for (i, k) in l.outputs.iter().enumerate() {
-                drive(&mut driver, pin_net[k], Source::Part { part, pin: i }, pos);
+            for (pin, &(p, d)) in l.outputs.iter().enumerate() {
+                self.drive(p, d, Source::Part { part, pin });
             }
-            natives.push((name.clone(), n));
             name
         });
         if let Device::Chip {
             name,
-            inputs: ins,
-            outputs: outs,
+            inputs,
+            outputs,
         } = device
         {
-            let mut d = |net, src, at| drive(&mut driver, net, src, at);
-            chip_parts(
-                &mut def,
-                name,
-                ins,
-                outs,
-                &in_nets,
-                &l.outputs,
-                &pin_net,
-                pos,
-                &mut gate_inputs,
-                &mut d,
-            );
+            self.chip(name, inputs, outputs, &l);
         }
-        devices.push((pos, device.clone(), native, in_nets));
+        DeviceInfo {
+            anchor,
+            device: device.clone(),
+            native,
+            inputs: in_nets,
+        }
     }
 
-    if let Some((_, list)) = shorts.into_iter().next() {
+    /// A library chip: one part, with a Join gathering each input bus from
+    /// its 1-bit cells and a Split fanning each output bus out to them.
+    fn chip(&mut self, name: &str, inputs: &[Pin], outputs: &[Pin], l: &device::Layout) {
+        let chip = self.add_part(PartKind::Chip(name.to_string()));
+        let mut cells = l.inputs.iter();
+        for (j, p) in inputs.iter().enumerate() {
+            let w = p.width as usize;
+            let (part, first) = if w == 1 {
+                (chip, j)
+            } else {
+                let join = self.add_part(PartKind::Join(vec![1; w]));
+                self.def.wires.push(Wire {
+                    from: Source::Part { part: join, pin: 0 },
+                    to: Sink::Part { part: chip, pin: j },
+                });
+                (join, 0)
+            };
+            for (bit, &(c, d)) in cells.by_ref().take(w).enumerate() {
+                self.read(
+                    Sink::Part {
+                        part,
+                        pin: first + bit,
+                    },
+                    c,
+                    d,
+                );
+            }
+        }
+        let mut cells = l.outputs.iter();
+        for (j, p) in outputs.iter().enumerate() {
+            let w = p.width as usize;
+            let (part, first) = if w == 1 {
+                (chip, j)
+            } else {
+                let split = self.add_part(PartKind::Split(vec![1; w]));
+                self.def.wires.push(Wire {
+                    from: Source::Part { part: chip, pin: j },
+                    to: Sink::Part {
+                        part: split,
+                        pin: 0,
+                    },
+                });
+                (split, 0)
+            };
+            for (bit, &(c, d)) in cells.by_ref().take(w).enumerate() {
+                self.drive(
+                    c,
+                    d,
+                    Source::Part {
+                        part,
+                        pin: first + bit,
+                    },
+                );
+            }
+        }
+    }
+
+    /// An output port: a named chip output, 0 if nothing drives it.
+    fn output_port(&mut self, pos: Pos, name: &str, facing: Dir) -> Result<usize, CompileError> {
+        self.claim_port(name)?;
+        let src = match self
+            .net(pos, facing.opposite())
+            .and_then(|n| self.driver[n])
+        {
+            Some((src, _)) => src,
+            None => Source::Part {
+                part: self.add_part(PartKind::Const { width: 1, value: 0 }),
+                pin: 0,
+            },
+        };
+        let o = self.def.outputs.len();
+        self.def.outputs.push(Pin::new(name, 1));
+        self.def.wires.push(Wire {
+            from: src,
+            to: Sink::Output(o),
+        });
+        Ok(o)
+    }
+}
+
+pub fn compile(world: &World) -> Result<Compiled, CompileError> {
+    let blocks: BTreeMap<Pos, &Block> = world.blocks().collect();
+    let (mut nets, pin_net, net_count) = Nets::build(world, &blocks).number();
+    let mut b = Builder {
+        def: ChipDef::new(&world.name, &[], &[]),
+        pin_net,
+        driver: vec![None; net_count],
+        shorts: BTreeMap::new(),
+        pending: Vec::new(),
+        port_names: Vec::new(),
+    };
+
+    let mut inputs = Vec::new();
+    for (&pos, &block) in &blocks {
+        inputs.extend(b.input(pos, block)?);
+    }
+    let mut devices = Vec::new();
+    for (&pos, &block) in &blocks {
+        match block {
+            Block::Gate { gate, facing } => b.gate(pos, *gate, *facing),
+            Block::Device { device, facing } => devices.push(b.device(pos, device, *facing)),
+            _ => {}
+        }
+    }
+    if let Some((_, list)) = std::mem::take(&mut b.shorts).into_iter().next() {
         return Err(CompileError::ShortCircuit(list));
     }
 
-    // Undriven nets read 0: the sink is simply left unconnected.
-    for (sink, net) in gate_inputs {
-        if let Some((src, _)) = driver[net] {
-            def.wires.push(Wire {
+    // Wire part inputs from their nets' drivers; undriven nets read 0.
+    for (sink, net) in std::mem::take(&mut b.pending) {
+        if let Some((src, _)) = b.driver[net] {
+            b.def.wires.push(Wire {
                 from: src,
                 to: sink,
             });
         }
     }
 
+    // Every driven net gets a chip output, so the view can show any wire.
     let mut net_output: Vec<Option<usize>> = vec![None; net_count];
-    for (net, d) in driver.iter().enumerate() {
+    for (net, d) in b.driver.iter().enumerate() {
         if let Some((src, _)) = d {
-            let o = def.outputs.len();
-            def.outputs.push(Pin::new(format!("n{net}"), 1));
-            def.wires.push(Wire {
+            let o = b.def.outputs.len();
+            b.def.outputs.push(Pin::new(format!("n{net}"), 1));
+            b.def.wires.push(Wire {
                 from: *src,
                 to: Sink::Output(o),
             });
             net_output[net] = Some(o);
         }
     }
+    for d in &mut devices {
+        for o in &mut d.inputs {
+            *o = o.and_then(|n| net_output.get(n).copied().flatten());
+        }
+    }
 
-    let devices = devices
-        .into_iter()
-        .map(|(anchor, device, native, in_nets)| DeviceInfo {
-            anchor,
-            device,
-            native,
-            inputs: in_nets.iter().map(|&n| net_output[n]).collect(),
-        })
-        .collect();
+    let mut ports = Vec::new();
+    for (&pos, &block) in &blocks {
+        if let Block::Port {
+            name,
+            output: true,
+            facing,
+        } = block
+        {
+            ports.push((name.clone(), b.output_port(pos, name, *facing)?));
+        }
+    }
 
     let lamps = blocks
         .iter()
@@ -459,66 +559,34 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
         .map(|(&p, _)| (p, net_output[nets[&(p, Lane::Main)]]))
         .collect();
 
-    let mut ports = Vec::new();
-    for (&pos, block) in &blocks {
-        let Block::Port {
-            name,
-            output: true,
-            facing,
-        } = block
-        else {
-            continue;
-        };
-        if port_names.contains(name) {
-            return Err(CompileError::DuplicatePort(name.clone()));
-        }
-        port_names.push(name.clone());
-        let net = pin_net[&(pos, facing.opposite())];
-        let o = def.outputs.len();
-        def.outputs.push(Pin::new(name.clone(), 1));
-        let src = match driver[net] {
-            Some((src, _)) => src,
-            None => {
-                def.parts
-                    .push(Part::new(PartKind::Const { width: 1, value: 0 }));
-                Source::Part {
-                    part: def.parts.len() - 1,
-                    pin: 0,
-                }
-            }
-        };
-        def.wires.push(Wire {
-            from: src,
-            to: Sink::Output(o),
-        });
-        ports.push((name.clone(), o));
-    }
-
-    // Gates and devices show the value of the net they drive (or read).
-    for (&pos, block) in &blocks {
-        if matches!(block, Block::Device { .. }) {
+    // Non-conductor cells show the net they drive (gates, inputs) or read
+    // (output ports, device pins).
+    for (&pos, &block) in &blocks {
+        if is_conductor(block) {
             continue;
         }
-        if let Some(f) = block.facing() {
-            let side = match block {
-                Block::Port { output: true, .. } => f.opposite(),
-                _ => f,
-            };
-            if let Some(&n) = pin_net.get(&(pos, side)) {
-                nets.insert((pos, Lane::Main), n);
+        let net = match block {
+            Block::Port {
+                output: true,
+                facing,
+                ..
+            } => b.net(pos, facing.opposite()),
+            Block::Device { .. } | Block::Cover { .. } => {
+                Dir::ALL.iter().find_map(|&d| b.net(pos, d))
             }
-        }
-    }
-
-    // Device pin cells show their pin's value.
-    for (&(pos, _), &n) in &pin_net {
-        if matches!(blocks[&pos], Block::Device { .. } | Block::Cover { .. }) {
+            other => other.facing().and_then(|f| b.net(pos, f)),
+        };
+        if let Some(n) = net {
             nets.insert((pos, Lane::Main), n);
         }
     }
 
+    let natives = devices
+        .iter()
+        .filter_map(|d| Some((d.native.clone()?, d.device.native()?)))
+        .collect();
     Ok(Compiled {
-        def,
+        def: b.def,
         nets,
         net_output,
         inputs,
@@ -557,87 +625,9 @@ pub fn check_chips(world: &World, lib: &Library) -> Result<(), String> {
     Ok(())
 }
 
-/// A library chip: one part, with a Join gathering each input bus from its
-/// 1-bit nets and a Split fanning each output bus out to them.
-#[allow(clippy::too_many_arguments)]
-fn chip_parts(
-    def: &mut ChipDef,
-    name: &str,
-    inputs: &[Pin],
-    outputs: &[Pin],
-    in_nets: &[usize],
-    out_pins: &[(Pos, Dir)],
-    pin_net: &HashMap<(Pos, Dir), usize>,
-    pos: Pos,
-    pending: &mut Vec<(Sink, usize)>,
-    drive: &mut dyn FnMut(usize, Source, Pos),
-) {
-    let chip = def.parts.len();
-    def.parts.push(Part::new(PartKind::Chip(name.to_string())));
-    let mut nets = in_nets.iter();
-    for (j, p) in inputs.iter().enumerate() {
-        if p.width == 1 {
-            pending.push((Sink::Part { part: chip, pin: j }, *nets.next().unwrap()));
-            continue;
-        }
-        let join = def.parts.len();
-        def.parts
-            .push(Part::new(PartKind::Join(vec![1; p.width as usize])));
-        for bit in 0..p.width as usize {
-            pending.push((
-                Sink::Part {
-                    part: join,
-                    pin: bit,
-                },
-                *nets.next().unwrap(),
-            ));
-        }
-        def.wires.push(Wire {
-            from: Source::Part { part: join, pin: 0 },
-            to: Sink::Part { part: chip, pin: j },
-        });
-    }
-    let mut outs = out_pins.iter();
-    for (j, p) in outputs.iter().enumerate() {
-        if p.width == 1 {
-            drive(
-                pin_net[outs.next().unwrap()],
-                Source::Part { part: chip, pin: j },
-                pos,
-            );
-            continue;
-        }
-        let split = def.parts.len();
-        def.parts
-            .push(Part::new(PartKind::Split(vec![1; p.width as usize])));
-        def.wires.push(Wire {
-            from: Source::Part { part: chip, pin: j },
-            to: Sink::Part {
-                part: split,
-                pin: 0,
-            },
-        });
-        for bit in 0..p.width as usize {
-            drive(
-                pin_net[outs.next().unwrap()],
-                Source::Part {
-                    part: split,
-                    pin: bit,
-                },
-                pos,
-            );
-        }
-    }
-}
-
-/// Add NAND parts computing `gate` over the nets `ins`. Returns the output
-/// source; external inputs are recorded in `pending` as (sink, net).
-fn gate_parts(
-    def: &mut ChipDef,
-    gate: Gate,
-    ins: &[usize],
-    pending: &mut Vec<(Sink, usize)>,
-) -> Source {
+/// Add NAND parts computing `gate` with `n` inputs. Returns the output;
+/// the parts' external inputs are recorded in `ins` as (gate input, sink).
+fn gate_parts(def: &mut ChipDef, gate: Gate, n: usize, ins: &mut Vec<(usize, Sink)>) -> Source {
     fn nand(def: &mut ChipDef) -> usize {
         def.parts.push(Part::new(PartKind::Nand));
         def.parts.len() - 1
@@ -651,26 +641,27 @@ fn gate_parts(
             to: Sink::Part { part: to, pin },
         });
     }
-    let mut ext = |part: usize, pin: usize, net: usize| {
-        pending.push((Sink::Part { part, pin }, net));
+    debug_assert_eq!(n, gate.inputs());
+    let mut ext = |input: usize, part: usize, pin: usize| {
+        ins.push((input, Sink::Part { part, pin }));
     };
     match gate {
         Gate::Nand => {
             let n = nand(def);
-            ext(n, 0, ins[0]);
-            ext(n, 1, ins[1]);
+            ext(0, n, 0);
+            ext(1, n, 1);
             out(n)
         }
         Gate::Not => {
             let n = nand(def);
-            ext(n, 0, ins[0]);
-            ext(n, 1, ins[0]);
+            ext(0, n, 0);
+            ext(0, n, 1);
             out(n)
         }
         Gate::And => {
             let n = nand(def);
-            ext(n, 0, ins[0]);
-            ext(n, 1, ins[1]);
+            ext(0, n, 0);
+            ext(1, n, 1);
             let m = nand(def);
             link(def, n, m, 0);
             link(def, n, m, 1);
@@ -678,11 +669,11 @@ fn gate_parts(
         }
         Gate::Or | Gate::Nor => {
             let na = nand(def);
-            ext(na, 0, ins[0]);
-            ext(na, 1, ins[0]);
+            ext(0, na, 0);
+            ext(0, na, 1);
             let nb = nand(def);
-            ext(nb, 0, ins[1]);
-            ext(nb, 1, ins[1]);
+            ext(1, nb, 0);
+            ext(1, nb, 1);
             let o = nand(def);
             link(def, na, o, 0);
             link(def, nb, o, 1);
@@ -696,13 +687,13 @@ fn gate_parts(
         }
         Gate::Xor => {
             let n = nand(def);
-            ext(n, 0, ins[0]);
-            ext(n, 1, ins[1]);
+            ext(0, n, 0);
+            ext(1, n, 1);
             let l = nand(def);
-            ext(l, 0, ins[0]);
+            ext(0, l, 0);
             link(def, n, l, 1);
             let r = nand(def);
-            ext(r, 0, ins[1]);
+            ext(1, r, 0);
             link(def, n, r, 1);
             let o = nand(def);
             link(def, l, o, 0);

@@ -199,6 +199,23 @@ impl Block {
         }
     }
 
+    /// Whether this block drives a wire on side `d` (its output side).
+    /// Only meaningful where [`Block::accepts_wire_from`] is true; devices
+    /// are answered by [`crate::World::pin`].
+    pub fn drives(&self, d: Dir) -> bool {
+        match self {
+            Block::Gate { facing, .. }
+            | Block::Switch { facing, .. }
+            | Block::Clock { facing, .. }
+            | Block::Port {
+                output: false,
+                facing,
+                ..
+            } => d == *facing,
+            _ => false,
+        }
+    }
+
     pub fn label(&self) -> String {
         match self {
             Block::Wire => "Tel".into(),
