@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::device::Device;
+
 /// The four horizontal directions. Vertical connections between layers go
 /// through [`Block::Via`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -110,6 +112,9 @@ pub enum Block {
     /// Connects to wires, vias and pins in the four neighbouring cells on
     /// the same layer.
     Wire,
+    /// A wire that connects only along its axis (front and back), so
+    /// straight wires laid side by side form a bus without touching.
+    Straight { facing: Dir },
     /// Two wires crossing without touching: east-west and north-south are
     /// separate signals.
     Cross,
@@ -132,6 +137,11 @@ pub enum Block {
         output: bool,
         facing: Dir,
     },
+    /// A device covering several cells; this is its anchor cell (back-left
+    /// corner). See [`crate::device::layout`].
+    Device { device: Device, facing: Dir },
+    /// Another cell of a device: the anchor is at this cell plus (dx, dy).
+    Cover { dx: i32, dy: i32 },
 }
 
 impl Block {
@@ -140,7 +150,9 @@ impl Block {
             Block::Gate { facing, .. }
             | Block::Switch { facing, .. }
             | Block::Clock { facing, .. }
-            | Block::Port { facing, .. } => Some(*facing),
+            | Block::Port { facing, .. }
+            | Block::Straight { facing }
+            | Block::Device { facing, .. } => Some(*facing),
             _ => None,
         }
     }
@@ -152,7 +164,9 @@ impl Block {
             Block::Gate { facing, .. }
             | Block::Switch { facing, .. }
             | Block::Clock { facing, .. }
-            | Block::Port { facing, .. } => *facing = facing.cw(),
+            | Block::Port { facing, .. }
+            | Block::Straight { facing }
+            | Block::Device { facing, .. } => *facing = facing.cw(),
             _ => {}
         }
         b
@@ -160,9 +174,12 @@ impl Block {
 
     /// Whether a wire in the neighbouring cell, in direction `d`, joins this
     /// block's net(s). Gates and devices connect only on their pin sides.
+    /// Multi-cell devices answer `false` here: their pins depend on the
+    /// cell, see [`crate::World::accepts_wire`].
     pub fn accepts_wire_from(&self, d: Dir) -> bool {
         match self {
             Block::Wire | Block::Cross | Block::Via | Block::Lamp => true,
+            Block::Straight { facing } => d == *facing || d == facing.opposite(),
             Block::Gate { gate, facing } => {
                 d == *facing
                     || match gate.inputs() {
@@ -178,12 +195,14 @@ impl Block {
                     d == *facing
                 }
             }
+            Block::Device { .. } | Block::Cover { .. } => false,
         }
     }
 
     pub fn label(&self) -> String {
         match self {
             Block::Wire => "Tel".into(),
+            Block::Straight { .. } => "Düz tel".into(),
             Block::Cross => "Köprü".into(),
             Block::Via => "Geçiş".into(),
             Block::Gate { gate, .. } => gate.name().into(),
@@ -193,6 +212,8 @@ impl Block {
             Block::Port { name, output, .. } => {
                 format!("{} {name}", if *output { "Çıkış" } else { "Giriş" })
             }
+            Block::Device { device, .. } => device.name().into(),
+            Block::Cover { .. } => "Cihaz".into(),
         }
     }
 }

@@ -13,9 +13,11 @@
 
 pub mod block;
 pub mod compile;
+pub mod device;
 pub mod draw;
 pub mod world;
 
 pub use block::{Block, Dir, Gate};
 pub use compile::{compile, CompileError, Compiled};
+pub use device::Device;
 pub use world::{Edit, Pos, World};

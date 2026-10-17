@@ -795,6 +795,9 @@ impl App {
                 }
             }
         });
+        ui.add_space(4.0);
+        ui.label(RichText::new("Cihazlar").strong());
+        w.device_palette_ui(ui);
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Yön:");
@@ -863,6 +866,10 @@ impl App {
         if let Some(e) = w.error() {
             ui.colored_label(Color32::LIGHT_RED, e);
         }
+        if let Some(e) = &w.status {
+            ui.colored_label(Color32::LIGHT_YELLOW, e);
+        }
+        w.device_panel(ui);
     }
 
     /// The sandbox section of the left panel: list of free chips and a
@@ -1600,6 +1607,45 @@ mod tests {
         harness.run_steps(3);
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world.png")).unwrap();
+
+        // Devices: a keyboard into a display, and a screen with a pattern.
+        {
+            use makine_world::device::Device;
+            use makine_world::{Block, Dir, Edit, Pos};
+            let mut w = makine_world::World::new("cihazlar");
+            let place = |w: &mut makine_world::World, d: Device, p: Pos| {
+                let e = w.place_device(d, p, Dir::East).unwrap();
+                w.apply(e);
+            };
+            place(&mut w, Device::Keyboard, Pos::new(0, 0, 0));
+            for y in 0..8 {
+                w.apply(Edit::Set {
+                    pos: Pos::new(3, y, 0),
+                    block: Some(Block::Straight { facing: Dir::East }),
+                });
+            }
+            place(&mut w, Device::Display { bits: 8 }, Pos::new(4, 0, 0));
+            place(&mut w, Device::Screen { bits: 3 }, Pos::new(0, 11, 0));
+            place(&mut w, Device::Ram { addr: 3, data: 8 }, Pos::new(12, 0, 0));
+            let mut v = crate::worldview::WorldView::new(w);
+            v.selected = Some(Pos::new(0, 0, 0));
+            app.borrow_mut().world = Some(v);
+        }
+        harness.run_steps(2);
+        harness.event(egui::Event::Text("M".into()));
+        harness.run_steps(3);
+        // Draw a smiley on the screen through its native state.
+        {
+            let mut a = app.borrow_mut();
+            let v = a.world.as_mut().unwrap();
+            v.set_screen_for_test(makine_world::Pos::new(0, 11, 0), |x, y| {
+                matches!((x, y), (2, 2) | (5, 2) | (1, 5) | (6, 5))
+                    || (y == 6 && (2..=5).contains(&x))
+            });
+        }
+        harness.run_steps(3);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-world-devices.png")).unwrap();
 
         // Wiki pages, with their images loaded.
         for slug in ["nand", "kapilar", "hafiza", "islemci"] {

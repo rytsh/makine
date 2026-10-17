@@ -13,9 +13,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use makine_sim::{ChipDef, Part, PartKind, Pin, Sink, Source, Wire};
+use makine_sim::{ChipDef, Library, NativeDef, Part, PartKind, Pin, Sink, Source, Wire};
 
 use crate::block::{Block, Dir, Gate};
+use crate::device::{self, Device};
 use crate::world::{Pos, World};
 
 /// Which signal of a cell: crossings carry two.
@@ -77,6 +78,20 @@ pub struct Compiled {
     pub lamps: Vec<(Pos, Option<usize>)>,
     /// Output ports: name and chip output.
     pub ports: Vec<(String, usize)>,
+    /// Devices by anchor, with their native part's name (if they have
+    /// behaviour) and the chip outputs showing their input wires.
+    pub devices: Vec<DeviceInfo>,
+    /// Native parts the circuit uses, see [`Compiled::library`].
+    pub natives: Vec<(String, NativeDef)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DeviceInfo {
+    pub anchor: Pos,
+    pub device: Device,
+    pub native: Option<String>,
+    /// For each input pin: the chip output carrying its value, if driven.
+    pub inputs: Vec<Option<usize>>,
 }
 
 impl Compiled {
@@ -87,6 +102,16 @@ impl Compiled {
     /// The chip output showing a cell's value, if the cell is on a driven net.
     pub fn output_at(&self, pos: Pos, lane: Lane) -> Option<usize> {
         self.net_output[self.net_at(pos, lane)?]
+    }
+
+    /// The library to simulate [`Compiled::def`] with: the devices' native
+    /// parts.
+    pub fn library(&self) -> Library {
+        let mut lib = Library::new();
+        for (name, n) in &self.natives {
+            lib.insert_native(name.clone(), n.clone());
+        }
+        lib
     }
 }
 
@@ -115,12 +140,18 @@ impl Uf {
 }
 
 fn is_conductor(b: &Block) -> bool {
-    matches!(b, Block::Wire | Block::Cross | Block::Via | Block::Lamp)
+    matches!(
+        b,
+        Block::Wire | Block::Straight { .. } | Block::Cross | Block::Via | Block::Lamp
+    )
 }
 
 /// Whether `b`'s pin on side `d` is an output (drives the net).
-fn is_output_pin(b: &Block, d: Dir) -> bool {
+fn is_output_pin(world: &World, pos: Pos, b: &Block, d: Dir) -> bool {
     match b {
+        Block::Device { .. } | Block::Cover { .. } => {
+            world.device_at(pos).is_some_and(|(_, _, f)| f == d)
+        }
         Block::Gate { facing, .. }
         | Block::Switch { facing, .. }
         | Block::Clock { facing, .. }
@@ -141,12 +172,14 @@ struct Nodes {
 impl Nodes {
     /// The node of `block` (at `pos`) that a neighbour on side `side`
     /// connects to, if any.
-    fn facing(&self, block: &Block, pos: Pos, side: Dir) -> Option<usize> {
-        if !block.accepts_wire_from(side) {
+    fn facing(&self, world: &World, block: &Block, pos: Pos, side: Dir) -> Option<usize> {
+        if !world.accepts_wire(pos, side) {
             return None;
         }
         match block {
-            Block::Wire | Block::Via | Block::Lamp => self.cell.get(&(pos, Lane::Main)).copied(),
+            Block::Wire | Block::Straight { .. } | Block::Via | Block::Lamp => {
+                self.cell.get(&(pos, Lane::Main)).copied()
+            }
             Block::Cross => {
                 let lane = if side.is_horizontal() {
                     Lane::Main
@@ -170,7 +203,7 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
 
     for (&pos, block) in &blocks {
         match block {
-            Block::Wire | Block::Via | Block::Lamp => {
+            Block::Wire | Block::Straight { .. } | Block::Via | Block::Lamp => {
                 nodes.cell.insert((pos, Lane::Main), uf.make());
             }
             Block::Cross => {
@@ -179,7 +212,7 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
             }
             _ => {
                 for d in Dir::ALL {
-                    if block.accepts_wire_from(d) {
+                    if world.accepts_wire(pos, d) {
                         nodes.pin.insert((pos, d), uf.make());
                     }
                 }
@@ -189,7 +222,7 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
 
     for (&pos, block) in &blocks {
         for d in Dir::ALL {
-            let Some(here) = nodes.facing(block, pos, d) else {
+            let Some(here) = nodes.facing(world, block, pos, d) else {
                 continue;
             };
             let npos = pos.step(d);
@@ -200,11 +233,12 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
             // back); two outputs or two inputs side by side do not touch.
             if !is_conductor(block)
                 && !is_conductor(nb)
-                && is_output_pin(block, d) == is_output_pin(nb, d.opposite())
+                && is_output_pin(world, pos, block, d)
+                    == is_output_pin(world, npos, nb, d.opposite())
             {
                 continue;
             }
-            if let Some(there) = nodes.facing(nb, npos, d.opposite()) {
+            if let Some(there) = nodes.facing(world, nb, npos, d.opposite()) {
                 uf.union(here, there);
             }
         }
@@ -297,6 +331,32 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
         drive(&mut driver, pin_net[&(pos, *facing)], out, pos);
     }
 
+    // Devices: native parts, outputs drive their nets; inputs are wired
+    // like gate inputs.
+    let mut devices = Vec::new();
+    let mut natives = Vec::new();
+    for (&pos, block) in &blocks {
+        let Block::Device { device, facing } = block else {
+            continue;
+        };
+        let l = device::layout(device, pos, *facing);
+        let in_nets: Vec<usize> = l.inputs.iter().map(|k| pin_net[k]).collect();
+        let native = device.native().map(|n| {
+            let name = device.native_name(pos);
+            let part = def.parts.len();
+            def.parts.push(Part::new(PartKind::Chip(name.clone())));
+            for (i, &net) in in_nets.iter().enumerate() {
+                gate_inputs.push((Sink::Part { part, pin: i }, net));
+            }
+            for (i, k) in l.outputs.iter().enumerate() {
+                drive(&mut driver, pin_net[k], Source::Part { part, pin: i }, pos);
+            }
+            natives.push((name.clone(), n));
+            name
+        });
+        devices.push((pos, device.clone(), native, in_nets));
+    }
+
     if let Some((_, list)) = shorts.into_iter().next() {
         return Err(CompileError::ShortCircuit(list));
     }
@@ -323,6 +383,16 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
             net_output[net] = Some(o);
         }
     }
+
+    let devices = devices
+        .into_iter()
+        .map(|(anchor, device, native, in_nets)| DeviceInfo {
+            anchor,
+            device,
+            native,
+            inputs: in_nets.iter().map(|&n| net_output[n]).collect(),
+        })
+        .collect();
 
     let lamps = blocks
         .iter()
@@ -367,6 +437,9 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
 
     // Gates and devices show the value of the net they drive (or read).
     for (&pos, block) in &blocks {
+        if matches!(block, Block::Device { .. }) {
+            continue;
+        }
         if let Some(f) = block.facing() {
             let side = match block {
                 Block::Port { output: true, .. } => f.opposite(),
@@ -378,6 +451,13 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
         }
     }
 
+    // Device pin cells show their pin's value.
+    for (&(pos, _), &n) in &pin_net {
+        if matches!(blocks[&pos], Block::Device { .. } | Block::Cover { .. }) {
+            nets.insert((pos, Lane::Main), n);
+        }
+    }
+
     Ok(Compiled {
         def,
         nets,
@@ -385,6 +465,8 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
         inputs,
         lamps,
         ports,
+        devices,
+        natives,
     })
 }
 

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::block::{Block, Dir};
+use crate::device::{self, Device};
 
 /// A cell position: `x`, `y` on a layer, `z` the layer (0 = ground).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -183,6 +184,90 @@ impl World {
         }))
     }
 
+    /// The anchor of the device covering `pos`, with the device and its
+    /// facing.
+    pub fn device_at(&self, pos: Pos) -> Option<(Pos, &Device, Dir)> {
+        let anchor = match self.get(pos)? {
+            Block::Device { .. } => pos,
+            Block::Cover { dx, dy } => Pos::new(pos.x + dx, pos.y + dy, pos.z),
+            _ => return None,
+        };
+        match self.get(anchor)? {
+            Block::Device { device, facing } => Some((anchor, device, *facing)),
+            _ => None,
+        }
+    }
+
+    /// Whether the block at `pos` connects to a wire on its side `side`.
+    /// Unlike [`Block::accepts_wire_from`] this knows device pins.
+    pub fn accepts_wire(&self, pos: Pos, side: Dir) -> bool {
+        match self.get(pos) {
+            None => false,
+            Some(Block::Device { .. } | Block::Cover { .. }) => {
+                let Some((anchor, device, facing)) = self.device_at(pos) else {
+                    return false;
+                };
+                let l = device::layout(device, anchor, facing);
+                l.inputs
+                    .iter()
+                    .chain(&l.outputs)
+                    .any(|&(p, d)| p == pos && d == side)
+            }
+            Some(b) => b.accepts_wire_from(side),
+        }
+    }
+
+    /// The edit placing `device` with its anchor at `anchor`, or `None` if
+    /// a cell it needs is taken or outside the allowed layers.
+    pub fn place_device(&self, device: Device, anchor: Pos, facing: Dir) -> Option<Edit> {
+        let device = device.clamped();
+        let l = device::layout(&device, anchor, facing);
+        if !(0..=MAX_LAYER).contains(&anchor.z) || l.cells.iter().any(|&c| self.get(c).is_some()) {
+            return None;
+        }
+        let mut edits: Vec<Edit> = l
+            .cells
+            .iter()
+            .filter(|&&c| c != anchor)
+            .map(|&c| Edit::Set {
+                pos: c,
+                block: Some(Block::Cover {
+                    dx: anchor.x - c.x,
+                    dy: anchor.y - c.y,
+                }),
+            })
+            .collect();
+        edits.push(Edit::Set {
+            pos: anchor,
+            block: Some(Block::Device { device, facing }),
+        });
+        Some(Edit::Batch(edits))
+    }
+
+    /// The edit clearing the cell at `pos`: the whole device if it is part
+    /// of one.
+    pub fn remove(&self, pos: Pos) -> Option<Edit> {
+        self.get(pos)?;
+        let Some((anchor, device, facing)) = self.device_at(pos) else {
+            return Some(Edit::Set { pos, block: None });
+        };
+        let cells = device::layout(device, anchor, facing).cells;
+        Some(Edit::Batch(
+            cells
+                .into_iter()
+                .filter(|&c| match self.get(c) {
+                    Some(Block::Cover { dx, dy }) => Pos::new(c.x + dx, c.y + dy, c.z) == anchor,
+                    Some(Block::Device { .. }) => c == anchor,
+                    _ => false,
+                })
+                .map(|c| Edit::Set {
+                    pos: c,
+                    block: None,
+                })
+                .collect(),
+        ))
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("worlds serialize")
     }
@@ -292,6 +377,29 @@ mod tests {
             pos: Pos::new(0, 0, MAX_LAYER + 1),
             block: Some(Block::Wire),
         });
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn devices_place_and_remove_whole() {
+        let mut w = World::new("t");
+        let ram = Device::Ram { addr: 2, data: 4 };
+        let anchor = Pos::new(5, 5, 0);
+        let e = w.place_device(ram.clone(), anchor, Dir::East).unwrap();
+        w.apply(e);
+        let (len, wide) = ram.size();
+        assert_eq!(w.len(), (len * wide) as usize);
+        // Every cell knows its device; pins accept wires on the right side.
+        let far = Pos::new(5 + len - 1, 5 + wide - 1, 0);
+        assert_eq!(w.device_at(far).map(|d| d.0), Some(anchor));
+        assert!(w.accepts_wire(anchor, Dir::West));
+        assert!(!w.accepts_wire(anchor, Dir::North));
+        assert!(w.accepts_wire(Pos::new(5 + len - 1, 5, 0), Dir::East));
+        // Overlapping placement is refused.
+        assert!(w.place_device(ram, Pos::new(6, 6, 0), Dir::East).is_none());
+        // Removing any cell removes the device.
+        let e = w.remove(far).unwrap();
+        w.apply(e);
         assert!(w.is_empty());
     }
 
