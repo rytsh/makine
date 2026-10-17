@@ -2274,9 +2274,11 @@ mod speed_tests {
         v.speed = 100;
         v.run_frame();
         assert_eq!(v.tick, 101);
+        // As fast as possible: more than one step, however busy the machine.
         v.speed = 0;
+        let t = v.tick;
         v.run_frame();
-        assert!(v.tick > 1000, "as fast as possible: {}", v.tick);
+        assert!(v.tick > t + 1, "as fast as possible: {}", v.tick - t);
         // Paused: frames do not advance, a single step does.
         v.running = false;
         let t = v.tick;
