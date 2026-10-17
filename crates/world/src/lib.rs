@@ -12,9 +12,11 @@
 //!   points where worlds link to each other.
 
 pub mod block;
+pub mod chip;
 pub mod compile;
 pub mod device;
 pub mod draw;
+pub mod region;
 pub mod world;
 
 pub use block::{Block, Dir, Gate};

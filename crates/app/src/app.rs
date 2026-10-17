@@ -167,6 +167,9 @@ impl App {
     fn refresh_library(&mut self) {
         self.lib = self.progress.library(self.progress.fast);
         self.computer = None;
+        if let Some(w) = &mut self.world {
+            w.set_library(self.lib.clone());
+        }
     }
 
     /// Recompile the live simulation after the design changed.
@@ -212,8 +215,7 @@ impl App {
             Err(e) => TestResult::Error(e.to_string()),
             Ok(Verdict::Pass) => {
                 self.progress.solutions.insert(level.chip.to_string(), def);
-                self.lib = self.progress.library(self.progress.fast);
-                self.computer = None;
+                self.refresh_library();
                 self.save();
                 TestResult::Pass
             }
@@ -340,8 +342,7 @@ impl App {
             self.set_fullscreen(ui.ctx(), on);
         }
         if fast.changed() {
-            self.lib = self.progress.library(self.progress.fast);
-            self.computer = None;
+            self.refresh_library();
             self.rebuild();
             self.save();
         }
@@ -742,6 +743,10 @@ impl App {
                 .unwrap_or_else(|| makine_world::World::new("dünya"));
             self.world = Some(crate::worldview::WorldView::new(world));
         }
+        let lib = self.lib.clone();
+        if let Some(w) = &mut self.world {
+            w.set_library(lib);
+        }
         self.view = View::World;
     }
 
@@ -798,6 +803,63 @@ impl App {
         ui.add_space(4.0);
         ui.label(RichText::new("Cihazlar").strong());
         w.device_palette_ui(ui);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(w.selecting(), "⬚ Seç")
+                .on_hover_text("Alan seç: kopyala, taşı, çipe çevir")
+                .clicked()
+            {
+                w.brush = None;
+            }
+        });
+        // Chips from the library, as blocks.
+        let mut chips: Vec<String> = levels()
+            .iter()
+            .filter(|l| self.progress.solved(l.chip))
+            .map(|l| l.chip.to_string())
+            .collect();
+        chips.extend(self.progress.sandbox.chips.keys().map(|n| format!("★{n}")));
+        if !chips.is_empty() {
+            egui::CollapsingHeader::new(
+                RichText::new(format!("Çiplerin ({})", chips.len())).strong(),
+            )
+            .id_salt("world-chips")
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("Çözdüğün seviyeler ve serbest çiplerin, blok olarak.")
+                        .weak()
+                        .small(),
+                );
+                let current = match w.brush.as_ref().map(|b| &b.block) {
+                    Some(makine_world::Block::Device {
+                        device: makine_world::Device::Chip { name, .. },
+                        ..
+                    }) => Some(name.clone()),
+                    _ => None,
+                };
+                ui.horizontal_wrapped(|ui| {
+                    for label in &chips {
+                        let name = label.trim_start_matches('★');
+                        let r = ui.selectable_label(current.as_deref() == Some(name), label);
+                        if r.clicked() {
+                            if let Some(p) = self.lib.kind_pins(&PartKind::Chip(name.into())) {
+                                w.brush = Some(crate::worldview::Brush {
+                                    block: makine_world::Block::Device {
+                                        device: makine_world::Device::Chip {
+                                            name: name.into(),
+                                            inputs: p.inputs,
+                                            outputs: p.outputs,
+                                        },
+                                        facing: makine_world::Dir::East,
+                                    },
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+        }
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("Yön:");
@@ -869,7 +931,43 @@ impl App {
         if let Some(e) = &w.status {
             ui.colored_label(Color32::LIGHT_YELLOW, e);
         }
+        w.selection_panel(ui);
         w.device_panel(ui);
+        if let Some(req) = w.request.take() {
+            self.handle_world_request(req);
+        }
+    }
+
+    fn handle_world_request(&mut self, req: crate::worldview::Request) {
+        let crate::worldview::Request::MakeChip { name, region } = req;
+        let Some(w) = &mut self.world else { return };
+        if let Err(e) = sandbox::check_name(&name, &self.lib, &self.progress.sandbox, None) {
+            w.status = Some(e);
+            return;
+        }
+        let part = w.region_world(region, &name);
+        match makine_world::chip::to_chip(&part, &name, &self.lib) {
+            Ok(def) => {
+                let n = def.parts.len();
+                let mut d = Design::new(def);
+                // Lay the parts out in a grid so the 2D editor is usable.
+                for (i, p) in d.pos.iter_mut().enumerate() {
+                    *p = [200.0 + 90.0 * (i % 8) as f32, 60.0 + 70.0 * (i / 8) as f32];
+                }
+                self.progress.sandbox.chips.insert(name.clone(), d);
+                self.refresh_library();
+                if let Some(w) = &mut self.world {
+                    w.set_library(self.lib.clone());
+                    w.chip_name.clear();
+                    w.status = Some(format!(
+                        "'{name}' çipi oluşturuldu ({n} parça). Serbest çiplerde ve 'Çiplerin' \
+                         listesinde."
+                    ));
+                }
+                self.save();
+            }
+            Err(e) => w.status = Some(e),
+        }
     }
 
     /// The sandbox section of the left panel: list of free chips and a
@@ -1647,6 +1745,65 @@ mod tests {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world-devices.png")).unwrap();
 
+        // Chips as blocks: Xor and And from the levels, a selected region.
+        {
+            use makine_world::{Block, Device, Dir, Edit, Pos};
+            let mut a = app.borrow_mut();
+            let lib = a.lib.clone();
+            let chip = |name: &str| {
+                let p = lib.kind_pins(&PartKind::Chip(name.into())).unwrap();
+                Device::Chip {
+                    name: name.into(),
+                    inputs: p.inputs,
+                    outputs: p.outputs,
+                }
+            };
+            let mut w = makine_world::World::new("çipler");
+            w.apply(
+                w.place_device(chip("Xor"), Pos::new(2, 0, 0), Dir::East)
+                    .unwrap(),
+            );
+            w.apply(
+                w.place_device(chip("And"), Pos::new(2, 3, 0), Dir::East)
+                    .unwrap(),
+            );
+            let st = || Some(Block::Straight { facing: Dir::East });
+            for (x, y, on) in [(0, 0, true), (0, 1, true), (0, 3, true), (0, 4, false)] {
+                w.apply(Edit::Set {
+                    pos: Pos::new(x, y, 0),
+                    block: Some(Block::Switch {
+                        on,
+                        facing: Dir::East,
+                    }),
+                });
+                w.apply(Edit::Set {
+                    pos: Pos::new(1, y, 0),
+                    block: st(),
+                });
+            }
+            for y in [0, 3] {
+                w.apply(Edit::Set {
+                    pos: Pos::new(5, y, 0),
+                    block: st(),
+                });
+                w.apply(Edit::Set {
+                    pos: Pos::new(6, y, 0),
+                    block: Some(Block::Lamp),
+                });
+            }
+            let mut v = crate::worldview::WorldView::new(w);
+            v.set_library(lib);
+            v.brush = None;
+            v.selection = Some(makine_world::region::Region::between(
+                Pos::new(0, 3, 0),
+                Pos::new(6, 4, 0),
+            ));
+            a.world = Some(v);
+        }
+        harness.run_steps(3);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-world-chips.png")).unwrap();
+
         // Wiki pages, with their images loaded.
         for slug in ["nand", "kapilar", "hafiza", "islemci"] {
             {
@@ -1938,6 +2095,95 @@ mod sandbox_tests {
         assert!(h.query_by_label("★ Dis").is_none(), "cycle offered");
         // Tampon is used by Dis, so it cannot be deleted.
         assert!(!app.borrow().progress.sandbox.users_of("Tampon").is_empty());
+    }
+
+    /// Blocks in the world become a chip, which goes back in as a block.
+    #[test]
+    fn world_region_to_chip_and_back() {
+        use makine_world::{Block, Dir, Edit, Gate, Pos};
+        let app = app_with_levels();
+        app.borrow_mut().open_world();
+        {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            let port = |n: &str, output| Block::Port {
+                name: n.into(),
+                output,
+                facing: Dir::East,
+            };
+            for (i, b) in [
+                port("a", false),
+                Block::Gate {
+                    gate: Gate::Not,
+                    facing: Dir::East,
+                },
+                port("q", true),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                w.edit(Edit::Set {
+                    pos: Pos::new(i as i32, 0, 0),
+                    block: Some(b),
+                });
+            }
+            w.selection = Some(makine_world::region::Region::between(
+                Pos::new(0, 0, 0),
+                Pos::new(2, 0, 0),
+            ));
+            w.brush = None;
+        }
+        let a = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui(move |ui| a.borrow_mut().ui(ui));
+        h.run_steps(2);
+        h.get_by_label("Ad").focus();
+        h.run();
+        h.get_by_label("Ad").type_text("Ters");
+        h.run();
+        h.get_by_label("Çip yap").click();
+        h.run_steps(2);
+        let def = app.borrow().progress.sandbox.chips["Ters"].def.clone();
+        assert_eq!(def.inputs, makine_sim::parse_pins(&["a"]));
+        let mut sim = Circuit::compile(&app.borrow().lib, "Ters").unwrap();
+        assert_eq!(sim.eval_values(&[0]).unwrap(), vec![1]);
+
+        // The chip list offers it as a block; place it and drive it.
+        h.get_by_label_contains("Çiplerin (").click();
+        h.run_steps(2);
+        h.get_by_label("★Ters").click();
+        h.run_steps(2);
+        {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            let Some(crate::worldview::Brush {
+                block: Block::Device { device, .. },
+            }) = w.brush.clone()
+            else {
+                panic!("no chip brush");
+            };
+            let e = w
+                .world
+                .place_device(device, Pos::new(0, 5, 0), Dir::East)
+                .unwrap();
+            w.edit(e);
+            w.edit(Edit::Set {
+                pos: Pos::new(-1, 5, 0),
+                block: Some(Block::Switch {
+                    on: false,
+                    facing: Dir::East,
+                }),
+            });
+            w.edit(Edit::Set {
+                pos: Pos::new(3, 5, 0),
+                block: Some(Block::Lamp),
+            });
+        }
+        h.run_steps(2);
+        let a = app.borrow();
+        let w = a.world.as_ref().unwrap();
+        assert!(w.error().is_none(), "{:?}", w.error());
     }
 
     /// Changing pins in the panel applies them to the chip.

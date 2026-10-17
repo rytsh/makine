@@ -13,10 +13,11 @@
 use std::collections::HashMap;
 
 use egui::{vec2, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, Ui, Vec2};
-use makine_sim::Circuit;
+use makine_sim::{Circuit, Library};
 use makine_world::block::{Block, Dir, Gate};
 use makine_world::compile::{compile, Compiled, InputSource, Lane};
 use makine_world::device::{self, Device};
+use makine_world::region::{self, Clip, Region};
 use makine_world::world::MAX_LAYER;
 use makine_world::{Edit, Pos, World};
 
@@ -150,6 +151,26 @@ pub struct WorldView {
     pub status: Option<String>,
     /// ROM contents being edited: device anchor, text, parse error.
     rom_text: Option<(Pos, String, Option<String>)>,
+    /// The player's chips, for chip blocks.
+    lib: Library,
+    /// Selected region, and the corner where a selection drag started.
+    pub selection: Option<Region>,
+    sel_start: Option<Pos>,
+    /// Blocks being pasted: they follow the pointer until clicked down.
+    pub pasting: Option<Clip>,
+    /// The last copied blocks.
+    pub clipboard: Option<Clip>,
+    /// Name typed for a new chip made from the selection.
+    pub chip_name: String,
+    /// Something the app must do (it owns the chip library).
+    pub request: Option<Request>,
+}
+
+/// Requests from the world view to the app.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Request {
+    /// Turn the blocks in a region into a free chip named `name`.
+    MakeChip { name: String, region: Region },
 }
 
 impl Default for WorldView {
@@ -180,6 +201,100 @@ impl WorldView {
             typed: Vec::new(),
             status: None,
             rom_text: None,
+            lib: Library::new(),
+            selection: None,
+            sel_start: None,
+            pasting: None,
+            clipboard: None,
+            chip_name: String::new(),
+            request: None,
+        }
+    }
+
+    /// Set the player's chip library (used by chip blocks).
+    pub fn set_library(&mut self, lib: Library) {
+        self.lib = lib;
+        self.compiled_rev = u64::MAX;
+    }
+
+    /// Whether the select tool is active (no brush).
+    pub fn selecting(&self) -> bool {
+        self.brush.is_none()
+    }
+
+    /// Copy the selection; also returns it as text for the system clipboard.
+    pub fn copy(&mut self) -> Option<String> {
+        let clip = Clip::copy(&self.world, self.selection?)?;
+        let text = clip.to_json();
+        self.clipboard = Some(clip);
+        Some(text)
+    }
+
+    pub fn cut(&mut self) -> Option<String> {
+        let text = self.copy()?;
+        self.delete_selection();
+        Some(text)
+    }
+
+    pub fn delete_selection(&mut self) {
+        if let Some(r) = self.selection {
+            let e = r.clear(&self.world);
+            if matches!(&e, Edit::Batch(v) if !v.is_empty()) {
+                if self.selected.is_some_and(|a| r.contains(a)) {
+                    self.selected = None;
+                }
+                self.edit(e);
+            }
+        }
+    }
+
+    /// Start pasting `text` if it holds blocks, else the last copy.
+    pub fn start_paste(&mut self, text: Option<&str>) {
+        let clip = text
+            .and_then(Clip::from_json)
+            .or_else(|| self.clipboard.clone());
+        if let Some(c) = clip {
+            self.pasting = Some(c);
+            self.status =
+                Some("Yapıştırmak için tıkla · R: döndür · Esc ya da sağ tık: bırak".into());
+        }
+    }
+
+    /// Paste the floating clip with its corner at `at`.
+    fn paste_at(&mut self, at: Pos) {
+        let Some(clip) = &self.pasting else { return };
+        match clip.paste(&self.world, at) {
+            Ok(e) => {
+                let (w, h) = clip.size();
+                self.edit(e);
+                self.selection = Some(Region::between(
+                    at,
+                    Pos::new(at.x + w - 1, at.y + h - 1, at.z),
+                ));
+                self.pasting = None;
+                self.status = None;
+            }
+            Err(e) => self.status = Some(e),
+        }
+    }
+
+    /// Move the selection and its blocks by (dx, dy).
+    pub fn move_selection(&mut self, dx: i32, dy: i32) {
+        let Some(r) = self.selection else { return };
+        match region::move_region(&self.world, r, dx, dy) {
+            Ok(e) => {
+                self.edit(e);
+                self.selection = Some(Region {
+                    x0: r.x0 + dx,
+                    y0: r.y0 + dy,
+                    x1: r.x1 + dx,
+                    y1: r.y1 + dy,
+                });
+                if let Some(a) = self.selected.filter(|a| r.contains(*a)) {
+                    self.selected = Some(Pos::new(a.x + dx, a.y + dy, a.z));
+                }
+            }
+            Err(e) => self.status = Some(e),
         }
     }
 
@@ -216,6 +331,112 @@ impl WorldView {
                 .small(),
             );
         }
+    }
+
+    /// Tools for the selected region.
+    pub fn selection_panel(&mut self, ui: &mut Ui) {
+        if let Some(clip) = &self.pasting {
+            ui.separator();
+            ui.label(RichText::new(format!("Yapıştırılıyor: {} blok", clip.blocks.len())).strong());
+            ui.horizontal(|ui| {
+                if ui.button("↻ Döndür (R)").clicked() {
+                    self.pasting = self.pasting.as_ref().map(Clip::rotated);
+                }
+                if ui.button("Bırak (Esc)").clicked() {
+                    self.pasting = None;
+                    self.status = None;
+                }
+            });
+            return;
+        }
+        let Some(r) = self.selection else {
+            if self.selecting() {
+                ui.label(
+                    RichText::new(
+                        "Bir alan seçmek için sürükle. (Başka bir blok tutarken Shift+sürükle.)",
+                    )
+                    .weak()
+                    .small(),
+                );
+            }
+            return;
+        };
+        let n = r.blocks(&self.world).len();
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!("Seçim: {}×{}, {n} blok", r.width(), r.height())).strong(),
+            );
+            if ui
+                .small_button("✖")
+                .on_hover_text("Seçimi bırak (Esc)")
+                .clicked()
+            {
+                self.selection = None;
+            }
+        });
+        ui.label(
+            RichText::new("Seçim bütün katmanları kapsar. Oklar: taşı · Del: sil · Ctrl+C/X/V")
+                .weak()
+                .small(),
+        );
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Kopyala").clicked() {
+                if let Some(t) = self.copy() {
+                    ui.ctx().copy_text(t);
+                }
+            }
+            if ui.button("Kes").clicked() {
+                if let Some(t) = self.cut() {
+                    ui.ctx().copy_text(t);
+                }
+            }
+            if ui
+                .add_enabled(self.clipboard.is_some(), egui::Button::new("Yapıştır"))
+                .clicked()
+            {
+                self.start_paste(None);
+            }
+            if ui.button("Sil").clicked() {
+                self.delete_selection();
+            }
+        });
+        ui.add_space(4.0);
+        ui.label(RichText::new("Çipe çevir").strong());
+        ui.label(
+            RichText::new(
+                "Seçimdeki portlar çipin uçları olur. x0, x1, … gibi sıralı adlar tek bir \
+                 bus'a birleşir. Anahtarlar o anki değerleriyle sabit olur.",
+            )
+            .weak()
+            .small(),
+        );
+        ui.horizontal(|ui| {
+            let l = ui.label("Ad").id;
+            ui.add(
+                egui::TextEdit::singleline(&mut self.chip_name)
+                    .hint_text("Toplayici")
+                    .desired_width(110.0),
+            )
+            .labelled_by(l);
+            if ui.button("Çip yap").clicked() {
+                self.request = Some(Request::MakeChip {
+                    name: self.chip_name.trim().to_string(),
+                    region: r,
+                });
+            }
+        });
+    }
+
+    /// A world containing only the blocks of `r`.
+    pub fn region_world(&self, r: Region, name: &str) -> World {
+        let mut w = World::new(name);
+        if let Some(clip) = Clip::copy(&self.world, r) {
+            if let Ok(e) = clip.paste(&w, Pos::new(0, 0, 0)) {
+                w.apply(e);
+            }
+        }
+        w
     }
 
     /// Settings of the selected device.
@@ -295,7 +516,7 @@ impl WorldView {
                     changed = Some(Device::Display { bits: b });
                 }
             }
-            Device::Keyboard => {}
+            Device::Keyboard | Device::Chip { .. } => {}
         }
         if let Some(new) = changed {
             if let Err(e) = self.replace_device(anchor, new) {
@@ -503,7 +724,8 @@ impl WorldView {
                 compile(&self.world)
                     .map_err(|e| e.to_string())
                     .and_then(|c| {
-                        let mut sim = Circuit::compile_def(&c.library(), &c.def)
+                        makine_world::compile::check_chips(&self.world, &self.lib)?;
+                        let mut sim = Circuit::compile_def(&c.library_with(&self.lib), &c.def)
                             .map_err(|e| e.to_string())?;
                         for (name, s) in saved {
                             device::restore(&mut sim, &name, s);
@@ -640,7 +862,59 @@ impl WorldView {
             }
         } else if response.hovered() || response.has_focus() {
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.selected = None;
+                if self.pasting.take().is_some() {
+                    self.status = None;
+                } else if self.selected.take().is_none() {
+                    self.selection = None;
+                }
+            }
+            // Clipboard: egui turns Ctrl+C/X/V into these events.
+            let events = ui.input(|i| i.events.clone());
+            for e in events {
+                match e {
+                    egui::Event::Copy => {
+                        if let Some(t) = self.copy() {
+                            ui.ctx().copy_text(t);
+                        }
+                    }
+                    egui::Event::Cut => {
+                        if let Some(t) = self.cut() {
+                            ui.ctx().copy_text(t);
+                        }
+                    }
+                    egui::Event::Paste(t) => self.start_paste(Some(&t)),
+                    _ => {}
+                }
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                self.delete_selection();
+            }
+            if self.selection.is_some() && self.pasting.is_none() {
+                let step = ui.input(|i| {
+                    let mut d = (0, 0);
+                    if i.key_pressed(egui::Key::ArrowRight) {
+                        d.0 += 1
+                    }
+                    if i.key_pressed(egui::Key::ArrowLeft) {
+                        d.0 -= 1
+                    }
+                    if i.key_pressed(egui::Key::ArrowDown) {
+                        d.1 += 1
+                    }
+                    if i.key_pressed(egui::Key::ArrowUp) {
+                        d.1 -= 1
+                    }
+                    d
+                });
+                if step != (0, 0) {
+                    self.move_selection(step.0, step.1);
+                }
+            }
+            let rotate = ui.input(|i| i.key_pressed(egui::Key::R));
+            if rotate {
+                if let Some(c) = &mut self.pasting {
+                    *c = c.rotated();
+                }
             }
             ui.input(|i| {
                 if i.key_pressed(egui::Key::R) {
@@ -678,8 +952,39 @@ impl WorldView {
             .hover_pos()
             .map(|p| self.pick(origin, p, self.layer));
 
-        // Building.
-        if !space {
+        // Pasting: a click puts the blocks down; right click stops.
+        let shift = ui.input(|i| i.modifiers.shift);
+        if self.pasting.is_some() && !space {
+            if let (true, Some(cell)) = (response.clicked(), self.hover) {
+                self.paste_at(cell);
+            }
+            if response.secondary_clicked() {
+                self.pasting = None;
+                self.status = None;
+            }
+        } else if (self.selecting() || shift) && !space {
+            // Selecting: drag a rectangle; a click selects one cell (and the
+            // device there).
+            if response.drag_started_by(egui::PointerButton::Primary) {
+                let press = ui.input(|i| i.pointer.press_origin());
+                self.sel_start = press.map(|p| self.pick(origin, p, self.layer));
+            }
+            if let (Some(a), Some(b)) = (self.sel_start, self.hover) {
+                if response.dragged_by(egui::PointerButton::Primary) {
+                    self.selection = Some(Region::between(a, b));
+                }
+            }
+            if response.drag_stopped() {
+                self.sel_start = None;
+            }
+            if let (true, Some(cell)) = (response.clicked(), self.hover) {
+                self.selection = Some(Region::between(cell, cell));
+                self.selected = self.world.device_at(cell).map(|d| d.0);
+            }
+            if response.secondary_clicked() {
+                self.selection = None;
+            }
+        } else if !space {
             // A drag is only recognized once the pointer has moved; paint the
             // cell where the press started too.
             if response.drag_started() {
@@ -1087,6 +1392,53 @@ impl WorldView {
             }
         }
 
+        // Selection rectangle on the current layer.
+        if let Some(r) = self.selection {
+            let lz = self.layer as f32;
+            let (x0, y0, x1, y1) = (
+                r.x0 as f32,
+                r.y0 as f32,
+                r.x1 as f32 + 1.0,
+                r.y1 as f32 + 1.0,
+            );
+            let pts = vec![
+                self.to_screen(origin, x0, y0, lz),
+                self.to_screen(origin, x1, y0, lz),
+                self.to_screen(origin, x1, y1, lz),
+                self.to_screen(origin, x0, y1, lz),
+            ];
+            painter.add(Shape::convex_polygon(
+                pts.clone(),
+                Color32::from_rgba_unmultiplied(255, 210, 80, 24),
+                Stroke::NONE,
+            ));
+            painter.add(Shape::closed_line(
+                pts,
+                Stroke::new(2.0, Color32::from_rgb(255, 210, 80)),
+            ));
+        }
+        // Blocks being pasted, as ghosts under the pointer.
+        if let (Some(clip), Some(at)) = (&self.pasting, self.hover) {
+            for (p, _) in &clip.blocks {
+                let (x, y, zz) = (
+                    (at.x + p.x) as f32,
+                    (at.y + p.y) as f32,
+                    (at.z + p.z) as f32,
+                );
+                let tile = vec![
+                    self.to_screen(origin, x, y, zz),
+                    self.to_screen(origin, x + 1.0, y, zz),
+                    self.to_screen(origin, x + 1.0, y + 1.0, zz),
+                    self.to_screen(origin, x, y + 1.0, zz),
+                ];
+                painter.add(Shape::convex_polygon(
+                    tile,
+                    Color32::from_rgba_unmultiplied(120, 200, 255, 60),
+                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 200, 255, 160)),
+                ));
+            }
+        }
+
         // The selected device.
         if let Some((anchor, d, f)) = self.selected_device() {
             let (x0, y0, x1, y1) = extent(&d, anchor, f);
@@ -1223,6 +1575,7 @@ impl WorldView {
             Device::Screen { .. } => Color32::from_rgb(40, 44, 52),
             Device::Keyboard => Color32::from_rgb(150, 150, 160),
             Device::Display { .. } => Color32::from_rgb(40, 60, 50),
+            Device::Chip { .. } => Color32::from_rgb(55, 58, 66),
         };
         self.cuboid(
             painter,
@@ -1667,5 +2020,106 @@ mod device_tests {
         v.erase(Pos::new(2, 3, 0));
         assert_eq!(v.world.len(), 1);
         assert_eq!(v.selected, None);
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use std::{cell::RefCell, rc::Rc};
+
+    fn press(h: &mut egui_kittest::Harness, p: Pos2, button: egui::PointerButton, down: bool) {
+        h.event(egui::Event::PointerButton {
+            pos: p,
+            button,
+            pressed: down,
+            modifiers: egui::Modifiers::NONE,
+        });
+    }
+
+    /// Drag-select, copy, paste somewhere else, move with arrows, delete.
+    #[test]
+    fn select_copy_paste_move() {
+        let mut w = World::new("s");
+        for x in 0..3 {
+            w.apply(Edit::Set {
+                pos: Pos::new(x, 0, 0),
+                block: Some(Block::Wire),
+            });
+        }
+        w.apply(Edit::Set {
+            pos: Pos::new(1, 1, 1),
+            block: Some(Block::Lamp),
+        });
+        let mut v = WorldView::new(w);
+        v.brush = None;
+        let view = Rc::new(RefCell::new(v));
+        let vv = view.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .build_ui(move |ui| vv.borrow_mut().show(ui));
+        h.run();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let origin = rect.center_top() + vec2(0.0, 80.0);
+        let cell = |v: &WorldView, x: i32, y: i32| {
+            v.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5, 0.0)
+        };
+
+        // Drag from (0,0) to (2,1).
+        let (a, b) = (cell(&view.borrow(), 0, 0), cell(&view.borrow(), 2, 1));
+        h.event(egui::Event::PointerMoved(a));
+        press(&mut h, a, egui::PointerButton::Primary, true);
+        h.run();
+        for t in 1..=4 {
+            h.event(egui::Event::PointerMoved(a + (b - a) * (t as f32 / 4.0)));
+            h.run();
+        }
+        press(&mut h, b, egui::PointerButton::Primary, false);
+        h.run();
+        let sel = view.borrow().selection.unwrap();
+        assert_eq!(sel, Region::between(Pos::new(0, 0, 0), Pos::new(2, 1, 0)));
+        assert_eq!(sel.blocks(&view.borrow().world).len(), 4, "all layers");
+
+        // Copy, then paste at (0, 5) by clicking there.
+        h.event(egui::Event::Copy);
+        h.run();
+        assert!(view.borrow().clipboard.is_some());
+        let text = view.borrow().clipboard.as_ref().unwrap().to_json();
+        h.event(egui::Event::Paste(text));
+        h.run();
+        assert!(view.borrow().pasting.is_some());
+        let p = cell(&view.borrow(), 0, 5);
+        h.event(egui::Event::PointerMoved(p));
+        h.run();
+        press(&mut h, p, egui::PointerButton::Primary, true);
+        press(&mut h, p, egui::PointerButton::Primary, false);
+        h.run();
+        let v = view.borrow();
+        assert_eq!(v.world.len(), 8);
+        assert_eq!(v.world.get(Pos::new(1, 6, 1)), Some(&Block::Lamp));
+        drop(v);
+
+        // The pasted copy is selected: move it right with the arrow key.
+        h.key_press(egui::Key::ArrowRight);
+        h.run();
+        let v = view.borrow();
+        assert_eq!(
+            v.world.get(Pos::new(2, 6, 1)),
+            Some(&Block::Lamp),
+            "sel={:?} status={:?} blocks={:?}",
+            v.selection,
+            v.status,
+            v.world.blocks().map(|(p, _)| p).collect::<Vec<_>>()
+        );
+        assert!(v.world.get(Pos::new(0, 5, 0)).is_none());
+        drop(v);
+
+        // Delete removes it.
+        h.key_press(egui::Key::Delete);
+        h.run();
+        assert_eq!(view.borrow().world.len(), 4);
+        // Undo brings it back in one step.
+        view.borrow_mut().undo();
+        assert_eq!(view.borrow().world.len(), 8);
     }
 }

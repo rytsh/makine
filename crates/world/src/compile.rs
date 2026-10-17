@@ -107,7 +107,13 @@ impl Compiled {
     /// The library to simulate [`Compiled::def`] with: the devices' native
     /// parts.
     pub fn library(&self) -> Library {
-        let mut lib = Library::new();
+        self.library_with(&Library::new())
+    }
+
+    /// `base` (the player's chips, for chip blocks) plus the devices'
+    /// native parts.
+    pub fn library_with(&self, base: &Library) -> Library {
+        let mut lib = base.clone();
         for (name, n) in &self.natives {
             lib.insert_native(name.clone(), n.clone());
         }
@@ -354,6 +360,26 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
             natives.push((name.clone(), n));
             name
         });
+        if let Device::Chip {
+            name,
+            inputs: ins,
+            outputs: outs,
+        } = device
+        {
+            let mut d = |net, src, at| drive(&mut driver, net, src, at);
+            chip_parts(
+                &mut def,
+                name,
+                ins,
+                outs,
+                &in_nets,
+                &l.outputs,
+                &pin_net,
+                pos,
+                &mut gate_inputs,
+                &mut d,
+            );
+        }
         devices.push((pos, device.clone(), native, in_nets));
     }
 
@@ -468,6 +494,107 @@ pub fn compile(world: &World) -> Result<Compiled, CompileError> {
         devices,
         natives,
     })
+}
+
+/// Check that every chip block matches its chip in `lib` (exists, same
+/// pins). A chip whose pins changed must be placed again.
+pub fn check_chips(world: &World, lib: &Library) -> Result<(), String> {
+    for (_, b) in world.blocks() {
+        let Block::Device {
+            device:
+                Device::Chip {
+                    name,
+                    inputs,
+                    outputs,
+                },
+            ..
+        } = b
+        else {
+            continue;
+        };
+        let pins = lib
+            .kind_pins(&PartKind::Chip(name.clone()))
+            .ok_or_else(|| format!("'{name}' çipi kütüphanende yok"))?;
+        if &pins.inputs != inputs || &pins.outputs != outputs {
+            return Err(format!(
+                "'{name}' çipinin uçları değişmiş: dünyadakini silip yeniden koy"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A library chip: one part, with a Join gathering each input bus from its
+/// 1-bit nets and a Split fanning each output bus out to them.
+#[allow(clippy::too_many_arguments)]
+fn chip_parts(
+    def: &mut ChipDef,
+    name: &str,
+    inputs: &[Pin],
+    outputs: &[Pin],
+    in_nets: &[usize],
+    out_pins: &[(Pos, Dir)],
+    pin_net: &HashMap<(Pos, Dir), usize>,
+    pos: Pos,
+    pending: &mut Vec<(Sink, usize)>,
+    drive: &mut dyn FnMut(usize, Source, Pos),
+) {
+    let chip = def.parts.len();
+    def.parts.push(Part::new(PartKind::Chip(name.to_string())));
+    let mut nets = in_nets.iter();
+    for (j, p) in inputs.iter().enumerate() {
+        if p.width == 1 {
+            pending.push((Sink::Part { part: chip, pin: j }, *nets.next().unwrap()));
+            continue;
+        }
+        let join = def.parts.len();
+        def.parts
+            .push(Part::new(PartKind::Join(vec![1; p.width as usize])));
+        for bit in 0..p.width as usize {
+            pending.push((
+                Sink::Part {
+                    part: join,
+                    pin: bit,
+                },
+                *nets.next().unwrap(),
+            ));
+        }
+        def.wires.push(Wire {
+            from: Source::Part { part: join, pin: 0 },
+            to: Sink::Part { part: chip, pin: j },
+        });
+    }
+    let mut outs = out_pins.iter();
+    for (j, p) in outputs.iter().enumerate() {
+        if p.width == 1 {
+            drive(
+                pin_net[outs.next().unwrap()],
+                Source::Part { part: chip, pin: j },
+                pos,
+            );
+            continue;
+        }
+        let split = def.parts.len();
+        def.parts
+            .push(Part::new(PartKind::Split(vec![1; p.width as usize])));
+        def.wires.push(Wire {
+            from: Source::Part { part: chip, pin: j },
+            to: Sink::Part {
+                part: split,
+                pin: 0,
+            },
+        });
+        for bit in 0..p.width as usize {
+            drive(
+                pin_net[outs.next().unwrap()],
+                Source::Part {
+                    part: split,
+                    pin: bit,
+                },
+                pos,
+            );
+        }
+    }
 }
 
 /// Add NAND parts computing `gate` over the nets `ins`. Returns the output

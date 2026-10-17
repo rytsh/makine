@@ -212,7 +212,7 @@ impl Block {
             Block::Port { name, output, .. } => {
                 format!("{} {name}", if *output { "Çıkış" } else { "Giriş" })
             }
-            Block::Device { device, .. } => device.name().into(),
+            Block::Device { device, .. } => device.name(),
             Block::Cover { .. } => "Cihaz".into(),
         }
     }

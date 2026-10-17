@@ -17,7 +17,7 @@
 
 use std::collections::VecDeque;
 
-use makine_sim::{Behavior, Circuit, ClockEdge, Clocked, NativeDef};
+use makine_sim::{Behavior, Circuit, ClockEdge, Clocked, NativeDef, Pin};
 use serde::{Deserialize, Serialize};
 
 use crate::block::Dir;
@@ -43,6 +43,30 @@ pub enum Device {
     Keyboard,
     /// Shows the number on its inputs in hexadecimal and decimal.
     Display { bits: u8 },
+    /// A chip from the player's library (a solved level or a free chip).
+    /// Each bit of each pin is one cell. The pins are stored so the world
+    /// can be laid out without the library, and checked against it when
+    /// simulated.
+    Chip {
+        name: String,
+        inputs: Vec<Pin>,
+        outputs: Vec<Pin>,
+    },
+}
+
+/// One cell per bit: `name` for 1-bit pins, `name0`, `name1`.. for buses.
+fn pin_bits(pins: &[Pin]) -> Vec<String> {
+    pins.iter()
+        .flat_map(|p| {
+            (0..p.width).map(move |i| {
+                if p.width == 1 {
+                    p.name.clone()
+                } else {
+                    format!("{}{i}", p.name)
+                }
+            })
+        })
+        .collect()
 }
 
 fn bits(prefix: &str, n: u8) -> Vec<String> {
@@ -55,13 +79,14 @@ fn value(inputs: &[u64], start: usize, n: usize) -> u64 {
 }
 
 impl Device {
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            Device::Ram { .. } => "RAM",
-            Device::Rom { .. } => "ROM",
-            Device::Screen { .. } => "Ekran",
-            Device::Keyboard => "Klavye",
-            Device::Display { .. } => "Gösterge",
+            Device::Ram { .. } => "RAM".into(),
+            Device::Rom { .. } => "ROM".into(),
+            Device::Screen { .. } => "Ekran".into(),
+            Device::Keyboard => "Klavye".into(),
+            Device::Display { .. } => "Gösterge".into(),
+            Device::Chip { name, .. } => name.clone(),
         }
     }
 
@@ -82,6 +107,10 @@ impl Device {
                  kuyrukta tuş var. next 0'dan 1'e geçince sıradaki tuşa geçilir."
             }
             Device::Display { .. } => "n girişlerindeki sayıyı onaltılık ve onluk gösterir.",
+            Device::Chip { .. } => {
+                "Senin çipin. Bus uçlarının her biti ayrı bir hücre; en düşük bit \
+                 kenarın başında."
+            }
         }
     }
 
@@ -93,6 +122,7 @@ impl Device {
             Device::Screen { .. } => "screen",
             Device::Keyboard => "kbd",
             Device::Display { .. } => "display",
+            Device::Chip { .. } => "chip",
         }
     }
 
@@ -118,6 +148,7 @@ impl Device {
             Device::Display { bits } => Device::Display {
                 bits: c(*bits, MAX_DATA),
             },
+            Device::Chip { .. } => self.clone(),
         }
     }
 
@@ -141,6 +172,7 @@ impl Device {
             }
             Device::Keyboard => v.push("next".into()),
             Device::Display { bits: b } => v.extend(bits("n", *b)),
+            Device::Chip { inputs, .. } => v.extend(pin_bits(inputs)),
         }
         v
     }
@@ -155,6 +187,7 @@ impl Device {
                 v
             }
             Device::Screen { .. } | Device::Display { .. } => Vec::new(),
+            Device::Chip { outputs, .. } => pin_bits(outputs),
         }
     }
 
@@ -232,7 +265,7 @@ impl Device {
             Device::Keyboard => Some(NativeDef::stateful(&ins, &outs, &[], || {
                 Box::new(Keyboard::default())
             })),
-            Device::Display { .. } => None,
+            Device::Display { .. } | Device::Chip { .. } => None,
         }
     }
 
