@@ -310,8 +310,8 @@ impl App {
         }
     }
 
-    /// Save the open world into the progress file. Called after edits;
-    /// saving is cheap for worlds of reasonable size.
+    /// Copy the open world into the progress, to be written to disk soon
+    /// (edits come many per second while painting).
     pub(super) fn store_world(&mut self) {
         // A world joined over the network belongs to its host. (Until it
         // arrives, the view still shows the player's own world.)
@@ -326,7 +326,7 @@ impl App {
             self.progress
                 .worlds
                 .insert(w.world.name.clone(), w.world.clone());
-            self.save();
+            self.save_soon();
         }
     }
 

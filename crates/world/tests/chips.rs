@@ -2,6 +2,13 @@
 
 use makine_sim::{Circuit, Library};
 
+use makine_world::block::{Block, Dir, Gate};
+use makine_world::chip::to_chip;
+use makine_world::compile::{compile, InputSource};
+use makine_world::device::Device;
+use makine_world::region::{Clip, Region};
+use makine_world::{Edit, Pos, World};
+
 /// Outputs for every combination of 1-bit inputs.
 fn table(sim: &mut Circuit, n: usize) -> Vec<(Vec<u64>, Vec<u64>)> {
     (0..1u64 << n)
@@ -12,12 +19,6 @@ fn table(sim: &mut Circuit, n: usize) -> Vec<(Vec<u64>, Vec<u64>)> {
         })
         .collect()
 }
-use makine_world::block::{Block, Dir, Gate};
-use makine_world::chip::to_chip;
-use makine_world::compile::{compile, InputSource};
-use makine_world::device::Device;
-use makine_world::region::{Clip, Region};
-use makine_world::{Edit, Pos, World};
 
 fn set(w: &mut World, x: i32, y: i32, b: Block) {
     w.apply(Edit::Set {
@@ -225,13 +226,12 @@ fn chips_go_back_into_worlds() {
 
     // The full adder world is itself a chip that uses Yarim.
     let fa = to_chip(&w, "Tam", &lib).unwrap();
-    assert!(
-        fa.parts
-            .iter()
-            .filter(|p| p.kind == makine_sim::PartKind::Chip("Yarim".into()))
-            .count()
-            == 2
-    );
+    let halves = fa
+        .parts
+        .iter()
+        .filter(|p| p.kind == makine_sim::PartKind::Chip("Yarim".into()))
+        .count();
+    assert_eq!(halves, 2);
     // A copy of the whole world pasted elsewhere still works.
     let all = Region::between(Pos::new(-5, -5, 0), Pos::new(40, 40, 0));
     let clip = Clip::copy(&w, all).unwrap();

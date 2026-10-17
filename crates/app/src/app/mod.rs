@@ -56,6 +56,8 @@ enum View {
 pub struct App {
     progress: Progress,
     save_path: Option<PathBuf>,
+    /// Changes not yet written to disk, since when.
+    unsaved_since: Option<std::time::Instant>,
     /// The last level opened; the editor shows it when `target` is a level.
     level: &'static Level,
     target: Target,
@@ -123,6 +125,7 @@ impl App {
         let mut app = Self {
             progress,
             save_path,
+            unsaved_since: None,
             level: first_open,
             target: Target::Level(first_open),
             canvas: Canvas::new(),
@@ -221,9 +224,28 @@ impl App {
     }
 
     fn save(&mut self) {
+        self.unsaved_since = None;
         let Some(path) = &self.save_path else { return };
         if let Err(e) = self.progress.save(path) {
             self.status = Some(format!("Kaydedilemedi: {e}"));
+        }
+    }
+
+    /// Save within a couple of seconds, once for many changes.
+    fn save_soon(&mut self) {
+        self.unsaved_since
+            .get_or_insert_with(std::time::Instant::now);
+    }
+
+    /// Write pending changes once they are a couple of seconds old.
+    fn save_if_due(&mut self, ctx: &egui::Context) {
+        let Some(since) = self.unsaved_since else {
+            return;
+        };
+        let wait = std::time::Duration::from_secs(2);
+        match wait.checked_sub(since.elapsed()) {
+            None => self.save(),
+            Some(left) => ctx.request_repaint_after(left),
         }
     }
 
@@ -607,6 +629,7 @@ impl App {
             wiki::install(&ctx);
             self.wiki_installed = true;
         }
+        self.save_if_due(&ctx);
         if self.session.is_some() {
             self.net_tick();
             ctx.request_repaint_after(std::time::Duration::from_millis(30));

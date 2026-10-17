@@ -246,19 +246,20 @@ fn half_adder() {
 
 #[test]
 fn sr_latch_remembers() {
-    // Two cross-coupled NANDs with active-low inputs (0 = act).
+    // Two cross-coupled NANDs with active-low inputs (0 = act). Layer 0:
     //
-    //   x:   0   1   2   3   4   5   6   7
-    //   y0   sn  -   -   -                       sn into N1's north input
-    //   y1               N1  -   -   -   q       q = N1 output
-    //   y2               o               |       q̄ arrives from layer 1
-    //   y3                               |
-    //   y4               -   -   -   -   -       q into N2's north input
-    //   y5               N2  #   #   o           q̄ leaves through crossings
-    //   y6   rn  -   -   -                       rn into N2's south input
+    //   x:   0   1   2   3   4   5   6   7   8
+    //   y0   sn  -   -   -                         sn: N1's north input
+    //   y1               N1  -   -   -   q         q:  N1's output
+    //   y2               o           -             q̄ comes down a via into
+    //   y3                           -             N1's south input
+    //   y4               -   -   -   -             q:  N2's north input
+    //   y5               N2  #   #   #   o         q̄:  N2's output, east
+    //   y6   rn  -   -   -                         rn: N2's south input
     //
-    //   layer 1: q̄ runs from the via at (6,5) up column 6 and west along
-    //   row 2 to the via at (3,2).
+    // Layer 1 carries q̄ from the via at (7,5) up column 7 and west along
+    // row 2 to the via at (3,2). The crossings let q̄ pass east under q's
+    // column without touching it.
     let mut w = World::new("sr");
     set(&mut w, 0, 0, 0, input("sn", Dir::East));
     run(&mut w, (1, 0), (3, 0), 0);
@@ -266,15 +267,12 @@ fn sr_latch_remembers() {
     run(&mut w, (1, 6), (3, 6), 0);
     set(&mut w, 3, 1, 0, gate(Gate::Nand, Dir::East));
     set(&mut w, 3, 5, 0, gate(Gate::Nand, Dir::East));
-    // q: east to the port, and down column 7... the port is at (7,1), so
-    // branch down column 6 instead.
+    // q
     run(&mut w, (4, 1), (6, 1), 0);
     set(&mut w, 7, 1, 0, output("q", Dir::East));
     run(&mut w, (6, 2), (6, 4), 0);
     run(&mut w, (5, 4), (3, 4), 0);
-    // q̄: out of N2 east through two crossings (their north-south lanes
-    // touch q's row 4 harmlessly), up a via at (6,5)... (6,4) is q on layer
-    // 0 and a via joins its layer-0 neighbours, so use (7,5).
+    // q̄
     set(&mut w, 4, 5, 0, Block::Cross);
     set(&mut w, 5, 5, 0, Block::Cross);
     set(&mut w, 6, 5, 0, Block::Cross);

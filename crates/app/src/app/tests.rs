@@ -894,6 +894,44 @@ mod sandbox_tests {
         );
     }
 
+    /// World edits reach the disk a moment later, once for many edits,
+    /// and right away when the app closes.
+    #[test]
+    fn world_edits_are_saved_in_batches() {
+        use makine_world::{Block, Edit, Pos};
+        let dir = std::env::temp_dir().join(format!("makine-save-{}", std::process::id()));
+        let path = dir.join("progress.json");
+        let mut app = App::new(Progress::default(), Some(path.clone()));
+        app.open_world();
+        let _ = std::fs::remove_file(&path);
+        for x in 0..50 {
+            let w = app.world.as_mut().unwrap();
+            w.edit(Edit::Set {
+                pos: Pos::new(x, 0, 0),
+                block: Some(Block::Wire),
+            });
+            app.store_world();
+        }
+        let ctx = egui::Context::default();
+        app.save_if_due(&ctx);
+        assert!(!path.exists(), "not on every edit");
+        app.unsaved_since = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        app.save_if_due(&ctx);
+        let saved = Progress::load(&path).unwrap();
+        assert_eq!(saved.worlds.values().next().unwrap().len(), 50);
+        // Closing writes what is pending at once.
+        let w = app.world.as_mut().unwrap();
+        w.edit(Edit::Set {
+            pos: Pos::new(0, 5, 0),
+            block: Some(Block::Lamp),
+        });
+        app.store_world();
+        eframe::App::on_exit(&mut app);
+        let saved = Progress::load(&path).unwrap();
+        assert_eq!(saved.worlds.values().next().unwrap().len(), 51);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Changing pins in the panel applies them to the chip.
     #[test]
     fn edit_pins() {
