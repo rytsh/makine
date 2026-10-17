@@ -204,6 +204,52 @@ mod editor {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world.png")).unwrap();
 
+        // Drawn wires: two side by side stay apart, one across joins them;
+        // a selection over three layers.
+        {
+            use makine_world::wire::draw_wire;
+            use makine_world::{Block, Dir, Edit, Pos};
+            let mut w = makine_world::World::new("teller");
+            let line = |w: &mut makine_world::World, cells: &[(i32, i32)]| {
+                let mut prev = None;
+                for &(x, y) in cells {
+                    let p = Pos::new(x, y, 0);
+                    let e = draw_wire(w, prev, p, false);
+                    w.apply(e);
+                    prev = Some(p);
+                }
+            };
+            line(&mut w, &[(1, 0), (6, 0)]);
+            line(&mut w, &[(1, 1), (6, 1)]);
+            line(&mut w, &[(1, 2), (6, 2)]);
+            line(&mut w, &[(4, -1), (4, 1)]);
+            w.apply(Edit::Set {
+                pos: Pos::new(0, 0, 0),
+                block: Some(Block::Switch {
+                    on: true,
+                    facing: Dir::East,
+                }),
+            });
+            let e = makine_world::wire::link_to_block(&w, Pos::new(0, 0, 0));
+            w.apply(e);
+            for (x, y, z) in [(6, 4, 0), (6, 4, 1), (6, 4, 2)] {
+                w.apply(Edit::Set {
+                    pos: Pos::new(x, y, z),
+                    block: Some(Block::Via),
+                });
+            }
+            let mut v = crate::worldview::WorldView::new(w);
+            v.brush = None;
+            v.selection = Some(makine_world::region::Region::between(
+                Pos::new(0, -1, 0),
+                Pos::new(6, 4, 0),
+            ));
+            app.borrow_mut().world = Some(v);
+        }
+        harness.run_steps(3);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-world-wires.png")).unwrap();
+
         // Devices: a keyboard into a display, and a screen with a pattern.
         {
             use makine_world::device::Device;

@@ -281,3 +281,67 @@ fn what_cannot_be_a_chip() {
     let w = World::new("boş");
     assert!(to_chip(&w, "X", &Library::new()).is_err());
 }
+
+/// A circuit built over three layers, joined by vias, becomes one chip.
+///
+/// Layer 0: a -- wire -- via        b -- wire -- via
+/// Layer 1:              via -- AND -- via
+/// Layer 2:                     q (output, reading the AND)
+///
+/// Concretely: the AND sits on layer 1 and reads a (from layer 0, through a
+/// via) and b (straight on layer 1); its output goes up a via to layer 2,
+/// where the output port reads it.
+#[test]
+fn multi_layer_world_becomes_a_chip() {
+    let mut w = World::new("katlı");
+    let at = |w: &mut World, x, y, z, b| {
+        w.apply(Edit::Set {
+            pos: Pos::new(x, y, z),
+            block: Some(b),
+        })
+    };
+    // a on layer 0, up a via at (2,0) to layer 1, then into the AND's
+    // north input at (3,1).
+    at(&mut w, 0, 0, 0, port("a", false));
+    at(&mut w, 1, 0, 0, Block::Wire);
+    at(&mut w, 2, 0, 0, Block::Via);
+    at(&mut w, 2, 0, 1, Block::Via);
+    at(&mut w, 3, 0, 1, Block::Wire);
+    // b on layer 1, into the AND's south input.
+    at(&mut w, 0, 2, 1, port("b", false));
+    at(&mut w, 1, 2, 1, Block::Wire);
+    at(&mut w, 2, 2, 1, Block::Wire);
+    at(&mut w, 3, 2, 1, Block::Wire);
+    at(
+        &mut w,
+        3,
+        1,
+        1,
+        Block::Gate {
+            gate: Gate::And,
+            facing: Dir::East,
+        },
+    );
+    // Its output up to layer 2.
+    at(&mut w, 4, 1, 1, Block::Via);
+    at(&mut w, 4, 1, 2, Block::Via);
+    at(&mut w, 5, 1, 2, port("q", true));
+
+    // The region is a rectangle; it takes every layer.
+    let r = Region::between(Pos::new(0, 0, 0), Pos::new(5, 2, 0));
+    let mut part = World::new("parça");
+    part.apply(
+        Clip::copy(&w, r)
+            .unwrap()
+            .paste(&part, Pos::new(0, 0, 0))
+            .unwrap(),
+    );
+    assert_eq!(part.len(), w.len(), "all layers copied");
+    let chip = to_chip(&part, "Katlı", &Library::new()).unwrap();
+    let names = |pins: &[makine_sim::Pin]| pins.iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&chip.inputs), ["a", "b"]);
+    assert_eq!(names(&chip.outputs), ["q"]);
+    let mut sim = Circuit::compile_def(&Library::new(), &chip).unwrap();
+    let outs: Vec<u64> = table(&mut sim, 2).into_iter().map(|(_, o)| o[0]).collect();
+    assert_eq!(outs, [0, 0, 0, 1], "an AND over three layers");
+}

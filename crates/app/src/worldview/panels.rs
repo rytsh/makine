@@ -172,7 +172,9 @@ impl WorldView {
             }
             return;
         };
-        let n = r.blocks(&self.world).len();
+        let blocks = r.blocks(&self.world);
+        let n = blocks.len();
+        let layers: std::collections::BTreeSet<i32> = blocks.iter().map(|(p, _)| p.z).collect();
         ui.separator();
         ui.horizontal(|ui| {
             ui.label(
@@ -186,10 +188,19 @@ impl WorldView {
                 self.selection = None;
             }
         });
+        let layer_text = match (layers.first(), layers.last()) {
+            (Some(a), Some(b)) if a == b => format!("{a}. katman"),
+            (Some(a), Some(b)) => format!("{} katman: {a} … {b}", layers.len()),
+            _ => "boş".into(),
+        };
+        ui.label(format!("İçinde: {layer_text}"));
         ui.label(
-            RichText::new("Seçim bütün katmanları kapsar. Oklar: taşı · Del: sil · Ctrl+C/X/V")
-                .weak()
-                .small(),
+            RichText::new(
+                "Seçim, dikdörtgenin altındaki ve üstündeki bütün katmanları kapsar. \
+                 Oklar: taşı · Del: sil · Ctrl+C/X/V",
+            )
+            .weak()
+            .small(),
         );
         ui.horizontal_wrapped(|ui| {
             if ui.button("Kopyala").clicked() {
@@ -216,8 +227,10 @@ impl WorldView {
         ui.label(RichText::new("Çipe çevir").strong());
         ui.label(
             RichText::new(
-                "Seçimdeki portlar çipin uçları olur. x0, x1, … gibi sıralı adlar tek bir \
-                 bus'a birleşir. Anahtarlar o anki değerleriyle sabit olur.",
+                "Seçimdeki portlar çipin uçları olur; hangi katmanda olduklarının önemi \
+                 yok. Katmanlar 'Geçiş' bloklarıyla birbirine bağlanır, hepsi tek çip olur. \
+                 x0, x1, … gibi sıralı adlar tek bir bus'a birleşir. Anahtarlar o anki \
+                 değerleriyle sabit olur.",
             )
             .weak()
             .small(),

@@ -84,6 +84,7 @@ pub static PAGES: &[Page] = pages![
     "riscv",
     "islemci",
     "bilgisayar",
+    "dunya",
 ];
 
 macro_rules! images {
