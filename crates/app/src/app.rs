@@ -2310,7 +2310,13 @@ mod glyph_tests {
             include_str!("canvas.rs"),
             include_str!("computer.rs"),
             include_str!("wiki.rs"),
-            include_str!("worldview.rs"),
+            include_str!("worldview/mod.rs"),
+            include_str!("worldview/panels.rs"),
+            include_str!("worldview/render.rs"),
+            include_str!("worldsim.rs"),
+            include_str!("session.rs"),
+            include_str!("worlds.rs"),
+            include_str!("design.rs"),
             include_str!("sandbox.rs"),
         ];
         let mut missing = Vec::new();
