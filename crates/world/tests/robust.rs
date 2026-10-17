@@ -101,7 +101,7 @@ fn random_world(r: &mut Rng) -> World {
     }
     for _ in 0..60 {
         let pos = Pos::new(small(r, 8), small(r, 8), (r.next_u64() % 3) as i32);
-        let block = if r.next_u64() % 5 == 0 {
+        let block = if r.next_u64().is_multiple_of(5) {
             None
         } else {
             Some(random_block(r))

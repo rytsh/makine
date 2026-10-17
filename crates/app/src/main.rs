@@ -11,6 +11,7 @@ mod session;
 mod store;
 mod wiki;
 mod worlds;
+mod worldsim;
 mod worldview;
 
 use store::Progress;

@@ -1053,7 +1053,11 @@ impl App {
     fn store_world(&mut self) {
         // A world joined over the network belongs to its host. (Until it
         // arrives, the view still shows the player's own world.)
-        if self.session.as_ref().is_some_and(|s| !s.is_host() && s.ready) {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| !s.is_host() && s.ready)
+        {
             return;
         }
         if let Some(w) = &self.world {
@@ -1205,7 +1209,7 @@ impl App {
         );
         ui.separator();
         ui.horizontal(|ui| {
-            let label = if w.running {
+            let label = if w.sim.running {
                 "⏸ Durdur"
             } else {
                 "▶ Çalıştır"
@@ -1215,7 +1219,7 @@ impl App {
                 .on_hover_text("Saatleri durdur/başlat")
                 .clicked()
             {
-                w.running = !w.running;
+                w.sim.running = !w.sim.running;
             }
             if ui
                 .add_enabled(w.can_undo(), egui::Button::new("↶ Geri al"))
@@ -1239,11 +1243,11 @@ impl App {
         });
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!w.running, egui::Button::new("⏭ Bir adım"))
+                .add_enabled(!w.sim.running, egui::Button::new("⏭ Bir adım"))
                 .on_hover_text("Durmuşken saati bir adım ilerlet")
                 .clicked()
             {
-                w.single_step();
+                w.sim.single_step();
             }
             let l = ui.label("Hız").id;
             let name = |v: u32| match v {
@@ -1251,10 +1255,10 @@ impl App {
                 v => format!("{v} adım/kare"),
             };
             egui::ComboBox::from_id_salt("world-speed")
-                .selected_text(name(w.speed))
+                .selected_text(name(w.sim.speed))
                 .show_ui(ui, |ui| {
                     for v in [1, 10, 100, 1000, 0] {
-                        ui.selectable_value(&mut w.speed, v, name(v));
+                        ui.selectable_value(&mut w.sim.speed, v, name(v));
                     }
                 })
                 .response
@@ -1264,9 +1268,9 @@ impl App {
             RichText::new(format!(
                 "{} blok · adım {} · {}",
                 w.world.len(),
-                w.tick,
-                if w.running {
-                    format!("{:.0} adım/sn", w.rate)
+                w.sim.tick,
+                if w.sim.running {
+                    format!("{:.0} adım/sn", w.sim.rate)
                 } else {
                     "durdu".into()
                 }
@@ -1281,13 +1285,14 @@ impl App {
             .weak()
             .small(),
         );
-        if let Some(e) = w.error() {
-            ui.colored_label(Color32::LIGHT_RED, e);
+        if let Some(e) = w.sim.error() {
+            ui.colored_label(Color32::LIGHT_RED, e.to_string());
         }
         if let Some(e) = &w.status {
             ui.colored_label(Color32::LIGHT_YELLOW, e);
         }
         w.selection_panel(ui);
+        w.block_panel(ui);
         w.device_panel(ui);
         if let Some(req) = w.request.take() {
             self.handle_world_request(req);
@@ -2580,7 +2585,7 @@ mod sandbox_tests {
         h.run_steps(2);
         let a = app.borrow();
         let w = a.world.as_ref().unwrap();
-        assert!(w.error().is_none(), "{:?}", w.error());
+        assert!(w.sim.error().is_none(), "{:?}", w.sim.error());
     }
 
     /// Several worlds: create, switch, rename, delete; edits stay in the

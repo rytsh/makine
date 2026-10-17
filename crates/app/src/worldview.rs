@@ -6,20 +6,25 @@
 //! the one being edited are hidden; layers below are drawn dimmed, so the
 //! player sees what they build on.
 //!
-//! Controls: left click places the selected block (drag to paint), right
-//! click removes, R rotates the selection, Page Up/Down (or Q/E) change
-//! layer, middle-drag or Space+drag pans, the wheel zooms.
+//! Controls: left click places the selected block (drag to paint) or, on a
+//! device, selects it; right click removes; R turns the block being placed
+//! (or the blocks being pasted); Page Up/Down or Q/E change layer;
+//! middle-drag or Space+drag pans; the wheel zooms. With the select tool,
+//! dragging selects a region (Ctrl+C/X/V, arrows move it, Del deletes).
 
 use std::collections::HashMap;
 
 use egui::{vec2, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, Ui, Vec2};
-use makine_sim::{Circuit, Library};
+use makine_sim::Library;
 use makine_world::block::{Block, Dir, Gate};
-use makine_world::compile::{compile, Compiled, InputSource, Lane};
+use makine_world::compile::{CompileError, Compiled, Lane};
 use makine_world::device::{self, Device};
+
 use makine_world::region::{self, Clip, Region};
 use makine_world::world::MAX_LAYER;
 use makine_world::{Edit, Pos, World};
+
+use crate::worldsim::{SimError, WorldSim};
 
 /// Size of one cell on screen at zoom 1: half the tile's width and height.
 const TW: f32 = 28.0;
@@ -83,7 +88,25 @@ pub fn palette() -> Vec<(&'static str, Block, &'static str)> {
                 period: 30,
                 facing: Dir::East,
             },
-            "Kendi kendine yanıp söner",
+            "Kendi kendine yanıp söner. Seçip periyodunu ayarla.",
+        ),
+        (
+            "Giriş portu",
+            Block::Port {
+                name: "a".into(),
+                output: false,
+                facing: Dir::East,
+            },
+            "Dünyayı çipe çevirince çipin girişi olur",
+        ),
+        (
+            "Çıkış portu",
+            Block::Port {
+                name: "q".into(),
+                output: true,
+                facing: Dir::East,
+            },
+            "Arkasındaki teli okur; çipin çıkışı olur",
         ),
     ]
 }
@@ -130,26 +153,10 @@ pub struct WorldView {
     zoom: f32,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
-    /// Compiled circuit for the current world revision.
-    compiled: Option<Result<(Compiled, Circuit), String>>,
-    compiled_rev: u64,
-    /// Ticks since start, for clocks.
-    pub tick: u64,
-    pub running: bool,
-    /// Simulation steps per frame; 0 means as many as fit in the frame
-    /// budget.
-    pub speed: u32,
-    /// Steps per second measured over the last second, for display.
-    pub rate: f64,
-    rate_window: (std::time::Instant, u64),
-    /// One step requested while paused.
-    step_once: bool,
-    /// Chip output values after the last step.
-    values: Vec<u64>,
-    /// How long the last world compile took; slow compiles wait for the
-    /// end of a drag.
-    compile_cost: std::time::Duration,
-    defer_compile: bool,
+    /// The running circuit of the world.
+    pub sim: WorldSim,
+    /// Rebuilding the circuit waits for the end of a drag (large worlds).
+    defer: bool,
     /// Cell under the pointer last frame.
     hover: Option<Pos>,
     /// The last cell painted in the current drag, so dragging does not
@@ -159,14 +166,13 @@ pub struct WorldView {
     fit: bool,
     /// Anchor of the selected device.
     pub selected: Option<Pos>,
-    /// Keys typed while a keyboard is selected, not yet delivered.
-    typed: Vec<u8>,
+    /// A selected clock or port, for its settings.
+    pub selected_block: Option<Pos>,
     /// A message for the player (e.g. why a device does not fit).
     pub status: Option<String>,
-    /// ROM contents being edited: device anchor, text, parse error.
-    rom_text: Option<(Pos, String, Option<String>)>,
-    /// The player's chips, for chip blocks.
-    lib: Library,
+    /// ROM contents being edited: device anchor, text in the box, the
+    /// contents the text was made from, parse error.
+    rom_text: Option<(Pos, String, Option<String>, Option<String>)>,
     /// Selected region, and the corner where a selection drag started.
     pub selection: Option<Region>,
     sel_start: Option<Pos>,
@@ -211,25 +217,15 @@ impl WorldView {
             zoom: 1.0,
             undo: Vec::new(),
             redo: Vec::new(),
-            compiled: None,
-            compiled_rev: u64::MAX,
-            tick: 0,
-            running: true,
-            speed: 1,
-            rate: 0.0,
-            rate_window: (std::time::Instant::now(), 0),
-            step_once: false,
-            values: Vec::new(),
-            compile_cost: std::time::Duration::ZERO,
-            defer_compile: false,
+            sim: WorldSim::default(),
+            defer: false,
             hover: None,
             painted: None,
             fit: true,
             selected: None,
-            typed: Vec::new(),
+            selected_block: None,
             status: None,
             rom_text: None,
-            lib: Library::new(),
             selection: None,
             sel_start: None,
             pasting: None,
@@ -267,8 +263,7 @@ impl WorldView {
 
     /// Set the player's chip library (used by chip blocks).
     pub fn set_library(&mut self, lib: Library) {
-        self.lib = lib;
-        self.compiled_rev = u64::MAX;
+        self.sim.set_library(lib);
     }
 
     /// Whether the select tool is active (no brush).
@@ -493,6 +488,73 @@ impl WorldView {
         w
     }
 
+    /// Settings of a selected clock (period) or port (name).
+    pub fn block_panel(&mut self, ui: &mut Ui) {
+        let Some(pos) = self.selected_block else {
+            return;
+        };
+        let Some(block) = self.world.get(pos).cloned() else {
+            self.selected_block = None;
+            return;
+        };
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Seçili: {}", block.label())).strong());
+            if ui
+                .small_button("✖")
+                .on_hover_text("Seçimi bırak (Esc)")
+                .clicked()
+            {
+                self.selected_block = None;
+            }
+        });
+        let new = match &block {
+            Block::Clock { period, facing } => {
+                let mut p = *period;
+                ui.horizontal(|ui| {
+                    let l = ui.label("Periyot (adım)").id;
+                    ui.add(egui::DragValue::new(&mut p).range(1..=100_000))
+                        .labelled_by(l);
+                });
+                (p != *period).then_some(Block::Clock {
+                    period: p,
+                    facing: *facing,
+                })
+            }
+            Block::Port {
+                name,
+                output,
+                facing,
+            } => {
+                let mut n = name.clone();
+                ui.horizontal(|ui| {
+                    let l = ui.label("Ad").id;
+                    ui.add(egui::TextEdit::singleline(&mut n).desired_width(80.0))
+                        .labelled_by(l);
+                });
+                ui.label(
+                    RichText::new("x0, x1, … gibi sıralı adlar çipte tek bir bus olur.")
+                        .weak()
+                        .small(),
+                );
+                let n = n.trim().to_string();
+                let valid = !n.is_empty() && n.chars().all(|c| c.is_alphanumeric() || c == '_');
+                (valid && n != *name).then_some(Block::Port {
+                    name: n,
+                    output: *output,
+                    facing: *facing,
+                })
+            }
+            _ => None,
+        };
+        if let Some(b) = new {
+            self.edit(Edit::Set {
+                pos,
+                block: Some(b),
+            });
+        }
+    }
+
     /// Settings of the selected device.
     pub fn device_panel(&mut self, ui: &mut Ui) {
         let Some((anchor, d, _)) = self.selected_device() else {
@@ -581,23 +643,32 @@ impl WorldView {
 
         match &d {
             Device::Rom { addr, data, words } => {
-                if self.rom_text.as_ref().is_none_or(|(a, ..)| *a != anchor) {
-                    self.rom_text = Some((anchor, device::words_text(words, *data), None));
+                // Refresh the text when another ROM is selected or its
+                // contents changed (undo, another player).
+                let fresh = device::words_text(words, *data);
+                let stale = self.rom_text.as_ref().is_none_or(|(a, _, shown, _)| {
+                    *a != anchor || shown.as_deref() != Some(fresh.as_str())
+                });
+                if stale {
+                    self.rom_text = Some((anchor, fresh.clone(), Some(fresh), None));
                 }
-                ui.label(
-                    RichText::new(format!(
-                        "İçerik: {} kelime, onaltılık (ya da #onluk), ; yorum",
-                        1u32 << addr
-                    ))
-                    .small(),
-                );
-                let (_, text, err) = self.rom_text.as_mut().unwrap();
+                let l = ui
+                    .label(
+                        RichText::new(format!(
+                            "İçerik: {} kelime, onaltılık (ya da #onluk), ; yorum",
+                            1u32 << addr
+                        ))
+                        .small(),
+                    )
+                    .id;
+                let (_, text, _, err) = self.rom_text.as_mut().unwrap();
                 ui.add(
                     egui::TextEdit::multiline(text)
                         .code_editor()
                         .desired_rows(6)
                         .desired_width(f32::INFINITY),
-                );
+                )
+                .labelled_by(l);
                 let mut apply = None;
                 if ui.button("İçeriği yükle").clicked() {
                     match device::parse_words(text) {
@@ -666,25 +737,15 @@ impl WorldView {
 
     /// Contents of a RAM device, if it is running.
     pub fn ram_words(&mut self, anchor: Pos) -> Option<Vec<u64>> {
-        let name = self.native_of(anchor)?;
-        let (_, sim) = self.circuit()?;
-        device::ram(sim, &name)
-    }
-
-    fn native_of(&mut self, anchor: Pos) -> Option<String> {
-        let (c, _) = self.circuit()?;
-        c.devices
-            .iter()
-            .find(|d| d.anchor == anchor)?
-            .native
-            .clone()
+        let name = self.sim.native_at(anchor)?;
+        device::ram(self.sim.running_circuit()?, &name)
     }
 
     /// Set a screen's pixels directly (for screenshots).
     #[cfg(test)]
     pub fn set_screen_for_test(&mut self, anchor: Pos, f: impl Fn(usize, usize) -> bool) {
-        let name = self.native_of(anchor).unwrap();
-        let (_, sim) = self.circuit().unwrap();
+        let name = self.sim.native_at(anchor).unwrap();
+        let sim = self.sim.running_circuit().unwrap();
         let s: &mut makine_sim::Clocked<device::ScreenState> = sim.native_mut(&name).unwrap();
         let n = 1usize << s.state.bits;
         for y in 0..n {
@@ -769,130 +830,6 @@ impl WorldView {
         !self.redo.is_empty()
     }
 
-    /// The circuit, recompiled if the world changed. Errors are kept so the
-    /// view can show them.
-    /// Device contents (memory, screen, keys) carry over to the new circuit.
-    fn circuit(&mut self) -> Option<&mut (Compiled, Circuit)> {
-        if self.compiled_rev != self.world.revision() && !self.defer_compile {
-            let started = std::time::Instant::now();
-            self.compiled_rev = self.world.revision();
-            let mut saved = Vec::new();
-            if let Some(Ok((c, sim))) = &mut self.compiled {
-                for name in c.devices.iter().filter_map(|d| d.native.as_ref()) {
-                    if let Some(s) = device::save(sim, name) {
-                        saved.push((name.clone(), s));
-                    }
-                }
-            }
-            self.compiled = Some(
-                compile(&self.world)
-                    .map_err(|e| e.to_string())
-                    .and_then(|c| {
-                        makine_world::compile::check_chips(&self.world, &self.lib)?;
-                        let mut sim = Circuit::compile_def(&c.library_with(&self.lib), &c.def)
-                            .map_err(|e| e.to_string())?;
-                        for (name, s) in saved {
-                            device::restore(&mut sim, &name, s);
-                        }
-                        Ok((c, sim))
-                    }),
-            );
-            self.compile_cost = started.elapsed();
-        }
-        self.compiled.as_mut()?.as_mut().ok()
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        match &self.compiled {
-            Some(Err(e)) => Some(e),
-            _ => None,
-        }
-    }
-
-    /// Run this frame's steps: `speed` of them, or as many as fit in a few
-    /// milliseconds; one when paused (so switches still respond), counting
-    /// time only when running or single-stepping.
-    pub fn run_frame(&mut self) {
-        let advance = self.running || std::mem::take(&mut self.step_once);
-        if !advance {
-            // Paused: re-evaluate at the same tick.
-            let t = self.tick;
-            self.values = self.step();
-            self.tick = t;
-            return;
-        }
-        let start = std::time::Instant::now();
-        let budget = std::time::Duration::from_millis(8);
-        let n = if self.running { self.speed } else { 1 };
-        let mut done = 0u64;
-        loop {
-            self.values = self.step();
-            done += 1;
-            if self.values.is_empty() && self.error().is_some() {
-                break;
-            }
-            let more = if n == 0 {
-                start.elapsed() < budget
-            } else {
-                done < n as u64 && start.elapsed() < budget * 4
-            };
-            if !more {
-                break;
-            }
-        }
-        let (since, count) = self.rate_window;
-        let count = count + done;
-        let dt = since.elapsed().as_secs_f64();
-        if dt >= 0.5 {
-            self.rate = count as f64 / dt;
-            self.rate_window = (std::time::Instant::now(), 0);
-        } else {
-            self.rate_window = (since, count);
-        }
-    }
-
-    /// Advance one step while paused.
-    pub fn single_step(&mut self) {
-        self.step_once = true;
-    }
-
-    /// Advance the simulation one tick: set switch and clock inputs from the
-    /// world, evaluate. Returns the value of every chip output.
-    fn step(&mut self) -> Vec<u64> {
-        let tick = self.tick;
-        self.tick += 1;
-        let switches: HashMap<Pos, bool> = self
-            .world
-            .blocks()
-            .filter_map(|(p, b)| match b {
-                Block::Switch { on, .. } => Some((p, *on)),
-                _ => None,
-            })
-            .collect();
-        let typed = std::mem::take(&mut self.typed);
-        let keyboard = self.selected.and_then(|a| self.native_of(a));
-        let Some((c, sim)) = self.circuit() else {
-            return Vec::new();
-        };
-        if let Some(k) = keyboard {
-            for key in typed {
-                device::press(sim, &k, key);
-            }
-        }
-        for (i, src) in c.inputs.iter().enumerate() {
-            let v = match src {
-                InputSource::Switch(p) => switches.get(p).copied().unwrap_or(false),
-                InputSource::Clock { period, .. } => (tick / (*period).max(1) as u64) % 2 == 1,
-                InputSource::Port(_) => false,
-            };
-            sim.set_input(i, v as u64);
-        }
-        if sim.eval().is_err() {
-            return Vec::new();
-        }
-        (0..c.def.outputs.len()).map(|o| sim.output(o)).collect()
-    }
-
     fn to_screen(&self, origin: Pos2, x: f32, y: f32, z: f32) -> Pos2 {
         let z = z * self.zoom;
         origin
@@ -968,13 +905,17 @@ impl WorldView {
             if keys.contains(&27) {
                 self.selected = None;
             } else {
-                self.typed.extend(keys);
+                if let Some(anchor) = self.selected {
+                    for k in keys {
+                        self.sim.press(anchor, k);
+                    }
+                }
             }
         } else if response.hovered() || response.has_focus() {
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 if self.pasting.take().is_some() {
                     self.status = None;
-                } else if self.selected.take().is_none() {
+                } else if self.selected.take().is_none() && self.selected_block.take().is_none() {
                     self.selection = None;
                 }
             }
@@ -1020,20 +961,20 @@ impl WorldView {
                     self.move_selection(step.0, step.1);
                 }
             }
-            let rotate = ui.input(|i| i.key_pressed(egui::Key::R));
+            let (rotate, back) = ui.input(|i| (i.key_pressed(egui::Key::R), i.modifiers.shift));
             if rotate {
-                if let Some(c) = &mut self.pasting {
-                    *c = c.rotated();
+                match &mut self.pasting {
+                    // Three turns clockwise are one counter-clockwise.
+                    Some(c) => {
+                        for _ in 0..if back { 3 } else { 1 } {
+                            *c = c.rotated();
+                        }
+                    }
+                    None if back => self.facing = self.facing.ccw(),
+                    None => self.facing = self.facing.cw(),
                 }
             }
             ui.input(|i| {
-                if i.key_pressed(egui::Key::R) {
-                    self.facing = if i.modifiers.shift {
-                        self.facing.ccw()
-                    } else {
-                        self.facing.cw()
-                    };
-                }
                 if i.key_pressed(egui::Key::PageUp) || i.key_pressed(egui::Key::E) {
                     self.layer = (self.layer + 1).min(MAX_LAYER);
                 }
@@ -1131,28 +1072,25 @@ impl WorldView {
         // Large worlds recompile only when the pointer is released, so
         // painting stays smooth.
         let held = ui.input(|i| i.pointer.any_down());
-        self.defer_compile = held && self.compile_cost > std::time::Duration::from_millis(15);
+        self.defer = held && self.sim.slow();
 
         // Simulate and draw.
-        self.run_frame();
-        let values = std::mem::take(&mut self.values);
+        self.sim.run_frame(&self.world, self.defer);
         let screens = self.screens();
-        self.draw(&painter, origin, rect, &values, &screens);
-        self.values = values;
-        if self.running
+        self.draw(&painter, origin, rect, &screens);
+        if self.sim.running
             && self
                 .world
                 .blocks()
                 .any(|(_, b)| matches!(b, Block::Clock { .. }))
             || self.typing()
-            || self.defer_compile
+            || self.defer
         {
             ui.ctx().request_repaint();
         }
     }
 
-    /// Place the brush at `cell`. A click on a switch with the switch brush
-    /// (or any click on a switch while not holding one) toggles it.
+    /// Remove the block at `cell` (a whole device if it is part of one).
     fn erase(&mut self, cell: Pos) {
         if let Some(e) = self.world.remove(cell) {
             if self.world.device_at(cell).map(|d| d.0) == self.selected {
@@ -1162,7 +1100,20 @@ impl WorldView {
         }
     }
 
+    /// Place the brush at `cell` (`click`: a single click, not a drag).
+    /// Clicking a device selects it, clicking a clock or a port selects it
+    /// for its settings, and clicking a switch toggles it unless the brush
+    /// is a switch facing another way (then it is replaced).
     fn place(&mut self, cell: Pos, click: bool) {
+        if click
+            && matches!(
+                self.world.get(cell),
+                Some(Block::Clock { .. } | Block::Port { .. })
+            )
+        {
+            self.selected_block = Some(cell);
+            return;
+        }
         // Devices are selected by clicking them, never painted over.
         if let Some((anchor, _, _)) = self.world.device_at(cell) {
             if click {
@@ -1220,17 +1171,14 @@ impl WorldView {
         painter: &egui::Painter,
         origin: Pos2,
         clip: Rect,
-        values: &[u64],
         screens: &HashMap<Pos, Vec<bool>>,
     ) {
         let z = self.zoom;
-        let compiled = match &self.compiled {
-            Some(Ok((c, _))) => Some(c),
-            _ => None,
-        };
+        let compiled = self.sim.compiled();
+        let values = self.sim.values();
         let value_at = |p: Pos, lane: Lane| -> Option<bool> {
             let o = compiled?.output_at(p, lane)?;
-            values.get(o).map(|v| *v == 1)
+            self.sim.output(o)
         };
 
         // Floor grid on the current layer, around the visible area.
@@ -1593,8 +1541,7 @@ impl WorldView {
         }
 
         // Short circuits: mark the drivers.
-        if let Some(Err(_)) = &self.compiled {
-            if let Err(makine_world::compile::CompileError::ShortCircuit(ps)) = compile(&self.world)
+        if let Some(SimError::Compile(CompileError::ShortCircuit(ps))) = self.sim.error() {
             {
                 for p in ps {
                     let c = self.to_screen(
@@ -1675,13 +1622,21 @@ impl WorldView {
 
     /// Pixels of every screen device, by anchor.
     fn screens(&mut self) -> HashMap<Pos, Vec<bool>> {
-        let Some(Ok((c, sim))) = &mut self.compiled else {
+        let Some(c) = self.sim.compiled() else {
             return HashMap::new();
         };
-        c.devices
+        let wanted: Vec<(Pos, String)> = c
+            .devices
             .iter()
             .filter(|d| matches!(d.device, Device::Screen { .. }))
-            .filter_map(|d| Some((d.anchor, device::screen(sim, d.native.as_ref()?)?)))
+            .filter_map(|d| Some((d.anchor, d.native.clone()?)))
+            .collect();
+        let Some(sim) = self.sim.running_circuit() else {
+            return HashMap::new();
+        };
+        wanted
+            .into_iter()
+            .filter_map(|(a, n)| Some((a, device::screen(sim, &n)?)))
             .collect()
     }
 
@@ -1938,12 +1893,12 @@ mod tests {
         });
         let mut lit = Vec::new();
         for _ in 0..8 {
-            let values = v.step();
-            let (c, _) = v.circuit().unwrap();
-            let o = c.lamps[0].1.unwrap();
-            lit.push(values[o]);
+            v.sim.run_frame(&v.world, false);
+            let o = v.sim.compiled().unwrap().lamps[0].1.unwrap();
+            lit.push(v.sim.values()[o]);
         }
-        assert_eq!(lit, vec![0, 0, 1, 1, 0, 0, 1, 1]);
+        // Steps 1..=8 with period 2: high on steps 2-3 and 6-7.
+        assert_eq!(lit, vec![0, 1, 1, 0, 0, 1, 1, 0]);
     }
 }
 
@@ -2087,10 +2042,12 @@ mod device_tests {
         h.event(egui::Event::Text("A".into()));
         h.run_steps(2);
         let shown = {
-            let mut v = view.borrow_mut();
-            let values = v.step();
-            let (c, _) = v.circuit().unwrap();
-            let d = c
+            let v = view.borrow();
+            let values = v.sim.values();
+            let d = v
+                .sim
+                .compiled()
+                .unwrap()
                 .devices
                 .iter()
                 .find(|d| matches!(d.device, Device::Display { .. }))
@@ -2131,10 +2088,10 @@ mod device_tests {
             .unwrap();
         assert!(v.world.len() > n);
         // Write into the RAM directly, edit elsewhere, the word is kept.
-        v.step();
-        let name = v.native_of(Pos::new(0, 0, 0)).unwrap();
+        v.sim.run_frame(&v.world, false);
+        let name = v.sim.native_at(Pos::new(0, 0, 0)).unwrap();
         {
-            let (_, sim) = v.circuit().unwrap();
+            let sim = v.sim.running_circuit().unwrap();
             let r: &mut makine_sim::Clocked<device::RamState> = sim.native_mut(&name).unwrap();
             r.state.words[5] = 9;
         }
@@ -2142,7 +2099,7 @@ mod device_tests {
             pos: Pos::new(20, 0, 0),
             block: Some(Block::Lamp),
         });
-        v.step();
+        v.sim.run_frame(&v.world, false);
         assert_eq!(v.ram_words(Pos::new(0, 0, 0)).unwrap()[5], 9);
         // A device that does not fit is refused with a message.
         v.brush = Some(Brush {
@@ -2262,53 +2219,153 @@ mod selection_tests {
 }
 
 #[cfg(test)]
-mod speed_tests {
+mod settings_tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
-    fn clock_world() -> WorldView {
-        let mut w = World::new("s");
-        w.apply(Edit::Set {
-            pos: Pos::new(0, 0, 0),
-            block: Some(Block::Clock {
-                period: 1,
-                facing: Dir::East,
-            }),
-        });
-        w.apply(Edit::Set {
-            pos: Pos::new(1, 0, 0),
-            block: Some(Block::Lamp),
-        });
-        WorldView::new(w)
+    /// The side panels of the world view, as the app shows them.
+    fn panels(ui: &mut Ui, v: &mut WorldView) {
+        v.block_panel(ui);
+        v.device_panel(ui);
     }
 
+    fn harness(v: WorldView) -> egui_kittest::Harness<'static, WorldView> {
+        egui_kittest::Harness::builder()
+            .with_size(egui::vec2(500.0, 600.0))
+            .build_ui_state(panels, v)
+    }
+
+    /// Ports come from the palette and are renamed in their panel; then the
+    /// world becomes a chip with that pin. A clock's period is set the same
+    /// way.
     #[test]
-    fn speed_and_single_step() {
-        let mut v = clock_world();
-        v.run_frame();
-        assert_eq!(v.tick, 1);
-        v.speed = 100;
-        v.run_frame();
-        assert_eq!(v.tick, 101);
-        // As fast as possible: more than one step, however busy the machine.
-        v.speed = 0;
-        let t = v.tick;
-        v.run_frame();
-        assert!(v.tick > t + 1, "as fast as possible: {}", v.tick - t);
-        // Paused: frames do not advance, a single step does.
-        v.running = false;
-        let t = v.tick;
-        v.run_frame();
-        v.run_frame();
-        assert_eq!(v.tick, t);
-        v.single_step();
-        v.run_frame();
-        assert_eq!(v.tick, t + 1);
-        // The lamp follows the clock (period 1: toggles every step).
-        let (c, _) = v.circuit().unwrap();
-        let o = c.lamps[0].1.unwrap();
-        let before = v.values[o];
-        v.single_step();
-        v.run_frame();
-        assert_ne!(v.values[o], before);
+    fn ports_and_clocks_are_editable() {
+        let mut v = WorldView::new(World::new("p"));
+        let brush = |name: &str| {
+            palette()
+                .into_iter()
+                .find(|(n, ..)| *n == name)
+                .map(|(_, b, _)| Brush { block: b })
+        };
+        v.brush = brush("Giriş portu");
+        v.place(Pos::new(0, 0, 0), false);
+        v.brush = Some(Brush {
+            block: Block::Gate {
+                gate: Gate::Not,
+                facing: Dir::East,
+            },
+        });
+        v.place(Pos::new(1, 0, 0), false);
+        v.brush = brush("Çıkış portu");
+        v.place(Pos::new(2, 0, 0), false);
+        v.brush = brush("Saat");
+        v.place(Pos::new(0, 3, 0), false);
+        // Clicking a port selects it for its settings.
+        v.place(Pos::new(2, 0, 0), true);
+        assert_eq!(v.selected_block, Some(Pos::new(2, 0, 0)));
+
+        let mut h = harness(v);
+        h.run();
+        h.get_by_label("Ad").focus();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Ad").type_text("ters");
+        h.run_steps(2);
+        let ports = Region::between(Pos::new(0, 0, 0), Pos::new(2, 0, 0));
+        let mut part = World::new("Ters");
+        part.apply(
+            Clip::copy(&h.state().world, ports)
+                .unwrap()
+                .paste(&part, Pos::new(0, 0, 0))
+                .unwrap(),
+        );
+        let chip = makine_world::chip::to_chip(&part, "Ters", &Library::new()).unwrap();
+        assert_eq!(chip.outputs[0].name, "ters");
+        // An invalid name is not applied.
+        h.get_by_label("Ad").type_text(" x");
+        h.run_steps(2);
+        assert!(matches!(
+            h.state().world.get(Pos::new(2, 0, 0)),
+            Some(Block::Port { name, .. }) if name == "ters"
+        ));
+
+        h.state_mut().place(Pos::new(0, 3, 0), true);
+        h.run();
+        h.get_by_label("Periyot (adım)").focus();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Periyot (adım)").type_text("7");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert!(matches!(
+            h.state().world.get(Pos::new(0, 3, 0)),
+            Some(Block::Clock { period: 7, .. })
+        ));
+    }
+
+    /// R turns what is being pasted, not the brush.
+    #[test]
+    fn r_turns_the_paste() {
+        let mut w = World::new("r");
+        for x in 0..3 {
+            w.apply(Edit::Set {
+                pos: Pos::new(x, 0, 0),
+                block: Some(Block::Wire),
+            });
+        }
+        let mut v = WorldView::new(w);
+        v.pasting = Clip::copy(
+            &v.world,
+            Region::between(Pos::new(0, 0, 0), Pos::new(2, 0, 0)),
+        );
+        let f = v.facing;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(600.0, 400.0))
+            .build_ui_state(|ui, v: &mut WorldView| v.show(ui), v);
+        h.run();
+        h.hover_at(egui::pos2(300.0, 200.0));
+        h.run();
+        h.key_press(egui::Key::R);
+        h.run();
+        assert_eq!(h.state().pasting.as_ref().unwrap().size(), (1, 3));
+        assert_eq!(h.state().facing, f, "facing unchanged while pasting");
+    }
+
+    /// The ROM text box follows the ROM when someone else changes it.
+    #[test]
+    fn rom_text_follows_contents() {
+        let mut v = WorldView::new(World::new("r"));
+        let rom = Device::Rom {
+            addr: 1,
+            data: 8,
+            words: vec![0xAB, 0xCD],
+        };
+        let e = v
+            .world
+            .place_device(rom, Pos::new(0, 0, 0), Dir::East)
+            .unwrap();
+        v.edit(e);
+        v.selected = Some(Pos::new(0, 0, 0));
+        let mut h = harness(v);
+        h.run();
+        assert_eq!(h.state().rom_text.as_ref().unwrap().1, "AB CD");
+        {
+            let v = h.state_mut();
+            let e = v.world.remove(Pos::new(0, 0, 0)).unwrap();
+            v.apply_remote(e);
+            let new = Device::Rom {
+                addr: 1,
+                data: 8,
+                words: vec![0x12, 0x34],
+            };
+            let e = v
+                .world
+                .place_device(new, Pos::new(0, 0, 0), Dir::East)
+                .unwrap();
+            v.apply_remote(e);
+            v.selected = Some(Pos::new(0, 0, 0));
+        }
+        h.run();
+        assert_eq!(h.state().rom_text.as_ref().unwrap().1, "12 34");
     }
 }
