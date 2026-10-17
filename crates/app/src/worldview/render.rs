@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use egui::{Align2, Color32, FontId, Rect};
 use glam::DVec3;
-use makine_world::block::{Block, Dir};
+use makine_world::block::{Block, Dir, Gate};
 use makine_world::compile::{CompileError, Compiled, Lane};
 use makine_world::device::{self, Device};
 use makine_world::Pos;
@@ -17,6 +17,8 @@ use makine_world::Pos;
 use super::camera::{render, VIEW_DIST};
 use super::gpu::{self, Mesh, Scene, Vertex};
 use super::WorldView;
+use crate::canvas::gate_outline;
+use crate::design::Symbol;
 use crate::worldsim::SimError;
 
 pub(super) const BG: Color32 = Color32::from_rgb(20, 22, 27);
@@ -24,6 +26,8 @@ const GRID: Color32 = Color32::from_rgb(52, 57, 68);
 const WIRE_OFF: Color32 = Color32::from_rgb(110, 60, 55);
 const WIRE_ON: Color32 = Color32::from_rgb(255, 80, 60);
 const GATE: Color32 = Color32::from_rgb(200, 205, 215);
+/// Height of a gate's body.
+pub(super) const GATE_H: f64 = 0.42;
 const SWITCH_OFF: Color32 = Color32::from_rgb(90, 90, 100);
 const BASE: Color32 = Color32::from_rgb(150, 155, 168);
 const TEXT: Color32 = Color32::from_rgb(235, 238, 245);
@@ -198,6 +202,142 @@ impl Builder {
             corner(x + 1.0 - m, y + 1.0 - m, z + h),
             c,
         );
+    }
+
+    /// A gate as its logic symbol, raised into a slab: AND's round front,
+    /// OR's pointed one, NOT's triangle, the bubble of NOT and NAND, XOR's
+    /// extra back line. Legs show where wires go: inputs from the sides it
+    /// reads (`inputs`, with their values' colours), the output in front.
+    fn gate(&mut self, p: Pos, gate: Gate, facing: Dir, inputs: &[(Dir, Color32)], out: Color32) {
+        let symbol = match gate {
+            Gate::Not => Symbol::Not,
+            Gate::And => Symbol::And,
+            Gate::Nand => Symbol::Nand,
+            Gate::Or | Gate::Nor => Symbol::Or,
+            Gate::Xor => Symbol::Xor,
+        };
+        let bubble = matches!(gate, Gate::Not | Gate::Nand | Gate::Nor);
+        let (cx, cy, z) = (p.x as f64 + 0.5, p.y as f64 + 0.5, p.z as f64);
+        // Local axes: u along the facing (front +), v across.
+        let (fx, fy) = facing.delta();
+        let (sx, sy) = facing.cw().delta();
+        let at = |u: f64, v: f64, h: f64| {
+            corner(
+                cx + u * fx as f64 + v * sx as f64,
+                cy + u * fy as f64 + v * sy as f64,
+                z + h,
+            )
+        };
+        // The body spans u in -0.32..0.24 (the bubble and lead beyond).
+        let (u0, u1, half) = (-0.32f32, if bubble { 0.18f32 } else { 0.26 }, 0.3f32);
+        let outline = gate_outline(symbol, u0, u1, -half, half);
+        let pts: Vec<(f64, f64)> = outline.iter().map(|q| (q.x as f64, q.y as f64)).collect();
+        let (lo, hi) = (0.06, GATE_H);
+        // The top: a fan from a point inside the body.
+        let mid = ((u0 + u1) as f64 / 2.0 - 0.04, 0.0);
+        let n = pts.len();
+        for i in 0..n {
+            let (a, b2) = (pts[i], pts[(i + 1) % n]);
+            self.triangle(
+                [at(mid.0, mid.1, hi), at(a.0, a.1, hi), at(b2.0, b2.1, hi)],
+                GATE,
+            );
+            // Sides, shaded by which way they face.
+            let (dx, dy) = (b2.0 - a.0, b2.1 - a.1);
+            let normal = at(dy, -dx, 0.0) - at(0.0, 0.0, 0.0);
+            let light = 0.62
+                + 0.2
+                    * (normal
+                        .normalize_or_zero()
+                        .dot(corner(0.3, 0.6, 0.0).normalize()))
+                    .abs();
+            self.quad(
+                [
+                    at(a.0, a.1, lo),
+                    at(b2.0, b2.1, lo),
+                    at(b2.0, b2.1, hi),
+                    at(a.0, a.1, hi),
+                ],
+                shade(GATE, light as f32),
+            );
+        }
+        // A dark base plate under the symbol.
+        self.cuboid(
+            at(-0.42, -0.42, 0.0).min(at(0.42, 0.42, 0.0)),
+            at(-0.42, -0.42, 0.06).max(at(0.42, 0.42, 0.06)),
+            Color32::from_rgb(52, 56, 66),
+        );
+        // XOR: a second curve behind the body, a thin curved wall.
+        if gate == Gate::Xor {
+            let w = (u1 - u0) as f64;
+            let curve: Vec<(f64, f64)> = (0..=12)
+                .map(|k| {
+                    let t = k as f64 / 12.0;
+                    let v = -half as f64 + 2.0 * half as f64 * t;
+                    (u0 as f64 - 0.09 + 4.0 * t * (1.0 - t) * w * 0.22, v)
+                })
+                .collect();
+            let t = 0.025;
+            for pair in curve.windows(2) {
+                let (a, b2) = (pair[0], pair[1]);
+                let (ai, ao) = (at(a.0 - t, a.1, hi), at(a.0 + t, a.1, hi));
+                let (bi, bo) = (at(b2.0 - t, b2.1, hi), at(b2.0 + t, b2.1, hi));
+                self.quad([ai, ao, bo, bi], GATE);
+                let dn = DVec3::Z * (hi - lo);
+                self.quad([ai - dn, bi - dn, bi, ai], shade(GATE, 0.7));
+                self.quad([ao - dn, bo - dn, bo, ao], shade(GATE, 0.7));
+            }
+        }
+        // The bubble: a small cylinder in front.
+        let front = if bubble {
+            let r = 0.055;
+            let c = u1 as f64 + r;
+            let ring: Vec<DVec3> = (0..12)
+                .map(|k| {
+                    let a = k as f64 / 12.0 * std::f64::consts::TAU;
+                    at(c + a.cos() * r, a.sin() * r, 0.0)
+                })
+                .collect();
+            for k in 0..12 {
+                let (a, b2) = (ring[k], ring[(k + 1) % 12]);
+                let up = DVec3::Z * hi;
+                let dn = DVec3::Z * lo;
+                self.triangle([at(c, 0.0, hi), a + up, b2 + up], GATE);
+                self.quad([a + dn, b2 + dn, b2 + up, a + up], shade(GATE, 0.7));
+            }
+            c + r
+        } else {
+            u1 as f64
+        };
+        // Legs: low bars from the cell's edges to the body.
+        let leg_h = (0.0, 0.1);
+        let leg = |s: &mut Self, from: (f64, f64), to: (f64, f64), c: Color32| {
+            let (a, b2) = (at(from.0, from.1, leg_h.0), at(to.0, to.1, leg_h.1));
+            s.cuboid(
+                a.min(b2) - DVec3::new(0.05, 0.05, 0.0).abs() * 0.0,
+                a.max(b2),
+                c,
+            );
+        };
+        let w = 0.05;
+        // Output: in front.
+        leg(self, (front, -w), (0.5, w), out);
+        for &(d, c) in inputs {
+            if d == facing.opposite() {
+                leg(self, (-0.5, -w), (u0 as f64, w), c);
+            } else {
+                // From the side edge to the body's back half.
+                let v = if d == facing.cw() { 1.0 } else { -1.0 };
+                let back = u0 as f64 + 0.12;
+                leg(self, (back - w, v * 0.5), (back + w, v * 0.18), c);
+                leg(
+                    self,
+                    (u0 as f64 - 0.02, v * 0.18 - w),
+                    (back + w, v * 0.18 + w),
+                    c,
+                );
+            }
+        }
     }
 
     /// An arrow lying on top of cell `p` at height `h`, pointing `d`.
@@ -388,17 +528,33 @@ impl WorldView {
                     }
                 }
                 Block::Gate { gate, facing } => {
-                    b.block(p, 0.1, 0.6, tint(GATE));
-                    let out = match value_at(p, Lane::Main) {
-                        Some(true) => WIRE_ON,
-                        _ => Color32::from_rgb(60, 64, 74),
+                    // The value each input reads: the wire on that side.
+                    let side = |d: Dir| {
+                        let n = p.step(d);
+                        let on = self.world.accepts_wire(n, d.opposite())
+                            && compiled
+                                .and_then(|c| c.output_at(n, Lane::Main))
+                                .and_then(|o| self.sim.output(o))
+                                == Some(true);
+                        if on {
+                            WIRE_ON
+                        } else {
+                            WIRE_OFF
+                        }
                     };
-                    b.arrow(p, 0.6, *facing, tint(out));
+                    let inputs: Vec<(Dir, Color32)> = match gate.inputs() {
+                        1 => vec![(facing.opposite(), side(facing.opposite()))],
+                        _ => vec![
+                            (facing.ccw(), side(facing.ccw())),
+                            (facing.cw(), side(facing.cw())),
+                        ],
+                    };
+                    b.gate(p, *gate, *facing, &inputs, lit(p, Lane::Main));
                     if labelled {
                         labels.push(Label {
-                            at: corner(x + 0.5, y + 0.5, z + 0.6),
+                            at: corner(x + 0.5, y + 0.5, z + GATE_H),
                             text: gate.name().into(),
-                            size: 0.24,
+                            size: 0.17,
                             color: Color32::from_rgb(30, 32, 38),
                             monospace: false,
                         });

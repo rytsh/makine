@@ -38,7 +38,7 @@ fn height(world: &World, p: Pos, b: &Block) -> f64 {
                 0.35
             }
         }
-        Block::Gate { .. } => 0.6,
+        Block::Gate { .. } => super::render::GATE_H,
         Block::Switch { .. } => 0.3,
         Block::Lamp => 0.75,
         Block::Clock { .. } => 0.5,

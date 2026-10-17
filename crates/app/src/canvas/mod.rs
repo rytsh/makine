@@ -21,6 +21,7 @@ mod draw;
 mod layout;
 mod menu;
 
+pub(crate) use draw::gate_outline;
 use draw::{bezier, draw_box, draw_gate, pin_dot, port, ERR, GRID, TEXT};
 pub use draw::{BG, ON};
 pub use layout::{format_value, part_label};

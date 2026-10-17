@@ -218,6 +218,19 @@ mod editor {
         harness.run_steps(2);
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world-play.png")).unwrap();
+        // Close up on the gates.
+        {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            w.help = false;
+            w.camera.look_from(
+                glam::DVec3::new(7.6, 3.0, 2.6),
+                glam::DVec3::new(5.0, 3.0, 0.0),
+            );
+        }
+        harness.run_steps(2);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-world-gates.png")).unwrap();
         {
             let mut a = app.borrow_mut();
             let w = a.world.as_mut().unwrap();
