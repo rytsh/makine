@@ -352,16 +352,21 @@ impl App {
             })
             .strong(),
         );
-        ui.label(
-            RichText::new(
-                "Fare: etrafa bak · WASD ya da yön tuşları: uç · Boşluk: yüksel · Shift: alçal · \
-                 Ctrl: hızlı · Sol tık: kır · Sağ tık: koy (bakılan yüzün önüne; anahtara: \
-                 aç/kapa, Shift+sağ tık: yine de koy) · Orta tık: bakılan bloğu eline al · \
-                 1–9 ya da tekerlek: blok seç · Bloklar baktığın yöne döner.",
-            )
-            .weak()
-            .small(),
-        );
+        egui::CollapsingHeader::new(RichText::new("⌨ Kısayollar").strong())
+            .id_salt("world-shortcuts")
+            .show(ui, |ui| {
+                egui::Grid::new("world-shortcut-grid")
+                    .num_columns(2)
+                    .spacing([10.0, 2.0])
+                    .show(ui, |ui| {
+                        for (keys, what) in crate::worldview::SHORTCUTS {
+                            ui.label(RichText::new(*keys).monospace().small().strong());
+                            ui.label(RichText::new(*what).small());
+                            ui.end_row();
+                        }
+                    });
+                ui.checkbox(&mut w.help, "Listeyi dünyada da göster (H)");
+            });
         ui.add_space(6.0);
         ui.label(RichText::new("Bloklar").strong());
         let current = w.brush.as_ref().map(|b| std::mem::discriminant(&b.block));
@@ -451,11 +456,26 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(format!("Zemin katmanı: {}", w.layer));
-            if ui.small_button("▼").on_hover_text("Page Down").clicked() {
+            if ui
+                .small_button("▼")
+                .on_hover_text("Q ya da Page Down")
+                .clicked()
+            {
                 w.set_layer(w.layer - 1);
             }
-            if ui.small_button("▲").on_hover_text("Page Up").clicked() {
+            if ui
+                .small_button("▲")
+                .on_hover_text("E ya da Page Up")
+                .clicked()
+            {
                 w.set_layer(w.layer + 1);
+            }
+            if ui
+                .small_button("Ayağımın altı")
+                .on_hover_text("G: zemini olduğun yerin altına getir")
+                .clicked()
+            {
+                w.set_layer((w.camera.eye.z - 1.6).floor() as i32);
             }
         });
         ui.label(

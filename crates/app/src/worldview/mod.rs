@@ -15,7 +15,8 @@
 //! pasting, right click puts the blocks down and R turns them.
 //!
 //! The world has no edges. The floor layer is an invisible ground (with a
-//! grid) to build on in empty space; Page Up/Down move it.
+//! grid) to build on in empty space. Every key is listed in [`SHORTCUTS`],
+//! which the view shows with H and the side panel lists.
 
 use egui::{Color32, Key, PointerButton, Rect, Sense, Ui, Vec2, ViewportCommand};
 use makine_sim::Library;
@@ -37,6 +38,35 @@ mod tests;
 
 pub use camera::Camera;
 pub use panels::palette;
+
+/// Every key of the world view: (keys, what they do). Shown in the view
+/// (H) and in the side panel.
+pub const SHORTCUTS: &[(&str, &str)] = &[
+    ("Tıkla", "dünyaya gir (fare kilitlenir)"),
+    ("Esc", "fareyi bırak"),
+    ("Fare", "etrafa bak"),
+    ("WASD / yön tuşları", "uç"),
+    ("Boşluk / Shift", "yüksel / alçal"),
+    ("Ctrl", "hızlı uç"),
+    ("Sol tık", "kır"),
+    ("Sağ tık", "koy (baktığın yüzün önüne); anahtarı aç/kapa"),
+    ("Shift+sağ tık", "anahtarın, cihazın önüne yine de koy"),
+    ("Orta tık", "baktığın bloğu eline al"),
+    ("1–9 / tekerlek", "blok seç"),
+    ("Q / E", "zemini bir kat indir / çıkar"),
+    ("F", "zemini baktığın bloğun katına getir"),
+    ("G", "zemini ayağının altına getir"),
+    ("V", "seç aracı (sol tık: köşe, sağ tık: öbür köşe)"),
+    ("Ctrl+C / X / V", "kopyala / kes / yapıştır"),
+    ("Alt+yön tuşları", "seçimi taşı"),
+    ("Delete", "seçimi sil"),
+    ("R", "yapıştırılanı döndür"),
+    ("Ctrl+Z / Ctrl+Y", "geri al / yinele"),
+    ("P", "saatleri durdur / başlat"),
+    ("N", "durmuşken bir adım ilerlet"),
+    ("Home", "bütün dünyayı göster"),
+    ("H", "bu listeyi aç / kapa"),
+];
 
 /// The block the player is placing.
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +91,10 @@ pub struct WorldView {
     warped: bool,
     /// A held mouse button and when it acts again.
     repeat: Option<(PointerButton, f64)>,
+    /// The shortcut list is shown over the view.
+    pub help: bool,
+    /// The tool before V switched to selecting, to switch back.
+    last_brush: Option<Brush>,
     /// Where the view was drawn last frame.
     rect: Rect,
     /// This player's changes, newest last. Undo only takes back cells
@@ -131,6 +165,8 @@ impl WorldView {
             raw_mouse: false,
             warped: false,
             repeat: None,
+            help: false,
+            last_brush: None,
             rect: Rect::NOTHING,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -610,11 +646,8 @@ impl WorldView {
                 *c = c.rotated();
             }
         }
-        let floor =
-            ui.input(|i| i.key_pressed(Key::PageUp) as i32 - i.key_pressed(Key::PageDown) as i32);
-        if floor != 0 {
-            self.set_layer(self.layer + floor);
-        }
+        self.floor_keys(ui);
+        self.tool_keys(ui);
         let (undo, redo) = ui.input(|i| {
             let cmd = i.modifiers.command;
             (
@@ -629,6 +662,67 @@ impl WorldView {
             self.redo();
         }
         self.hotbar_keys(ui);
+    }
+
+    /// Q/E or Page Up/Down move the floor a layer; F brings it to the block
+    /// looked at, G under the eye.
+    fn floor_keys(&mut self, ui: &Ui) {
+        // Not with modifiers: Ctrl+E and such belong to others.
+        let (step, to_target, to_feet) = ui.input(|i| {
+            let plain = !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt;
+            let k = |key| (plain && i.key_pressed(key)) as i32;
+            (
+                k(Key::E) + k(Key::PageUp) - k(Key::Q) - k(Key::PageDown),
+                k(Key::F) == 1,
+                k(Key::G) == 1,
+            )
+        });
+        if step != 0 {
+            self.set_layer(self.layer + step);
+        }
+        if to_target {
+            match self.target {
+                Some(t) => self.set_layer(t.z),
+                None => self.status = Some("F: önce bir bloğa bak".into()),
+            }
+        }
+        if to_feet {
+            // The eye is about 1.6 cells above the feet, like a player.
+            self.set_layer((self.camera.eye.z - 1.6).floor() as i32);
+        }
+    }
+
+    /// V switches the select tool, P pauses the clocks, N steps once,
+    /// Home shows the whole world, H the shortcut list.
+    fn tool_keys(&mut self, ui: &Ui) {
+        let (select, pause, step, home, help) = ui.input(|i| {
+            let plain = !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt;
+            let k = |key| plain && i.key_pressed(key);
+            (k(Key::V), k(Key::P), k(Key::N), k(Key::Home), k(Key::H))
+        });
+        if select {
+            if self.selecting() {
+                self.brush = self
+                    .last_brush
+                    .take()
+                    .or(Some(Brush { block: Block::Wire }));
+            } else {
+                self.last_brush = self.brush.take();
+                self.pasting = None;
+            }
+        }
+        if pause {
+            self.sim.running = !self.sim.running;
+        }
+        if step && !self.sim.running {
+            self.sim.single_step();
+        }
+        if home {
+            self.refit();
+        }
+        if help {
+            self.help = !self.help;
+        }
     }
 
     /// 1–9 take a block of the palette in hand; the wheel (while flying)

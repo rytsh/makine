@@ -688,6 +688,23 @@ impl WorldView {
     /// block in hand raised.
     pub(super) fn draw_hud(&self, painter: &egui::Painter, rect: Rect) {
         use egui::{pos2, vec2, CornerRadius, Stroke, StrokeKind};
+        // Top left: the floor, and where the shortcuts are.
+        let corner_text = format!("Zemin: {}  (Q/E, F, G)\nKısayollar: H", self.layer);
+        let at = rect.left_top() + vec2(10.0, 8.0);
+        let galley = painter.layout_no_wrap(
+            corner_text,
+            FontId::proportional(13.0),
+            Color32::from_white_alpha(220),
+        );
+        painter.rect_filled(
+            Rect::from_min_size(at, galley.size()).expand(5.0),
+            CornerRadius::same(4),
+            Color32::from_black_alpha(140),
+        );
+        painter.galley(at, galley, Color32::WHITE);
+        if self.help {
+            self.draw_help(painter, rect);
+        }
         if !self.locked {
             painter.text(
                 rect.center(),
@@ -771,6 +788,44 @@ impl WorldView {
                 FontId::proportional(14.0),
                 Color32::WHITE,
             );
+        }
+    }
+
+    /// The shortcut list, over the right side of the view.
+    fn draw_help(&self, painter: &egui::Painter, rect: Rect) {
+        use egui::{vec2, CornerRadius};
+        let font = FontId::proportional(13.0);
+        let rows: Vec<_> = super::SHORTCUTS
+            .iter()
+            .map(|(k, what)| {
+                (
+                    painter.layout_no_wrap(
+                        k.to_string(),
+                        font.clone(),
+                        Color32::from_rgb(255, 210, 80),
+                    ),
+                    painter.layout_no_wrap(what.to_string(), font.clone(), Color32::WHITE),
+                )
+            })
+            .collect();
+        let key_w = rows.iter().map(|(k, _)| k.size().x).fold(0.0, f32::max);
+        let what_w = rows.iter().map(|(_, w)| w.size().x).fold(0.0, f32::max);
+        let line = 18.0;
+        let size = vec2(key_w + what_w + 16.0, rows.len() as f32 * line + 26.0);
+        let at = rect.right_top() + vec2(-size.x - 18.0, 10.0);
+        let bg = Rect::from_min_size(at, size).expand(8.0);
+        painter.rect_filled(bg, CornerRadius::same(6), Color32::from_black_alpha(200));
+        painter.text(
+            at,
+            Align2::LEFT_TOP,
+            "Kısayollar (H: kapat)",
+            FontId::proportional(14.0),
+            Color32::WHITE,
+        );
+        for (i, (k, w)) in rows.into_iter().enumerate() {
+            let y = at.y + 24.0 + i as f32 * line;
+            painter.galley(egui::pos2(at.x, y), k, Color32::WHITE);
+            painter.galley(egui::pos2(at.x + key_w + 16.0, y), w, Color32::WHITE);
         }
     }
 

@@ -195,6 +195,52 @@ pub(super) mod play {
         ));
     }
 
+    /// Q/E move the floor, F brings it to the block looked at, G under
+    /// the eye; V switches the select tool and back; P pauses; H shows the
+    /// shortcuts.
+    #[test]
+    fn shortcut_keys() {
+        let mut w = World::new("k");
+        w.apply(Edit::Set {
+            pos: Pos::new(0, 0, 5),
+            block: Some(Block::Lamp),
+        });
+        let mut h = harness(WorldView::new(w));
+        let key = |h: &mut H, k| {
+            h.key_press(k);
+            h.run();
+        };
+        key(&mut h, egui::Key::E);
+        key(&mut h, egui::Key::E);
+        key(&mut h, egui::Key::Q);
+        assert_eq!(h.state().layer, 1);
+
+        // Look at the lamp on layer 5, F: the floor goes there.
+        h.state_mut()
+            .camera
+            .look_from(DVec3::new(-3.0, 0.5, 7.0), DVec3::new(0.5, 0.5, 5.4));
+        h.run();
+        assert_eq!(h.state().target, Some(Pos::new(0, 0, 5)));
+        key(&mut h, egui::Key::F);
+        assert_eq!(h.state().layer, 5);
+        // G: under the eye (at height 20.5, the feet at 18.9).
+        h.state_mut().camera.eye = DVec3::new(0.0, 0.0, 20.5);
+        key(&mut h, egui::Key::G);
+        assert_eq!(h.state().layer, 18);
+
+        let hand = h.state().brush.clone();
+        key(&mut h, egui::Key::V);
+        assert!(h.state().selecting());
+        key(&mut h, egui::Key::V);
+        assert_eq!(h.state().brush, hand, "V gives the block back");
+
+        let running = h.state().sim.running;
+        key(&mut h, egui::Key::P);
+        assert_eq!(h.state().sim.running, !running);
+        key(&mut h, egui::Key::H);
+        assert!(h.state().help);
+    }
+
     /// Keys fly; Esc gives the mouse back.
     #[test]
     fn keys_fly_and_esc_releases() {

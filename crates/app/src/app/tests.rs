@@ -209,6 +209,7 @@ mod editor {
             let mut a = app.borrow_mut();
             let w = a.world.as_mut().unwrap();
             w.locked = true;
+            w.help = true;
             w.camera.look_from(
                 glam::DVec3::new(7.5, 6.0, 2.2),
                 glam::DVec3::new(5.5, 1.5, 0.3),
@@ -217,7 +218,12 @@ mod editor {
         harness.run_steps(2);
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world-play.png")).unwrap();
-        app.borrow_mut().world.as_mut().unwrap().locked = false;
+        {
+            let mut a = app.borrow_mut();
+            let w = a.world.as_mut().unwrap();
+            w.locked = false;
+            w.help = false;
+        }
 
         // Devices: a keyboard into a display, and a screen with a pattern.
         {
