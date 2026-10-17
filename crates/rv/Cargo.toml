@@ -1,0 +1,8 @@
+[package]
+name = "makine-rv"
+description = "RV32IM reference emulator, assembler, disassembler and ELF loader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
