@@ -89,7 +89,7 @@ fn install(chips: &[Package], lib: &Library, sandbox: &mut Sandbox, status: &mut
     let mut added = false;
     for p in chips {
         let before = sandbox.chips.len();
-        match sandbox::import(lib, sandbox, &p.to_json()) {
+        match sandbox::install(lib, sandbox, p) {
             Ok(_) => added |= sandbox.chips.len() > before,
             Err(e) => *status = format!("Bir çip eklenemedi: {e}"),
         }
@@ -156,7 +156,9 @@ impl Session {
         sandbox: &mut Sandbox,
     ) -> (Option<String>, bool) {
         let mut new_chips = false;
-        // Our edits out (only once joined: before that there is no world).
+        // Our edits out, once joined. Before the shared world arrives the
+        // view shows our own world, and edits to it are not shared.
+        view.sharing = self.ready;
         let outgoing = std::mem::take(&mut view.outbox);
         if self.ready {
             for e in outgoing {
@@ -176,10 +178,17 @@ impl Session {
             }
         }
 
+        let host = matches!(self.link, Link::Host(_));
         let events = match &mut self.link {
             Link::Host(h) => {
-                let (l, s) = (lib.clone(), sandbox.clone());
-                h.poll(&view.world, |w| chips_in_world(w, &l, &s))
+                let shared: &Sandbox = sandbox;
+                // Players' edits are applied to the world inside poll.
+                let rev = view.world.revision();
+                let events = h.poll(&mut view.world, |w| chips_in_world(w, lib, shared));
+                if view.world.revision() != rev {
+                    view.after_remote_edits();
+                }
+                events
             }
             Link::Client(c) => c.poll(),
         };
@@ -190,6 +199,7 @@ impl Session {
                     install(&chips, lib, sandbox, &mut self.status);
                     let name = world.name.clone();
                     *view = WorldView::new(world);
+                    view.sharing = true;
                     // The app refreshes the library (with the new chips)
                     // and hands it to the new view.
                     new_chips = true;
@@ -198,7 +208,9 @@ impl Session {
                 }
                 Event::Edit { edit, chips, .. } => {
                     new_chips |= install(&chips, lib, sandbox, &mut self.status);
-                    view.apply_remote(edit);
+                    if !host {
+                        view.apply_remote(edit);
+                    }
                 }
                 Event::Joined(p) => self.status = format!("{} katıldı.", p.name),
                 Event::Left(p) => {

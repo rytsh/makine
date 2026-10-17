@@ -40,13 +40,7 @@ impl Peer {
 }
 
 fn host_poll(host: &mut Host, world: &mut World) -> Vec<Event> {
-    let events = host.poll(world, |_| vec![]);
-    for e in &events {
-        if let Event::Edit { edit, .. } = e {
-            world.apply(edit.clone());
-        }
-    }
-    events
+    host.poll(world, |_| vec![])
 }
 
 fn cells(w: &World) -> Vec<(Pos, Block)> {
@@ -163,6 +157,38 @@ fn players_converge() {
         assert!(t.elapsed() < Duration::from_secs(5), "no Closed event");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// A player who joins while others are editing gets every edit: those
+/// before the welcome are in the world, those after arrive as edits.
+#[test]
+fn late_joiner_misses_nothing() {
+    let mut hw = World::new("ortak");
+    let mut host = Host::start("ev", 0).unwrap();
+    let addr = format!("127.0.0.1:{}", host.port());
+    let mut a = Peer {
+        world: World::new("?"),
+        client: Client::connect(&addr, "a").unwrap(),
+        log: vec![],
+    };
+    settle(&mut host, &mut hw, &mut [&mut a], |_, p| {
+        p[0].client.id().is_some()
+    });
+    // a floods edits; b connects in the middle of them.
+    for x in 0..200 {
+        a.edit(set(x, Block::Wire));
+    }
+    let mut b = Peer {
+        world: World::new("?"),
+        client: Client::connect(&addr, "b").unwrap(),
+        log: vec![],
+    };
+    for x in 200..400 {
+        a.edit(set(x, Block::Lamp));
+    }
+    settle(&mut host, &mut hw, &mut [&mut a, &mut b], |hw, p| {
+        hw.len() == 400 && p.iter().all(|p| cells(&p.world) == cells(hw))
+    });
 }
 
 #[test]

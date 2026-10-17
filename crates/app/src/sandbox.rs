@@ -240,9 +240,15 @@ pub fn export(lib: &Library, sandbox: &Sandbox, name: &str) -> Result<Package, S
     Ok(p)
 }
 
-/// Add a package's chips to the sandbox. Returns the main chip's name.
+/// Add the chips of a package file to the sandbox. Returns the main chip's
+/// name.
 pub fn import(lib: &Library, sandbox: &mut Sandbox, text: &str) -> Result<String, String> {
     let p = Package::from_json(text).map_err(|e| e.to_string())?;
+    install(lib, sandbox, &p)
+}
+
+/// Add a package's chips to the sandbox. Returns the main chip's name.
+pub fn install(lib: &Library, sandbox: &mut Sandbox, p: &Package) -> Result<String, String> {
     let add = p
         .plan_install(lib, &sandbox.defs())
         .map_err(|e| e.to_string())?;
@@ -255,7 +261,7 @@ pub fn import(lib: &Library, sandbox: &mut Sandbox, text: &str) -> Result<String
         }
         sandbox.chips.insert(def.name.clone(), d);
     }
-    Ok(p.chip)
+    Ok(p.chip.clone())
 }
 
 /// Pin editor for a sandbox chip. Returns new pins when the player applies

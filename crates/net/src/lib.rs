@@ -94,7 +94,8 @@ pub enum Event {
         world: World,
         chips: Vec<Package>,
     },
-    /// Apply this edit to the world.
+    /// Another player's edit. On a client, apply it to the world; on the
+    /// host it has already been applied (in order, see [`Host::poll`]).
     Edit {
         from: u32,
         edit: Edit,
@@ -263,9 +264,15 @@ impl Host {
         }
     }
 
-    /// Handle what arrived. `world` is the shared world as it is now (sent
-    /// to players who join); `chips` gives the free chips it uses.
-    pub fn poll(&mut self, world: &World, chips: impl Fn(&World) -> Vec<Package>) -> Vec<Event> {
+    /// Handle what arrived, in order: players' edits are applied to
+    /// `world` here, so a player who joins in the same poll gets the world
+    /// with every edit broadcast before them. `chips` gives the free chips
+    /// a world uses (sent to joining players).
+    pub fn poll(
+        &mut self,
+        world: &mut World,
+        chips: impl Fn(&World) -> Vec<Package>,
+    ) -> Vec<Event> {
         let mut events = Vec::new();
         while let Ok(m) = self.incoming.try_recv() {
             match m {
@@ -311,16 +318,20 @@ impl Host {
                         continue;
                     }
                     // Everyone, the sender too: the echo tells it the order.
-                    let msg = ToClient::Edit {
+                    self.broadcast(
+                        &ToClient::Edit {
+                            from: id,
+                            edit: edit.clone(),
+                            chips: chips.clone(),
+                        },
+                        None,
+                    );
+                    world.apply(edit.clone());
+                    events.push(Event::Edit {
                         from: id,
                         edit,
                         chips,
-                    };
-                    self.broadcast(&msg, None);
-                    let ToClient::Edit { from, edit, chips } = msg else {
-                        unreachable!()
-                    };
-                    events.push(Event::Edit { from, edit, chips });
+                    });
                 }
                 Incoming::Message(id, ToHost::Cursor { pos }) => {
                     if self.joined.contains_key(&id) {

@@ -178,8 +178,11 @@ pub struct WorldView {
     pub chip_name: String,
     /// Something the app must do (it owns the chip library).
     pub request: Option<Request>,
-    /// Edits made here since the app last took them (to share them).
+    /// Edits made here since the session last took them, while
+    /// `sharing`.
     pub outbox: Vec<Edit>,
+    /// Whether this world is shared (edits are collected in `outbox`).
+    pub sharing: bool,
     /// Other players' cursors: name, colour, cell.
     pub others: Vec<(String, Color32, Pos)>,
 }
@@ -234,6 +237,7 @@ impl WorldView {
             chip_name: String::new(),
             request: None,
             outbox: Vec::new(),
+            sharing: false,
             others: Vec::new(),
         }
     }
@@ -242,6 +246,11 @@ impl WorldView {
     /// takes back this player's own edits).
     pub fn apply_remote(&mut self, e: Edit) {
         self.world.apply(e);
+        self.after_remote_edits();
+    }
+
+    /// Tidy up after other players changed the world.
+    pub fn after_remote_edits(&mut self) {
         // A device deleted by someone else cannot stay selected.
         if self
             .selected
@@ -721,7 +730,9 @@ impl WorldView {
 
     /// Apply an edit made by the player (undoable).
     pub fn edit(&mut self, e: Edit) {
-        self.outbox.push(e.clone());
+        if self.sharing {
+            self.outbox.push(e.clone());
+        }
         let inv = self.world.apply(e);
         self.undo.push(inv);
         self.redo.clear();
@@ -732,7 +743,9 @@ impl WorldView {
 
     pub fn undo(&mut self) {
         if let Some(e) = self.undo.pop() {
-            self.outbox.push(e.clone());
+            if self.sharing {
+                self.outbox.push(e.clone());
+            }
             let inv = self.world.apply(e);
             self.redo.push(inv);
         }
@@ -740,7 +753,9 @@ impl WorldView {
 
     pub fn redo(&mut self) {
         if let Some(e) = self.redo.pop() {
-            self.outbox.push(e.clone());
+            if self.sharing {
+                self.outbox.push(e.clone());
+            }
             let inv = self.world.apply(e);
             self.undo.push(inv);
         }

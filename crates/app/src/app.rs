@@ -598,6 +598,10 @@ impl App {
             wiki::install(&ctx);
             self.wiki_installed = true;
         }
+        if self.session.is_some() {
+            self.net_tick();
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
         let (f11, f10) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::F11),
@@ -664,17 +668,12 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
-                    self.net_tick();
                     if let Some(w) = &mut self.world {
                         let rev = w.world.revision();
                         w.show(ui);
                         if w.world.revision() != rev {
                             self.store_world();
                         }
-                    }
-                    if self.session.is_some() {
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_millis(30));
                     }
                 });
             return;
@@ -774,8 +773,9 @@ impl App {
         self.store_world();
     }
 
-    /// The list of worlds and what can be done with them.
-    /// Move edits between the world view and the network.
+    /// Move edits between the world view and the network. Runs every
+    /// frame, whatever view is shown, so other players are never kept
+    /// waiting.
     fn net_tick(&mut self) {
         let (Some(s), Some(w)) = (&mut self.session, &mut self.world) else {
             return;
@@ -799,6 +799,8 @@ impl App {
         let Some(s) = self.session.take() else { return };
         if let Some(w) = &mut self.world {
             w.others.clear();
+            w.sharing = false;
+            w.outbox.clear();
         }
         let msg = reason.unwrap_or_else(|| "Paylaşım bitti.".into());
         if s.is_host() {
@@ -1049,8 +1051,9 @@ impl App {
     /// Save the open world into the progress file. Called after edits;
     /// saving is cheap for worlds of reasonable size.
     fn store_world(&mut self) {
-        // A world joined over the network belongs to its host.
-        if self.session.as_ref().is_some_and(|s| !s.is_host()) {
+        // A world joined over the network belongs to its host. (Until it
+        // arrives, the view still shows the player's own world.)
+        if self.session.as_ref().is_some_and(|s| !s.is_host() && s.ready) {
             return;
         }
         if let Some(w) = &self.world {
