@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::block::Block;
 use crate::device;
-use crate::world::{Edit, Pos, World, MAX_LAYER};
+use crate::world::{Edit, Pos, World};
 
 pub const CLIP_FORMAT: &str = "makine-blocks";
 
@@ -135,12 +135,11 @@ impl Clip {
     }
 
     /// The edit pasting the clip with its origin at `at`. Fails if it would
-    /// overlap a device that is not being replaced, or leave the layers.
+    /// overlap a device that is not being replaced, or leave the world.
     pub fn paste(&self, world: &World, at: Pos) -> Result<Edit, String> {
         let target = |p: &Pos| Pos::new(at.x + p.x, at.y + p.y, at.z + p.z);
-        let top = self.blocks.iter().map(|(p, _)| p.z).max().unwrap_or(0);
-        if at.z < 0 || at.z + top > MAX_LAYER {
-            return Err(format!("katman {}'ın üstüne çıkıyor", MAX_LAYER));
+        if self.blocks.iter().any(|(p, _)| !target(p).in_bounds()) {
+            return Err("dünyanın kenarından taşıyor".into());
         }
         // Devices under the paste are removed whole, so they must lie
         // entirely under it.

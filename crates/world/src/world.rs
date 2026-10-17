@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::block::{Block, Dir};
 use crate::device::{self, Device};
 
-/// A cell position: `x`, `y` on a layer, `z` the layer (0 = ground).
+/// A cell position: `x`, `y` on a layer, `z` the layer (height; 0 is the
+/// ground, but blocks may go above and below it without limit).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Pos {
     pub x: i32,
@@ -29,11 +30,11 @@ impl Pos {
         Pos::new(self.x, self.y, self.z + 1)
     }
 
-    /// Whether a block may be stored here: on a layer, and far enough from
-    /// the edge of `i32` that neighbour and device arithmetic never
-    /// overflows.
+    /// Whether a block may be stored here: far enough from the edge of
+    /// `i32` that neighbour and device arithmetic never overflows. The
+    /// world has no other limit, in any direction, height included.
     pub fn in_bounds(self) -> bool {
-        (0..=MAX_LAYER).contains(&self.z)
+        (-MAX_COORD..=MAX_COORD).contains(&self.z)
             && (-MAX_COORD..=MAX_COORD).contains(&self.x)
             && (-MAX_COORD..=MAX_COORD).contains(&self.y)
     }
@@ -52,9 +53,7 @@ impl Pos {
 }
 
 pub const CHUNK: i32 = 16;
-/// Layers allowed: 0 (ground) to MAX_LAYER.
-pub const MAX_LAYER: i32 = 7;
-/// Cells allowed: x and y within ±MAX_COORD.
+/// Cells allowed: x, y and z within ±MAX_COORD.
 pub const MAX_COORD: i32 = 1 << 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -281,6 +280,37 @@ impl World {
     }
 
     /// Bounding box of all blocks: (min, max), inclusive.
+    /// Blocks inside the box `lo..=hi` (corners included). Only chunks
+    /// overlapping it are visited, so this stays cheap in a huge world.
+    pub fn blocks_in(&self, lo: Pos, hi: Pos) -> impl Iterator<Item = (Pos, &Block)> {
+        let (a, b) = (lo.chunk(), hi.chunk());
+        let first = ChunkKey {
+            cx: a.cx,
+            cy: i32::MIN,
+            z: i32::MIN,
+        };
+        let last = ChunkKey {
+            cx: b.cx,
+            cy: i32::MAX,
+            z: i32::MAX,
+        };
+        let range = (a.cx <= b.cx).then(|| self.chunks.range(first..=last));
+        range
+            .into_iter()
+            .flatten()
+            .filter(move |(k, _)| (a.cy..=b.cy).contains(&k.cy) && (lo.z..=hi.z).contains(&k.z))
+            .flat_map(|(k, c)| {
+                c.cells.iter().enumerate().filter_map(move |(i, b)| {
+                    let i = i as i32;
+                    Some((
+                        Pos::new(k.cx * CHUNK + i % CHUNK, k.cy * CHUNK + i / CHUNK, k.z),
+                        b.as_ref()?,
+                    ))
+                })
+            })
+            .filter(move |(p, _)| (lo.x..=hi.x).contains(&p.x) && (lo.y..=hi.y).contains(&p.y))
+    }
+
     pub fn bounds(&self) -> Option<(Pos, Pos)> {
         let mut it = self.blocks().map(|(p, _)| p);
         let first = it.next()?;
@@ -331,7 +361,7 @@ impl World {
     }
 
     /// The edit placing `device` with its anchor at `anchor`, or `None` if
-    /// a cell it needs is taken or outside the allowed layers.
+    /// a cell it needs is taken or outside the world.
     pub fn place_device(&self, device: Device, anchor: Pos, facing: Dir) -> Option<Edit> {
         let device = device.normalized()?;
         let l = device::layout(&device, anchor, facing);
@@ -503,17 +533,47 @@ mod tests {
     }
 
     #[test]
-    fn layers_are_limited() {
+    fn blocks_in_a_box() {
         let mut w = World::new("t");
+        for p in [
+            (0, 0, 0),
+            (20, 3, 0),
+            (-17, 40, 2),
+            (5, 5, -3),
+            (100, 100, 0),
+        ] {
+            w.apply(Edit::Set {
+                pos: Pos::new(p.0, p.1, p.2),
+                block: Some(Block::Wire),
+            });
+        }
+        let mut found: Vec<Pos> = w
+            .blocks_in(Pos::new(-20, -1, -3), Pos::new(20, 40, 0))
+            .map(|(p, _)| p)
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec![Pos::new(0, 0, 0), Pos::new(5, 5, -3), Pos::new(20, 3, 0)]
+        );
+        assert_eq!(w.blocks_in(Pos::new(1, 0, 0), Pos::new(0, 0, 0)).count(), 0);
+    }
+
+    #[test]
+    fn height_is_unlimited() {
+        let mut w = World::new("t");
+        for z in [-1, 8, 1000, -MAX_COORD, MAX_COORD] {
+            w.apply(Edit::Set {
+                pos: Pos::new(0, 0, z),
+                block: Some(Block::Wire),
+            });
+        }
+        assert_eq!(w.len(), 5);
         w.apply(Edit::Set {
-            pos: Pos::new(0, 0, -1),
+            pos: Pos::new(0, 0, MAX_COORD + 1),
             block: Some(Block::Wire),
         });
-        w.apply(Edit::Set {
-            pos: Pos::new(0, 0, MAX_LAYER + 1),
-            block: Some(Block::Wire),
-        });
-        assert!(w.is_empty());
+        assert_eq!(w.len(), 5, "past the edge of i32 arithmetic");
     }
 
     #[test]
@@ -681,7 +741,7 @@ mod tests {
             },
             // Out of bounds: not a change.
             Edit::Set {
-                pos: Pos::new(0, 0, 99),
+                pos: Pos::new(0, 0, MAX_COORD + 1),
                 block: Some(Block::Wire),
             },
         ]));

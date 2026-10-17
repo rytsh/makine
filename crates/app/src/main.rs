@@ -46,7 +46,12 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "makine",
         options,
-        Box::new(move |_cc| Ok(Box::new(app::App::new(progress, path)))),
+        Box::new(move |cc| {
+            if let Some(rs) = &cc.wgpu_render_state {
+                worldview::gpu::remember_target_format(&cc.egui_ctx, rs.target_format);
+            }
+            Ok(Box::new(app::App::new(progress, path)))
+        }),
     );
     if let Err(e) = &result {
         report_failure(e);

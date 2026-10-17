@@ -477,6 +477,8 @@ mod glyph_tests {
             include_str!("../worldview/mod.rs"),
             include_str!("../worldview/panels.rs"),
             include_str!("../worldview/render.rs"),
+            include_str!("../worldview/camera.rs"),
+            include_str!("../worldview/gpu.rs"),
             include_str!("../worldsim.rs"),
             include_str!("../session.rs"),
             include_str!("../worlds.rs"),

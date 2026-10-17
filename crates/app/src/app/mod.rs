@@ -49,7 +49,7 @@ enum View {
     Play,
     /// The built-in wiki.
     Wiki,
-    /// The isometric block world.
+    /// The 3D block world.
     World,
 }
 
@@ -346,7 +346,7 @@ impl App {
                 self.view == View::World,
                 "🌍  Dünya",
             ))
-            .on_hover_text("Blokları yerleştirerek kendi devreni kur (izometrik)")
+            .on_hover_text("Blokları yerleştirerek kendi devreni kur (3D, sınırsız)")
             .clicked()
         {
             self.open_world();

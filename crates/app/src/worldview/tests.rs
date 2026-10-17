@@ -7,17 +7,21 @@ use makine_world::block::Gate;
 mod basics {
     use crate::worldview::*;
 
-    use egui::pos2;
-
+    /// The camera follows the edited layer, which has no limit.
     #[test]
-    fn pick_inverts_projection() {
-        let v = WorldView::default();
-        let origin = pos2(400.0, 100.0);
-        for (x, y, z) in [(0, 0, 0), (3, -2, 0), (-5, 7, 2), (10, 10, 1)] {
-            // Centre of the cell's floor tile on its layer.
-            let c = v.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5, z as f32);
-            assert_eq!(v.pick(origin, c, z), Pos::new(x, y, z));
-        }
+    fn layers_have_no_limit() {
+        let mut v = WorldView::default();
+        let z0 = v.camera.target.z;
+        v.set_layer(20);
+        assert_eq!(v.layer, 20);
+        assert_eq!(v.camera.target.z, z0 + 20.0);
+        v.set_layer(-5);
+        assert_eq!(v.camera.target.z, z0 - 5.0);
+        v.edit(Edit::Set {
+            pos: Pos::new(0, 0, -5),
+            block: Some(Block::Wire),
+        });
+        assert_eq!(v.world.len(), 1);
     }
 
     #[test]
@@ -141,11 +145,7 @@ mod ui_tests {
         h.run();
         // Screen centre of a cell on layer 0 (the camera was fitted on the
         // first frame).
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let cell = |view: &WorldView, x: i32, y: i32| {
-            let origin = rect.center_top() + vec2(0.0, 80.0);
-            view.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5, 0.0)
-        };
+        let cell = |view: &WorldView, x: i32, y: i32| view.cell_on_screen(Pos::new(x, y, 0));
         let path: Vec<Pos2> = (0..4).map(|x| cell(&view.borrow(), x, 0)).collect();
         h.drag_at(path[0]);
         h.run();
@@ -374,11 +374,7 @@ mod selection_tests {
             .with_size(egui::vec2(800.0, 600.0))
             .build_ui(move |ui| vv.borrow_mut().show(ui));
         h.run();
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let origin = rect.center_top() + vec2(0.0, 80.0);
-        let cell = |v: &WorldView, x: i32, y: i32| {
-            v.to_screen(origin, x as f32 + 0.5, y as f32 + 0.5, 0.0)
-        };
+        let cell = |v: &WorldView, x: i32, y: i32| v.cell_on_screen(Pos::new(x, y, 0));
 
         // Drag from (0,0) to (2,1).
         let (a, b) = (cell(&view.borrow(), 0, 0), cell(&view.borrow(), 2, 1));

@@ -21,6 +21,8 @@ makine-rv = { path = "../rv" }
 makine-pack = { path = "../pack" }
 makine-world = { path = "../world" }
 makine-net = { path = "../net" }
+glam = "0.30"
+bytemuck = { version = "1.25.2", features = ["derive"] }
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }

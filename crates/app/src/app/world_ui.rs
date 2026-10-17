@@ -347,8 +347,8 @@ impl App {
         ui.label(
             RichText::new(
                 "Sol tık: yerleştir (sürükleyerek boya) · Sağ tık: sil · R: döndür · \
-                 Q/E: katman · Tekerlek: yakınlaştır · Orta tık ya da Boşluk+sürükle: kaydır · \
-                 Anahtara tıkla: aç/kapa",
+                 Q/E: katman · Tekerlek: yakınlaştır · Orta tık ya da Alt+sürükle: kamerayı \
+                 döndür · Boşluk+sürükle ya da Shift+orta tık: kaydır · Anahtara tıkla: aç/kapa",
             )
             .weak()
             .small(),
@@ -455,16 +455,18 @@ impl App {
         ui.horizontal(|ui| {
             ui.label(format!("Katman: {}", w.layer));
             if ui.small_button("▼").on_hover_text("Q").clicked() {
-                w.layer = (w.layer - 1).max(0);
+                w.set_layer(w.layer - 1);
             }
             if ui.small_button("▲").on_hover_text("E").clicked() {
-                w.layer = (w.layer + 1).min(makine_world::world::MAX_LAYER);
+                w.set_layer(w.layer + 1);
             }
         });
+        ui.checkbox(&mut w.show_above, "Üst katmanları cam gibi göster");
         ui.label(
             RichText::new(
-                "Üst katmanlar gizlenir, alttakiler soluk görünür. Katmanlar arası bağlantı için \
-                 iki katmana da 'Geçiş' koy.",
+                "Katman sınırı yok: yukarı da aşağı da istediğin kadar kurabilirsin. Üst \
+                 katmanlar gizlenir, alttakiler görünür. Katmanlar arası bağlantı için iki \
+                 katmana da 'Geçiş' koy.",
             )
             .weak()
             .small(),

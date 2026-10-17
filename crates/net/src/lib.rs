@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// Default TCP port.
 pub const PORT: u16 = 7878;
 /// Bumped when messages change; mismatched players are refused.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 /// The host's player id.
 pub const HOST_ID: u32 = 0;
 /// Longest message accepted (a large world with its chips).

@@ -1,35 +1,37 @@
-//! The isometric world view: draws the block world and lets the player
-//! build in it.
+//! The 3D world view: draws the block world and lets the player build in
+//! it.
 //!
-//! Projection: world (x, y, z) maps to screen with x going down-right, y
-//! down-left and z straight up, the classic 2:1 isometric grid. Layers above
-//! the one being edited are hidden; layers below are drawn dimmed, so the
+//! The world has no edges, in height either. The player edits one layer at
+//! a time; the camera orbits around a point on it. Layers above the edited
+//! one are hidden (or shown as glass), layers below are visible, so the
 //! player sees what they build on.
 //!
 //! Controls: left click places the selected block (drag to paint) or, on a
 //! device, selects it; right click removes; R turns the block being placed
 //! (or the blocks being pasted); Page Up/Down or Q/E change layer;
-//! middle-drag or Space+drag pans; the wheel zooms. With the select tool,
-//! dragging selects a region (Ctrl+C/X/V, arrows move it, Del deletes).
+//! middle-drag or Alt+drag turns the camera, Space+drag or Shift+middle-drag
+//! pans; the wheel zooms. With the select tool, dragging selects a region
+//! (Ctrl+C/X/V, arrows move it, Del deletes).
 
-use egui::{vec2, Color32, Sense, Ui, Vec2};
+use egui::{Color32, Rect, Sense, Ui};
 use makine_sim::Library;
 use makine_world::block::{Block, Dir};
 use makine_world::device::{self, Device};
 
 use makine_world::region::{self, Clip, Region};
-use makine_world::world::MAX_LAYER;
 use makine_world::{Change, Edit, Pos, World};
 
 use crate::worldsim::WorldSim;
 
+mod camera;
+pub mod gpu;
 mod panels;
 mod render;
 #[cfg(test)]
 mod tests;
 
+pub use camera::Camera;
 pub use panels::palette;
-use render::BG;
 
 /// The block the player is placing.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,8 +46,11 @@ pub struct WorldView {
     pub brush: Option<Brush>,
     /// Facing applied to placed blocks; R rotates it.
     pub facing: Dir,
-    pan: Vec2,
-    zoom: f32,
+    pub camera: Camera,
+    /// Show the layers above the edited one, as glass.
+    pub show_above: bool,
+    /// Where the view was drawn last frame.
+    rect: Rect,
     /// This player's changes, newest last. Undo only takes back cells
     /// nobody else has changed since.
     undo: Vec<Change>,
@@ -110,8 +115,9 @@ impl WorldView {
             layer: 0,
             brush: Some(Brush { block: Block::Wire }),
             facing: Dir::East,
-            pan: vec2(0.0, 0.0),
-            zoom: 1.0,
+            camera: Camera::default(),
+            show_above: false,
+            rect: Rect::NOTHING,
             undo: Vec::new(),
             redo: Vec::new(),
             sim: WorldSim::default(),
@@ -364,30 +370,11 @@ impl WorldView {
     pub fn show(&mut self, ui: &mut Ui) {
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let rect = response.rect;
-        let origin = rect.center_top() + vec2(0.0, 80.0);
-        painter.rect_filled(rect, 0.0, BG);
+        self.rect = rect;
         if std::mem::take(&mut self.fit) {
-            self.fit_to(rect, origin);
+            self.fit_camera();
         }
-
-        // Camera: wheel zooms around the pointer, middle-drag or Space+drag
-        // pans.
-        if let Some(hp) = response.hover_pos() {
-            let (scroll, zd) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
-            let f = zd * (scroll * 0.0015).exp();
-            if f != 1.0 {
-                let new = (self.zoom * f).clamp(0.3, 3.0);
-                let anchor = hp - origin - self.pan;
-                self.pan += anchor - anchor * (new / self.zoom);
-                self.zoom = new;
-            }
-        }
-        let space = ui.input(|i| i.key_down(egui::Key::Space));
-        if response.dragged_by(egui::PointerButton::Middle)
-            || (space && response.dragged_by(egui::PointerButton::Primary))
-        {
-            self.pan += response.drag_delta();
-        }
+        let (space, camera_drag) = self.camera_input(ui, &response);
 
         // Keys. While a keyboard device is selected, typing goes to it.
         if self.typing() {
@@ -483,14 +470,14 @@ impl WorldView {
                     None => self.facing = self.facing.cw(),
                 }
             }
-            ui.input(|i| {
-                if i.key_pressed(egui::Key::PageUp) || i.key_pressed(egui::Key::E) {
-                    self.layer = (self.layer + 1).min(MAX_LAYER);
-                }
-                if i.key_pressed(egui::Key::PageDown) || i.key_pressed(egui::Key::Q) {
-                    self.layer = (self.layer - 1).max(0);
-                }
+            let layer = ui.input(|i| {
+                let up = i.key_pressed(egui::Key::PageUp) || i.key_pressed(egui::Key::E);
+                let down = i.key_pressed(egui::Key::PageDown) || i.key_pressed(egui::Key::Q);
+                up as i32 - down as i32
             });
+            if layer != 0 {
+                self.set_layer(self.layer + layer);
+            }
             let (undo, redo) = ui.input(|i| {
                 let cmd = i.modifiers.command;
                 (
@@ -510,7 +497,10 @@ impl WorldView {
         // Pointer: which cell?
         self.hover = response
             .hover_pos()
-            .map(|p| self.pick(origin, p, self.layer));
+            .and_then(|p| self.camera.pick(rect, p, self.layer));
+        let pick = |v: &Self, p: egui::Pos2| v.camera.pick(rect, p, v.layer);
+        // Buttons used to move the camera do not build.
+        let space = space || camera_drag;
 
         // Pasting: a click puts the blocks down; right click stops.
         let shift = ui.input(|i| i.modifiers.shift);
@@ -527,7 +517,7 @@ impl WorldView {
             // device there).
             if response.drag_started_by(egui::PointerButton::Primary) {
                 let press = ui.input(|i| i.pointer.press_origin());
-                self.sel_start = press.map(|p| self.pick(origin, p, self.layer));
+                self.sel_start = press.and_then(|p| pick(self, p));
             }
             if let (Some(a), Some(b)) = (self.sel_start, self.hover) {
                 if response.dragged_by(egui::PointerButton::Primary) {
@@ -550,7 +540,7 @@ impl WorldView {
             if response.drag_started() {
                 self.painted = None;
                 let press = ui.input(|i| i.pointer.press_origin());
-                if let Some(start) = press.map(|p| self.pick(origin, p, self.layer)) {
+                if let Some(start) = press.and_then(|p| pick(self, p)) {
                     if response.dragged_by(egui::PointerButton::Primary) {
                         self.painted = Some(start);
                         self.place(start, false);
@@ -586,7 +576,7 @@ impl WorldView {
         // Simulate and draw.
         self.sim.run_frame(&self.world, self.defer);
         let screens = self.screens();
-        self.draw(&painter, origin, rect, &screens);
+        self.draw(&painter, rect, &screens);
         if self.sim.running
             && self
                 .world
@@ -597,6 +587,53 @@ impl WorldView {
         {
             ui.ctx().request_repaint();
         }
+    }
+
+    /// Edit layer `z`; the camera rises or sinks with it.
+    pub fn set_layer(&mut self, z: i32) {
+        let lim = makine_world::world::MAX_COORD;
+        let z = z.clamp(-lim, lim);
+        self.camera.target.z += (z - self.layer) as f64;
+        self.layer = z;
+    }
+
+    /// Wheel zooms towards the pointer; middle-drag (or Alt+drag) turns the
+    /// camera, Space+drag (or Shift+middle-drag) pans. Returns whether Space
+    /// is held and whether the camera is being dragged.
+    fn camera_input(&mut self, ui: &Ui, response: &egui::Response) -> (bool, bool) {
+        let rect = response.rect;
+        if let Some(hp) = response.hover_pos() {
+            let (scroll, zd) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
+            let f = (zd * (scroll * 0.0015).exp()) as f64;
+            if f != 1.0 {
+                // Keep the ground point under the pointer where it is.
+                let h = self.layer as f64;
+                let before = self.camera.ray(rect, hp).at_height(h);
+                self.camera.zoom(f);
+                let after = self.camera.ray(rect, hp).at_height(h);
+                if let (Some(a), Some(b)) = (before, after) {
+                    self.camera.target += a - b;
+                }
+            }
+        }
+        let (space, shift, alt) = ui.input(|i| {
+            (
+                i.key_down(egui::Key::Space),
+                i.modifiers.shift,
+                i.modifiers.alt,
+            )
+        });
+        let middle = response.dragged_by(egui::PointerButton::Middle);
+        let primary = response.dragged_by(egui::PointerButton::Primary);
+        let pan = (middle && shift) || (space && primary);
+        let orbit = (middle && !shift) || (alt && primary && !space);
+        if let (true, Some(p)) = (pan, response.interact_pointer_pos()) {
+            self.camera.pan(rect, p - response.drag_delta(), p);
+        } else if orbit {
+            let d = response.drag_delta();
+            self.camera.orbit(d.x, d.y);
+        }
+        (space, alt && primary)
     }
 
     /// Remove the block at `cell` (a whole device if it is part of one).
