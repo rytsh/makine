@@ -127,35 +127,7 @@ pub fn install(ctx: &egui::Context) {
     for (name, bytes) in IMAGES {
         ctx.include_bytes(format!("{IMAGE_SCHEME}img/{name}"), *bytes);
     }
-    install_fonts(ctx);
-}
-
-/// DejaVu, after egui's own fonts: only used for characters those lack.
-pub fn install_fonts(ctx: &egui::Context) {
-    use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
-    use egui::{FontData, FontFamily};
-    let fonts: [(&str, &'static [u8], FontFamily); 2] = [
-        (
-            "DejaVuSans",
-            include_bytes!("../fonts/DejaVuSans.ttf"),
-            FontFamily::Proportional,
-        ),
-        (
-            "DejaVuSansMono",
-            include_bytes!("../fonts/DejaVuSansMono.ttf"),
-            FontFamily::Monospace,
-        ),
-    ];
-    for (name, data, family) in fonts {
-        ctx.add_font(FontInsert::new(
-            name,
-            FontData::from_static(data),
-            vec![InsertFontFamily {
-                family,
-                priority: FontPriority::Lowest,
-            }],
-        ));
-    }
+    crate::theme::install(ctx);
 }
 
 pub struct Wiki {
@@ -368,7 +340,7 @@ mod tests {
     #[test]
     fn pages_have_glyphs() {
         let ctx = egui::Context::default();
-        install_fonts(&ctx);
+        crate::theme::install(&ctx);
         let mut missing = Vec::new();
         let mut out = ctx.run_ui(Default::default(), |ui| {
             ui.ctx().fonts_mut(|f| {

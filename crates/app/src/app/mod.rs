@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use makine_levels::{check, find, levels, Level};
 use makine_sim::{Circuit, Library, PartKind, Pin, Verdict};
 
@@ -479,7 +479,7 @@ impl App {
 
         match &self.sim {
             Err(e) if !e.is_empty() => {
-                ui.colored_label(Color32::LIGHT_RED, e);
+                ui.colored_label(crate::theme::BAD, e);
             }
             Ok(sim) => {
                 let text = if sim.native_count() > 0 {
@@ -494,7 +494,7 @@ impl App {
                 ui.label(RichText::new(text).weak());
                 if self.oscillating {
                     ui.colored_label(
-                        Color32::LIGHT_RED,
+                        crate::theme::BAD,
                         "Devre salınıyor: bir geri besleme döngüsü hiç durulmuyor.",
                     );
                 }
@@ -569,15 +569,15 @@ impl App {
                 }
             }
             TestResult::Error(e) => {
-                ui.colored_label(Color32::LIGHT_RED, e);
+                ui.colored_label(crate::theme::BAD, e);
             }
             TestResult::Wrong(m) => {
-                ui.colored_label(Color32::LIGHT_RED, "✖ Test geçmedi");
+                ui.colored_label(crate::theme::BAD, "✖ Test geçmedi");
                 ui.label(m);
             }
             TestResult::Oscillates { step } => {
                 ui.colored_label(
-                    Color32::LIGHT_RED,
+                    crate::theme::BAD,
                     format!("Adım {}: devre salınıyor ve hiç durulmuyor.", step + 1),
                 );
             }
@@ -588,7 +588,7 @@ impl App {
                 actual,
             } => {
                 ui.colored_label(
-                    Color32::LIGHT_RED,
+                    crate::theme::BAD,
                     format!("✖ Adım {}'de yanlış sonuç", step + 1),
                 );
                 if matches!(level.test, makine_levels::Test::Sequence(_)) {
@@ -609,7 +609,7 @@ impl App {
                         ui.label(&p.name);
                         ui.monospace(e.map_or("-".into(), |e| format_value(p.width, e)));
                         ui.colored_label(
-                            if ok { ON } else { Color32::LIGHT_RED },
+                            if ok { ON } else { crate::theme::BAD },
                             RichText::new(format_value(p.width, *a)).monospace(),
                         );
                         ui.end_row();
@@ -685,7 +685,7 @@ impl App {
         if let Some(status) = self.status.clone() {
             egui::Panel::bottom("status").show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.colored_label(Color32::LIGHT_YELLOW, status);
+                    ui.colored_label(crate::theme::WARN, status);
                     if ui.small_button("×").clicked() {
                         self.status = None;
                     }

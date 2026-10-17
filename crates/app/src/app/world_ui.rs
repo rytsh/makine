@@ -1,7 +1,7 @@
 //! The world view's side of the app: the list of worlds, world files,
 //! building together on the network, and the world panel.
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use makine_levels::levels;
 use makine_sim::PartKind;
 
@@ -207,7 +207,7 @@ impl App {
                 }
                 if self.confirm_delete_world {
                     ui.horizontal(|ui| {
-                        ui.colored_label(Color32::LIGHT_RED, "Emin misin?");
+                        ui.colored_label(crate::theme::BAD, "Emin misin?");
                         if ui.button("Evet, sil").clicked() {
                             self.delete_world();
                         }
@@ -336,7 +336,16 @@ impl App {
             return;
         }
         let title = self.world.as_ref().unwrap().world.name.clone();
-        ui.heading(format!("🌍 {title}"));
+        ui.label(crate::theme::strong(title, 22.0));
+        ui.label(
+            RichText::new(format!(
+                "katman {} · yukarıdan bakış",
+                self.world.as_ref().unwrap().layer
+            ))
+            .weak()
+            .small(),
+        );
+        ui.add_space(4.0);
         // Switching worlds mid-session would leave the others behind.
         if self.session.is_none() {
             self.worlds_section(ui);
@@ -358,14 +367,17 @@ impl App {
                         }
                     });
             });
-        ui.add_space(6.0);
-        ui.label(RichText::new("Bloklar").strong());
+        // What is selected comes first: it is what the player works on.
+        w.selection_panel(ui);
+        w.block_panel(ui);
+        w.device_panel(ui);
+        crate::theme::section(ui, "Bloklar");
         let current = w.brush.as_ref().map(|b| std::mem::discriminant(&b.block));
         let current_gate = match w.brush.as_ref().map(|b| &b.block) {
             Some(makine_world::Block::Gate { gate, .. }) => Some(*gate),
             _ => None,
         };
-        ui.horizontal_wrapped(|ui| {
+        crate::worldview::tiles(ui, |ui| {
             for (name, block, tip) in crate::worldview::palette() {
                 let gate = match &block {
                     makine_world::Block::Gate { gate, .. } => Some(*gate),
@@ -373,7 +385,7 @@ impl App {
                 };
                 let selected =
                     current == Some(std::mem::discriminant(&block)) && gate == current_gate;
-                let r = ui.selectable_label(selected, name);
+                let r = crate::worldview::tile(ui, &block, name, selected);
                 let r = if tip.is_empty() {
                     r
                 } else {
@@ -401,13 +413,12 @@ impl App {
                 }
             });
         }
-        ui.add_space(4.0);
-        ui.label(RichText::new("Cihazlar").strong());
+        crate::theme::section(ui, "Cihazlar");
         w.device_palette_ui(ui);
-        ui.add_space(4.0);
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui
-                .selectable_label(w.selecting(), "⬚ Seç")
+                .add(egui::Button::new("⬚ Seç aracı").selected(w.selecting()))
                 .on_hover_text("Alan seç: kopyala, taşı, çipe çevir")
                 .clicked()
             {
@@ -461,9 +472,9 @@ impl App {
                 });
             });
         }
-        ui.add_space(6.0);
+        crate::theme::section(ui, "Yerleştirme");
         ui.horizontal(|ui| {
-            ui.label("Yön:");
+            ui.label("Yön");
             let arrow = match w.facing {
                 makine_world::Dir::East => "→ doğu",
                 makine_world::Dir::South => "↓ güney",
@@ -475,23 +486,34 @@ impl App {
             }
         });
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Katman: {}", w.layer)).strong());
-            if ui.small_button("▼").on_hover_text("Q").clicked() {
+            ui.label("Katman");
+            if ui
+                .button("▼")
+                .on_hover_text("Bir katman aşağı (Q)")
+                .clicked()
+            {
                 w.set_layer(w.layer - 1);
             }
-            if ui.small_button("▲").on_hover_text("E").clicked() {
+            ui.label(
+                RichText::new(format!("{:>3}", w.layer))
+                    .monospace()
+                    .size(16.0)
+                    .color(crate::theme::COPPER_BRIGHT),
+            );
+            if ui
+                .button("▲")
+                .on_hover_text("Bir katman yukarı (E)")
+                .clicked()
+            {
                 w.set_layer(w.layer + 1);
             }
         });
         ui.label(
-            RichText::new(
-                "Katman sınırı yok, yukarı da aşağı da. Bir alttaki katman soluk görünür. \
-                 Katmanlar arası bağlantı için iki katmana da üst üste 'Geçiş' koy.",
-            )
-            .weak()
-            .small(),
+            RichText::new("Alttaki katman soluk görünür. Katmanları üst üste 'Geçiş' bağlar.")
+                .weak()
+                .small(),
         );
-        ui.separator();
+        crate::theme::section(ui, "Simülasyon");
         ui.horizontal(|ui| {
             let label = if w.sim.running {
                 "⏸ Durdur"
@@ -533,7 +555,10 @@ impl App {
             {
                 w.sim.single_step();
             }
-            let l = ui.label("Hız").id;
+            let l = ui
+                .label("Hız")
+                .on_hover_text("Saat bloğu her 'periyot' adımda bir değişir; hız, saniyedeki adım")
+                .id;
             let name = |v: u32| match v {
                 0 => "En hızlı".to_string(),
                 v => format!("{v} adım/kare"),
@@ -561,23 +586,12 @@ impl App {
             ))
             .weak(),
         );
-        ui.label(
-            RichText::new(
-                "Saat bloğu her 'periyot' adımda bir değişir. Hızı artırınca saat ve ona \
-                 bağlı devreler hızlanır.",
-            )
-            .weak()
-            .small(),
-        );
         if let Some(e) = w.sim.error() {
-            ui.colored_label(Color32::LIGHT_RED, e.to_string());
+            ui.colored_label(crate::theme::BAD, e.to_string());
         }
         if let Some(e) = &w.status {
-            ui.colored_label(Color32::LIGHT_YELLOW, e);
+            ui.colored_label(crate::theme::WARN, e);
         }
-        w.selection_panel(ui);
-        w.block_panel(ui);
-        w.device_panel(ui);
         if let Some(req) = w.request.take() {
             self.handle_world_request(req);
         }

@@ -9,21 +9,24 @@ use makine_sim::{PartKind, Pin};
 use super::layout::{format_value, pin_label};
 use crate::design::{Geometry, Symbol, BUBBLE, GATE_W, HEADER, LEAD, PIN_RADIUS};
 
-pub const BG: Color32 = Color32::from_rgb(24, 26, 31);
-pub(super) const GRID: Color32 = Color32::from_rgb(34, 37, 44);
-pub(super) const PART_FILL: Color32 = Color32::from_rgb(45, 50, 60);
-pub(super) const PART_HEADER: Color32 = Color32::from_rgb(62, 70, 86);
-pub(super) const NAND_HEADER: Color32 = Color32::from_rgb(110, 70, 50);
-pub(super) const BUS_HEADER: Color32 = Color32::from_rgb(55, 80, 95);
-pub(super) const GATE_FILL: Color32 = Color32::from_rgb(40, 45, 55);
-pub(super) const GATE_LINE: Color32 = Color32::from_rgb(200, 206, 216);
-pub(super) const TEXT: Color32 = Color32::from_rgb(220, 224, 230);
-pub(super) const DIM: Color32 = Color32::from_rgb(140, 146, 158);
-pub const ON: Color32 = Color32::from_rgb(90, 220, 120);
-pub const OFF: Color32 = Color32::from_rgb(90, 96, 108);
-pub(super) const WIRE_HOVER: Color32 = Color32::from_rgb(240, 160, 80);
-pub(super) const BUS: Color32 = Color32::from_rgb(110, 170, 240);
-pub(super) const ERR: Color32 = Color32::from_rgb(230, 90, 90);
+use crate::theme;
+
+pub const BG: Color32 = theme::BOARD;
+pub(super) const GRID: Color32 = theme::BOARD_GRID;
+/// Parts are black epoxy packages on the board.
+pub(super) const PART_FILL: Color32 = Color32::from_rgb(22, 27, 25);
+pub(super) const PART_HEADER: Color32 = Color32::from_rgb(42, 52, 48);
+pub(super) const NAND_HEADER: Color32 = Color32::from_rgb(124, 74, 40);
+pub(super) const BUS_HEADER: Color32 = Color32::from_rgb(34, 62, 82);
+pub(super) const GATE_FILL: Color32 = Color32::from_rgb(20, 26, 24);
+pub(super) const GATE_LINE: Color32 = theme::INK;
+pub(super) const TEXT: Color32 = theme::INK;
+pub(super) const DIM: Color32 = theme::INK_DIM;
+pub const ON: Color32 = theme::SIGNAL;
+pub const OFF: Color32 = theme::SIGNAL_OFF;
+pub(super) const WIRE_HOVER: Color32 = Color32::from_rgb(255, 236, 200);
+pub(super) const BUS: Color32 = theme::BUS;
+pub(super) const ERR: Color32 = theme::BAD;
 
 pub(super) fn wire_color(width: u8, value: Option<u64>) -> Color32 {
     match (width, value) {

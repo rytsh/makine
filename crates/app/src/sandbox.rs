@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use makine_pack::Package;
 use makine_sim::{ChipDef, Library, PartKind, Pin, MAX_WIDTH};
 use serde::{Deserialize, Serialize};
@@ -302,7 +302,7 @@ impl PinEditor {
             apply = true;
         }
         if let Some(e) = &self.error {
-            ui.colored_label(Color32::LIGHT_RED, e);
+            ui.colored_label(crate::theme::BAD, e);
         }
         if !apply {
             return None;

@@ -1,7 +1,7 @@
 //! The world view's side panels: the build palette and the settings of
 //! what is selected (a region, a clock or port, a device).
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use makine_world::block::{Block, Dir, Gate};
 use makine_world::device::{self, Device};
 use makine_world::region::Clip;
@@ -57,7 +57,7 @@ pub fn palette() -> Vec<(&'static str, Block, &'static str)> {
             "Kendi kendine yanıp söner. Seçip periyodunu ayarla.",
         ),
         (
-            "Giriş portu",
+            "Giriş",
             Block::Port {
                 name: "a".into(),
                 output: false,
@@ -66,7 +66,7 @@ pub fn palette() -> Vec<(&'static str, Block, &'static str)> {
             "Dünyayı çipe çevirince çipin girişi olur",
         ),
         (
-            "Çıkış portu",
+            "Çıkış",
             Block::Port {
                 name: "q".into(),
                 output: true,
@@ -108,6 +108,64 @@ pub fn device_palette() -> Vec<(&'static str, Device, &'static str)> {
     ]
 }
 
+/// Width of a palette tile.
+pub const TILE: f32 = 58.0;
+
+/// A palette tile: a drawing of `block` over its name. Selected tiles are
+/// copper.
+pub fn tile(ui: &mut Ui, block: &Block, name: &str, selected: bool) -> egui::Response {
+    let size = egui::vec2(TILE, 52.0);
+    let (rect, r) = ui.allocate_exact_size(size, egui::Sense::click());
+    let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let (fill, stroke) = if selected {
+            (
+                crate::theme::COPPER.gamma_multiply(0.22),
+                crate::theme::COPPER,
+            )
+        } else if r.hovered() {
+            (crate::theme::RAISED_HOVER, crate::theme::INK_DIM)
+        } else {
+            (crate::theme::RAISED, crate::theme::LINE)
+        };
+        p.rect(
+            rect,
+            4.0,
+            fill,
+            egui::Stroke::new(if selected { 1.5 } else { 1.0 }, stroke),
+            egui::StrokeKind::Inside,
+        );
+        let icon = egui::Rect::from_center_size(
+            rect.center_top() + egui::vec2(0.0, 19.0),
+            egui::vec2(28.0, 24.0),
+        );
+        super::render::palette_icon(p, icon, block, selected);
+        let text = if selected {
+            crate::theme::COPPER_BRIGHT
+        } else {
+            crate::theme::INK
+        };
+        p.text(
+            rect.center_bottom() - egui::vec2(0.0, 6.0),
+            egui::Align2::CENTER_BOTTOM,
+            name,
+            egui::FontId::proportional(11.0),
+            text,
+        );
+    }
+    r
+}
+
+/// Tiles in rows that fill the width.
+pub fn tiles(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+        ui.horizontal_wrapped(add);
+    });
+}
+
 impl WorldView {
     /// Device buttons of the build bar.
     pub fn device_palette_ui(&mut self, ui: &mut Ui) {
@@ -115,11 +173,14 @@ impl WorldView {
             Some(Block::Device { device, .. }) => Some(std::mem::discriminant(device)),
             _ => None,
         };
-        ui.horizontal_wrapped(|ui| {
+        tiles(ui, |ui| {
             for (name, device, tip) in device_palette() {
                 let selected = current == Some(std::mem::discriminant(&device));
-                if ui
-                    .selectable_label(selected, name)
+                let block = Block::Device {
+                    device: device.clone(),
+                    facing: Dir::East,
+                };
+                if tile(ui, &block, name, selected)
                     .on_hover_text(tip)
                     .clicked()
                 {
@@ -447,7 +508,7 @@ impl WorldView {
                     }
                 }
                 if let Some(e) = err {
-                    ui.colored_label(Color32::LIGHT_RED, e.as_str());
+                    ui.colored_label(crate::theme::BAD, e.as_str());
                 }
                 if let Some(words) = apply {
                     let new = Device::Rom {
@@ -469,7 +530,7 @@ impl WorldView {
             }
             Device::Keyboard => {
                 ui.colored_label(
-                    Color32::LIGHT_GREEN,
+                    crate::theme::GOOD,
                     "⌨ Yazdıkların bu klavyeye gidiyor. Bitirince Esc.",
                 );
             }

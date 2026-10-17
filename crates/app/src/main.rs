@@ -9,6 +9,7 @@ mod design;
 mod sandbox;
 mod session;
 mod store;
+mod theme;
 mod wiki;
 mod worlds;
 mod worldsim;

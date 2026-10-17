@@ -1,7 +1,7 @@
 //! Free chips (sandbox): the list in the left panel, the chip's panel, and
 //! chip files.
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 
 use super::{App, Target, View};
 use crate::sandbox::{self, PinEditor};
@@ -163,7 +163,7 @@ impl App {
         // Live simulation.
         match &self.sim {
             Err(e) if !e.is_empty() => {
-                ui.colored_label(Color32::LIGHT_RED, e);
+                ui.colored_label(crate::theme::BAD, e);
             }
             Ok(sim) => {
                 ui.label(
@@ -175,7 +175,7 @@ impl App {
                     .weak(),
                 );
                 if self.oscillating {
-                    ui.colored_label(Color32::LIGHT_RED, "Devre salınıyor.");
+                    ui.colored_label(crate::theme::BAD, "Devre salınıyor.");
                 }
             }
             _ => {}

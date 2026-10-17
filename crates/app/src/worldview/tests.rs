@@ -639,7 +639,7 @@ mod settings_tests {
                 .find(|(n, ..)| *n == name)
                 .map(|(_, b, _)| Brush { block: b })
         };
-        v.brush = brush("Giriş portu");
+        v.brush = brush("Giriş");
         v.place(Pos::new(0, 0, 0), false);
         v.brush = Some(Brush {
             block: Block::Gate {
@@ -648,7 +648,7 @@ mod settings_tests {
             },
         });
         v.place(Pos::new(1, 0, 0), false);
-        v.brush = brush("Çıkış portu");
+        v.brush = brush("Çıkış");
         v.place(Pos::new(2, 0, 0), false);
         v.brush = brush("Saat");
         v.place(Pos::new(0, 3, 0), false);

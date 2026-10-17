@@ -16,27 +16,30 @@ use makine_world::Pos;
 use super::WorldView;
 use crate::canvas::gate_outline;
 use crate::design::Symbol;
+use crate::theme;
 use crate::worldsim::SimError;
 
 /// Size of one cell on screen at zoom 1.
 const CELL: f32 = 32.0;
 
-pub(super) const BG: Color32 = Color32::from_rgb(20, 22, 27);
-const GRID: Color32 = Color32::from_rgb(36, 40, 48);
-const WIRE_OFF: Color32 = Color32::from_rgb(110, 60, 55);
-const WIRE_ON: Color32 = Color32::from_rgb(255, 80, 60);
-const GATE_FILL: Color32 = Color32::from_rgb(52, 57, 68);
-const GATE_LINE: Color32 = Color32::from_rgb(200, 206, 216);
-const BASE: Color32 = Color32::from_rgb(70, 74, 86);
-const TEXT: Color32 = Color32::from_rgb(220, 224, 230);
-const DARK: Color32 = Color32::from_rgb(30, 32, 38);
-const LAMP_OFF: Color32 = Color32::from_rgb(70, 64, 40);
-const LAMP_ON: Color32 = Color32::from_rgb(255, 220, 90);
-const VIA: Color32 = Color32::from_rgb(120, 170, 230);
-const PORT: Color32 = Color32::from_rgb(90, 200, 140);
-const ERROR: Color32 = Color32::from_rgb(255, 70, 70);
-const SELECT: Color32 = Color32::from_rgb(255, 210, 80);
-const PASTE: Color32 = Color32::from_rgb(120, 200, 255);
+pub(super) const BG: Color32 = theme::BOARD;
+const GRID: Color32 = theme::BOARD_GRID;
+const WIRE_OFF: Color32 = theme::SIGNAL_OFF;
+const WIRE_ON: Color32 = theme::SIGNAL;
+const GATE_FILL: Color32 = Color32::from_rgb(20, 26, 24);
+const GATE_LINE: Color32 = theme::INK;
+const BASE: Color32 = Color32::from_rgb(46, 58, 53);
+const TEXT: Color32 = theme::INK;
+const DARK: Color32 = Color32::from_rgb(12, 18, 15);
+const LAMP_OFF: Color32 = Color32::from_rgb(66, 58, 36);
+const LAMP_ON: Color32 = Color32::from_rgb(255, 238, 170);
+/// Plated through-holes: a tin ring around a dark hole.
+const VIA: Color32 = Color32::from_rgb(196, 204, 198);
+/// Ports are silkscreened pads.
+const PORT: Color32 = Color32::from_rgb(208, 220, 210);
+const ERROR: Color32 = theme::BAD;
+const SELECT: Color32 = Color32::from_rgb(130, 206, 255);
+const PASTE: Color32 = Color32::from_rgb(130, 206, 255);
 
 /// The rectangle a device covers: (min x, min y, max x, max y) in cell
 /// coordinates, edges included.
@@ -113,26 +116,33 @@ impl WorldView {
         let a = self.pick(origin, clip.left_top(), self.layer);
         let b = self.pick(origin, clip.right_bottom(), self.layer);
 
-        // Grid.
+        // The board: a dot at every cell corner, and a faint line every
+        // eight cells to count by.
         if CELL * z >= 8.0 {
-            let stroke = Stroke::new(1.0, GRID);
-            for x in a.x..=b.x + 1 {
+            let major = Stroke::new(1.0, GRID.gamma_multiply(0.55));
+            for x in (a.x..=b.x + 1).filter(|x| x.rem_euclid(8) == 0) {
                 painter.line_segment(
                     [
                         self.to_screen(origin, x as f32, a.y as f32),
                         self.to_screen(origin, x as f32, (b.y + 1) as f32),
                     ],
-                    stroke,
+                    major,
                 );
             }
-            for y in a.y..=b.y + 1 {
+            for y in (a.y..=b.y + 1).filter(|y| y.rem_euclid(8) == 0) {
                 painter.line_segment(
                     [
                         self.to_screen(origin, a.x as f32, y as f32),
                         self.to_screen(origin, (b.x + 1) as f32, y as f32),
                     ],
-                    stroke,
+                    major,
                 );
+            }
+            let r = (1.1 * z).clamp(0.8, 1.6);
+            for x in a.x..=b.x + 1 {
+                for y in a.y..=b.y + 1 {
+                    painter.circle_filled(self.to_screen(origin, x as f32, y as f32), r, GRID);
+                }
             }
         }
 
@@ -182,6 +192,7 @@ impl WorldView {
             | Block::Cross
             | Block::Via => {
                 let w = 6.0 * z;
+                let mut arms = Vec::new();
                 for d in Dir::ALL {
                     if !(self.world.accepts_wire(p, d)
                         && self.world.accepts_wire(p.step(d), d.opposite()))
@@ -194,13 +205,50 @@ impl WorldView {
                         Lane::Main
                     };
                     let (dx, dy) = d.delta();
-                    let edge = c + vec2(dx as f32, dy as f32) * (CELL * z / 2.0);
-                    painter.line_segment([c, edge], Stroke::new(w, fade(lit(lane))));
+                    // A hair past the cell edge, so neighbouring arms overlap.
+                    let edge = c + vec2(dx as f32, dy as f32) * (CELL * z / 2.0 + 0.5);
+                    arms.push((edge, lit(lane)));
+                }
+                // Each arm starts a little behind the centre, so arms overlap
+                // instead of leaving an anti-aliased seam where they meet.
+                let back = |edge: Pos2, by: f32| c + (c - edge).normalized() * by;
+                let bend = !(arms.len() == 2 && (arms[0].0 - c + (arms[1].0 - c)).length() < 0.5);
+                if !bend && arms[0].1 == arms[1].1 {
+                    // Straight through: one segment, so no seam in the middle.
+                    let col = arms[0].1;
+                    painter.line_segment([arms[0].0, arms[1].0], Stroke::new(w, fade(col)));
+                    if col == WIRE_ON && !below {
+                        let core = Color32::from_rgb(255, 238, 196);
+                        painter.line_segment([arms[0].0, arms[1].0], Stroke::new(w * 0.3, core));
+                    }
+                    arms.clear();
+                }
+                for (edge, col) in &arms {
+                    painter.line_segment([back(*edge, w * 0.5), *edge], Stroke::new(w, fade(*col)));
+                }
+                if !arms.is_empty() && bend && !matches!(block, Block::Via | Block::Cross) {
+                    // Round the joint where arms meet at a corner or a tee.
+                    painter.circle_filled(c, w * 0.5, fade(arms[0].1));
+                }
+                // A lit trace has a bright core.
+                if !below {
+                    let core = Color32::from_rgb(255, 238, 196);
+                    for (edge, col) in &arms {
+                        if *col == WIRE_ON {
+                            painter.line_segment(
+                                [back(*edge, w * 0.15), *edge],
+                                Stroke::new(w * 0.3, core),
+                            );
+                        }
+                    }
+                    if bend && arms.iter().any(|(_, col)| *col == WIRE_ON) {
+                        painter.circle_filled(c, w * 0.15, core);
+                    }
                 }
                 match block {
                     Block::Via => {
-                        painter.circle_filled(c, w * 1.3, fade(VIA));
-                        painter.circle_stroke(c, w * 1.3, Stroke::new(1.5 * z, fade(DARK)));
+                        painter.circle_filled(c, w * 1.4, fade(VIA));
+                        painter.circle_filled(c, w * 0.6, fade(DARK));
                     }
                     Block::Cross => {
                         // The vertical lane hops over the horizontal one.
@@ -211,9 +259,8 @@ impl WorldView {
                     Block::Trace { sides: 0 } => {
                         painter.circle_filled(c, w * 0.9, fade(lit(Lane::Main)));
                     }
-                    _ => {
-                        painter.circle_filled(c, w * 0.5, fade(lit(Lane::Main)));
-                    }
+                    // Joints are drawn with the arms above.
+                    _ => {}
                 }
             }
             Block::Gate { gate, facing } => {
@@ -516,12 +563,12 @@ impl WorldView {
         let z = self.zoom;
         let (x0, y0, x1, y1) = extent(d, anchor, facing);
         let body = match d {
-            Device::Ram { .. } => Color32::from_rgb(70, 110, 170),
-            Device::Rom { .. } => Color32::from_rgb(120, 90, 160),
-            Device::Screen { .. } => Color32::from_rgb(40, 44, 52),
-            Device::Keyboard => Color32::from_rgb(150, 150, 160),
-            Device::Display { .. } => Color32::from_rgb(40, 60, 50),
-            Device::Chip { .. } => Color32::from_rgb(55, 58, 66),
+            Device::Ram { .. } => Color32::from_rgb(30, 54, 78),
+            Device::Rom { .. } => Color32::from_rgb(58, 42, 78),
+            Device::Screen { .. } => Color32::from_rgb(26, 30, 30),
+            Device::Keyboard => Color32::from_rgb(48, 54, 50),
+            Device::Display { .. } => Color32::from_rgb(16, 38, 28),
+            Device::Chip { .. } => Color32::from_rgb(24, 30, 27),
         };
         let rect = Rect::from_min_max(
             self.to_screen(origin, x0 + 0.08, y0 + 0.08),
@@ -642,8 +689,133 @@ impl WorldView {
         }
     }
 
-    /// Fit the camera to the world at the next frame.
     pub fn refit(&mut self) {
         self.fit = true;
+    }
+}
+
+/// A small drawing of `block` for the palette, in `r`.
+pub fn palette_icon(painter: &egui::Painter, r: Rect, block: &Block, lit: bool) {
+    let c = r.center();
+    let s = r.height().min(r.width());
+    let wire = if lit { WIRE_ON } else { theme::COPPER };
+    let line = Stroke::new(1.6, if lit { Color32::WHITE } else { GATE_LINE });
+    let trace = |a: Pos2, b: Pos2| painter.line_segment([a, b], Stroke::new(s * 0.16, wire));
+    let h = s * 0.5;
+    match block {
+        Block::Wire | Block::Trace { .. } => {
+            trace(c - vec2(h, 0.0), c + vec2(0.0, 0.0));
+            trace(c, c + vec2(0.0, h));
+            painter.circle_filled(c, s * 0.08, wire);
+        }
+        Block::Straight { .. } => {
+            for dy in [-0.22, 0.22] {
+                trace(c + vec2(-h, dy * s), c + vec2(h, dy * s));
+            }
+        }
+        Block::Cross => {
+            trace(c - vec2(h, 0.0), c + vec2(h, 0.0));
+            trace(c - vec2(0.0, h), c + vec2(0.0, h));
+            painter.circle(c, s * 0.18, BG, line);
+        }
+        Block::Via => {
+            painter.circle_filled(c, s * 0.26, VIA);
+            painter.circle_filled(c, s * 0.11, DARK);
+        }
+        Block::Gate { gate, .. } => {
+            let symbol = match gate {
+                Gate::Not => Symbol::Not,
+                Gate::And => Symbol::And,
+                Gate::Nand => Symbol::Nand,
+                Gate::Or | Gate::Nor => Symbol::Or,
+                Gate::Xor => Symbol::Xor,
+            };
+            let (x0, x1) = (c.x - s * 0.34, c.x + s * 0.26);
+            let (y0, y1) = (c.y - s * 0.3, c.y + s * 0.3);
+            let outline = gate_outline(symbol, x0, x1, y0, y1);
+            if *gate == Gate::Xor {
+                let pts: Vec<Pos2> = (0..=10)
+                    .map(|k| {
+                        let t = k as f32 / 10.0;
+                        Pos2::new(
+                            x0 - s * 0.08 + 4.0 * t * (1.0 - t) * s * 0.1,
+                            y0 + (y1 - y0) * t,
+                        )
+                    })
+                    .collect();
+                painter.add(Shape::line(pts, line));
+            }
+            painter.add(Shape::closed_line(outline, line));
+            if matches!(gate, Gate::Not | Gate::Nand | Gate::Nor) {
+                painter.circle_stroke(Pos2::new(x1 + s * 0.06, c.y), s * 0.06, line);
+            }
+        }
+        Block::Switch { .. } => {
+            let body = Rect::from_center_size(c, vec2(s * 0.8, s * 0.42));
+            painter.rect_filled(body, s * 0.21, BASE);
+            painter.circle_filled(body.right_center() - vec2(s * 0.21, 0.0), s * 0.15, wire);
+        }
+        Block::Lamp => {
+            painter.circle_filled(c, s * 0.42, LAMP_ON.gamma_multiply(0.15));
+            painter.circle_filled(c, s * 0.26, LAMP_ON);
+        }
+        Block::Clock { .. } => {
+            let w = s * 0.4;
+            let (y0, y1) = (c.y + s * 0.2, c.y - s * 0.2);
+            let pts = vec![
+                Pos2::new(c.x - w, y0),
+                Pos2::new(c.x - w / 2.0, y0),
+                Pos2::new(c.x - w / 2.0, y1),
+                Pos2::new(c.x + w / 2.0, y1),
+                Pos2::new(c.x + w / 2.0, y0),
+                Pos2::new(c.x + w, y0),
+            ];
+            painter.add(Shape::line(pts, Stroke::new(2.0, wire)));
+        }
+        Block::Port { output, .. } => {
+            let body = Rect::from_center_size(c, vec2(s * 0.62, s * 0.5));
+            painter.rect_filled(body, 2.0, PORT);
+            let x = if *output { body.left() } else { body.right() };
+            let d = if *output { -1.0 } else { 1.0 };
+            painter.add(Shape::convex_polygon(
+                vec![
+                    Pos2::new(x + d * s * 0.2, c.y),
+                    Pos2::new(x, c.y - s * 0.12),
+                    Pos2::new(x, c.y + s * 0.12),
+                ],
+                PORT,
+                Stroke::NONE,
+            ));
+        }
+        Block::Device { device, .. } => {
+            let body = Rect::from_center_size(c, vec2(s * 0.86, s * 0.62));
+            painter.rect_filled(body, 2.0, Color32::from_rgb(22, 27, 25));
+            painter.rect_stroke(body, 2.0, line, egui::StrokeKind::Inside);
+            match device {
+                Device::Screen { .. } => {
+                    for k in 0..4 {
+                        let x = body.left() + body.width() * (0.2 + 0.2 * k as f32);
+                        painter.circle_filled(
+                            Pos2::new(x, c.y),
+                            s * 0.04,
+                            Color32::from_rgb(140, 255, 160),
+                        );
+                    }
+                }
+                _ => {
+                    // Pins along both long edges, like a DIP package.
+                    for k in 0..4 {
+                        let x = body.left() + body.width() * (0.2 + 0.2 * k as f32);
+                        for y in [body.top(), body.bottom()] {
+                            painter.line_segment(
+                                [Pos2::new(x, y - s * 0.07), Pos2::new(x, y + s * 0.07)],
+                                Stroke::new(1.6, VIA),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Block::Cover { .. } => {}
     }
 }

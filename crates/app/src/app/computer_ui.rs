@@ -37,7 +37,7 @@ impl App {
                 let c = match self.computer() {
                     Ok(c) => c,
                     Err(e) => {
-                        ui.colored_label(Color32::LIGHT_RED, e);
+                        ui.colored_label(crate::theme::BAD, e);
                         return;
                     }
                 };
@@ -185,7 +185,7 @@ impl App {
         let c = match self.computer() {
             Ok(c) => c,
             Err(e) => {
-                ui.colored_label(Color32::LIGHT_RED, e);
+                ui.colored_label(crate::theme::BAD, e);
                 return;
             }
         };
@@ -257,7 +257,7 @@ impl App {
         let c = match self.computer() {
             Ok(c) => c,
             Err(e) => {
-                ui.colored_label(Color32::LIGHT_RED, e);
+                ui.colored_label(crate::theme::BAD, e);
                 return;
             }
         };

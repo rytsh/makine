@@ -508,7 +508,7 @@ mod glyph_tests {
     fn ui_symbols_have_glyphs() {
         let ctx = egui::Context::default();
         // The app installs the DejaVu fallbacks on its first frame.
-        crate::wiki::install_fonts(&ctx);
+        crate::theme::install(&ctx);
         let sources = [
             include_str!("../app/mod.rs"),
             include_str!("../app/world_ui.rs"),
@@ -528,6 +528,7 @@ mod glyph_tests {
             include_str!("../worlds.rs"),
             include_str!("../design.rs"),
             include_str!("../sandbox.rs"),
+            include_str!("../theme.rs"),
         ];
         let mut missing = Vec::new();
         let mut out = ctx.run_ui(Default::default(), |ui| {
@@ -751,7 +752,7 @@ mod sandbox_tests {
         }
         let a = app.clone();
         let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1400.0, 900.0))
+            .with_size(egui::vec2(1400.0, 1300.0))
             .build_ui(move |ui| a.borrow_mut().ui(ui));
         h.run_steps(2);
         h.get_by_label("Ad").focus();

@@ -26,7 +26,7 @@ mod render;
 #[cfg(test)]
 mod tests;
 
-pub use panels::palette;
+pub use panels::{palette, tile, tiles};
 use render::BG;
 
 /// Every key of the world view: (keys, what they do), for the side panel.

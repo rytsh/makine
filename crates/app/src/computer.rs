@@ -212,7 +212,7 @@ impl Computer {
                 egui::Align2::CENTER_BOTTOM,
                 format!("Durdu: {h}"),
                 egui::FontId::proportional(16.0),
-                Color32::LIGHT_RED,
+                crate::theme::BAD,
             );
         }
         self.keyboard(ui);
@@ -241,9 +241,9 @@ impl Computer {
         });
         if let Some(h) = &self.halted {
             let color = if h.starts_with("ebreak") {
-                Color32::LIGHT_GREEN
+                crate::theme::GOOD
             } else {
-                Color32::LIGHT_RED
+                crate::theme::BAD
             };
             ui.colored_label(color, format!("Durdu: {h}"));
         }
