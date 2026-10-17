@@ -79,6 +79,9 @@ pub struct App {
     new_chip_name: String,
     rename_to: String,
     pin_editor: Option<PinEditor>,
+    /// World list UI state.
+    world_rename: String,
+    confirm_delete_world: bool,
 }
 
 enum TestResult {
@@ -129,6 +132,8 @@ impl App {
             new_chip_name: String::new(),
             rename_to: String::new(),
             pin_editor: None,
+            world_rename: String::new(),
+            confirm_delete_world: false,
         };
         app.open_level(first_open);
         app
@@ -734,20 +739,186 @@ fn design_for<'a>(progress: &'a mut Progress, target: &Target) -> &'a mut Design
 impl App {
     fn open_world(&mut self) {
         if self.world.is_none() {
-            let world = self
-                .progress
-                .worlds
-                .values()
-                .next()
+            let p = &self.progress;
+            let world = p
+                .last_world
+                .as_ref()
+                .and_then(|n| p.worlds.get(n))
+                .or_else(|| p.worlds.values().next())
                 .cloned()
                 .unwrap_or_else(|| makine_world::World::new("dünya"));
-            self.world = Some(crate::worldview::WorldView::new(world));
-        }
-        let lib = self.lib.clone();
-        if let Some(w) = &mut self.world {
-            w.set_library(lib);
+            self.switch_world(world);
         }
         self.view = View::World;
+    }
+
+    /// Show `world` in the world view (the current one is already saved).
+    fn switch_world(&mut self, world: makine_world::World) {
+        self.progress.last_world = Some(world.name.clone());
+        self.world_rename = world.name.clone();
+        let mut v = crate::worldview::WorldView::new(world);
+        v.set_library(self.lib.clone());
+        self.world = Some(v);
+        self.store_world();
+    }
+
+    /// The list of worlds and what can be done with them.
+    fn worlds_section(&mut self, ui: &mut Ui) {
+        let current = self.world.as_ref().map(|w| w.world.name.clone());
+        let n = self.progress.worlds.len();
+        let mut open = None;
+        egui::CollapsingHeader::new(RichText::new(format!("Dünyalar ({n})")).strong())
+            .id_salt("worlds")
+            .show(ui, |ui| {
+                for name in self.progress.worlds.keys() {
+                    let me = current.as_deref() == Some(name.as_str());
+                    if ui.selectable_label(me, format!("🌍 {name}")).clicked() && !me {
+                        open = Some(name.clone());
+                    }
+                }
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("+ Yeni").clicked() {
+                        let name = crate::worlds::unique_name("dünya", &self.progress.worlds);
+                        self.switch_to_new(makine_world::World::new(name));
+                    }
+                    if ui.button("Kopyasını al").clicked() {
+                        if let Some(w) = &self.world {
+                            let mut copy = w.world.clone();
+                            copy.name =
+                                crate::worlds::unique_name(&w.world.name, &self.progress.worlds);
+                            self.switch_to_new(copy);
+                        }
+                    }
+                });
+                ui.horizontal(|ui| {
+                    let l = ui.label("Ad").id;
+                    ui.add(egui::TextEdit::singleline(&mut self.world_rename).desired_width(120.0))
+                        .labelled_by(l);
+                    if ui.button("Değiştir").clicked() {
+                        self.rename_world();
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("📤 Dosyaya kaydet…").clicked() {
+                        self.export_world();
+                    }
+                    if ui.button("📥 Dosyadan aç…").clicked() {
+                        self.import_world();
+                    }
+                });
+                let can_delete = n > 1;
+                let r = ui.add_enabled(can_delete, egui::Button::new("🗑 Bu dünyayı sil"));
+                let r = if can_delete {
+                    r
+                } else {
+                    r.on_disabled_hover_text("Son dünya silinemez")
+                };
+                if r.clicked() {
+                    self.confirm_delete_world = true;
+                }
+                if self.confirm_delete_world {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(Color32::LIGHT_RED, "Emin misin?");
+                        if ui.button("Evet, sil").clicked() {
+                            self.delete_world();
+                        }
+                        if ui.button("Vazgeç").clicked() {
+                            self.confirm_delete_world = false;
+                        }
+                    });
+                }
+            });
+        if let Some(name) = open {
+            if let Some(w) = self.progress.worlds.get(&name).cloned() {
+                self.switch_world(w);
+            }
+        }
+    }
+
+    fn switch_to_new(&mut self, world: makine_world::World) {
+        self.progress
+            .worlds
+            .insert(world.name.clone(), world.clone());
+        self.switch_world(world);
+    }
+
+    fn rename_world(&mut self) {
+        let to = self.world_rename.trim().to_string();
+        let Some(w) = &mut self.world else { return };
+        let from = w.world.name.clone();
+        if to == from {
+            return;
+        }
+        let err = crate::worlds::check_name(&to).err().or_else(|| {
+            self.progress
+                .worlds
+                .contains_key(&to)
+                .then(|| format!("'{to}' adında bir dünya var"))
+        });
+        if let Some(e) = err {
+            w.status = Some(e);
+            return;
+        }
+        self.progress.worlds.remove(&from);
+        w.world.name = to.clone();
+        self.progress.last_world = Some(to);
+        self.store_world();
+    }
+
+    fn delete_world(&mut self) {
+        self.confirm_delete_world = false;
+        let Some(w) = &self.world else { return };
+        let name = w.world.name.clone();
+        if self.progress.worlds.len() < 2 {
+            return;
+        }
+        self.progress.worlds.remove(&name);
+        let next = self.progress.worlds.values().next().cloned().unwrap();
+        self.world = None;
+        self.switch_world(next);
+    }
+
+    fn export_world(&mut self) {
+        let Some(w) = &self.world else { return };
+        let text = match crate::worlds::export(&w.world, &self.lib, &self.progress.sandbox) {
+            Ok(t) => t,
+            Err(e) => {
+                self.status = Some(e);
+                return;
+            }
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("makine dünyası", &[crate::worlds::EXT])
+            .set_file_name(format!("{}.{}", w.world.name, crate::worlds::EXT))
+            .save_file()
+        else {
+            return;
+        };
+        self.status = Some(match std::fs::write(&path, text) {
+            Ok(()) => format!("Kaydedildi: {}", path.display()),
+            Err(e) => format!("{}: {e}", path.display()),
+        });
+    }
+
+    fn import_world(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("makine dünyası", &[crate::worlds::EXT])
+            .pick_file()
+        else {
+            return;
+        };
+        let result = std::fs::read_to_string(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))
+            .and_then(|t| crate::worlds::import(&t, &self.lib, &mut self.progress.sandbox));
+        match result {
+            Ok(mut world) => {
+                world.name = crate::worlds::unique_name(&world.name, &self.progress.worlds);
+                self.refresh_library();
+                self.status = Some(format!("'{}' açıldı.", world.name));
+                self.switch_to_new(world);
+            }
+            Err(e) => self.status = Some(e),
+        }
     }
 
     /// Save the open world into the progress file. Called after edits;
@@ -763,8 +934,14 @@ impl App {
 
     /// Right panel in the world view: build bar, layer, simulation.
     fn world_panel(&mut self, ui: &mut Ui) {
+        if self.world.is_none() {
+            return;
+        }
+        let title = self.world.as_ref().unwrap().world.name.clone();
+        ui.heading(format!("🌍 {title}"));
+        self.worlds_section(ui);
+        ui.separator();
         let Some(w) = &mut self.world else { return };
-        ui.heading("🌍 Dünya");
         ui.label(
             RichText::new(
                 "Sol tık: yerleştir (sürükleyerek boya) · Sağ tık: sil · R: döndür · \
@@ -2184,6 +2361,62 @@ mod sandbox_tests {
         let a = app.borrow();
         let w = a.world.as_ref().unwrap();
         assert!(w.error().is_none(), "{:?}", w.error());
+    }
+
+    /// Several worlds: create, switch, rename, delete; edits stay in the
+    /// world they were made in.
+    #[test]
+    fn many_worlds() {
+        use makine_world::{Block, Edit, Pos};
+        let app = app_with_levels();
+        app.borrow_mut().open_world();
+        let a = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 1000.0))
+            .build_ui(move |ui| a.borrow_mut().ui(ui));
+        h.run_steps(2);
+        let edit = |app: &Rc<RefCell<App>>, x| {
+            let mut a = app.borrow_mut();
+            a.world.as_mut().unwrap().edit(Edit::Set {
+                pos: Pos::new(x, 0, 0),
+                block: Some(Block::Wire),
+            });
+            a.store_world();
+        };
+        edit(&app, 0);
+        h.get_by_label_contains("Dünyalar (").click();
+        h.run_steps(2);
+        h.get_by_label("+ Yeni").click();
+        h.run_steps(2);
+        assert_eq!(app.borrow().world.as_ref().unwrap().world.name, "dünya 2");
+        assert!(app.borrow().world.as_ref().unwrap().world.is_empty());
+        edit(&app, 5);
+        edit(&app, 6);
+        // Back to the first one.
+        h.get_by_label("🌍 dünya").click();
+        h.run_steps(2);
+        assert_eq!(app.borrow().world.as_ref().unwrap().world.len(), 1);
+        assert_eq!(app.borrow().progress.worlds["dünya 2"].len(), 2);
+        // Rename it.
+        let f = h.get_by_label("Ad");
+        f.focus();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Ad").type_text("şehir");
+        h.run();
+        h.get_by_label("Değiştir").click();
+        h.run_steps(2);
+        let names: Vec<String> = app.borrow().progress.worlds.keys().cloned().collect();
+        assert_eq!(names, ["dünya 2", "şehir"]);
+        assert_eq!(app.borrow().progress.last_world.as_deref(), Some("şehir"));
+        // Delete it, with confirmation.
+        h.get_by_label("🗑 Bu dünyayı sil").click();
+        h.run_steps(2);
+        h.get_by_label("Evet, sil").click();
+        h.run_steps(2);
+        let names: Vec<String> = app.borrow().progress.worlds.keys().cloned().collect();
+        assert_eq!(names, ["dünya 2"]);
+        assert_eq!(app.borrow().world.as_ref().unwrap().world.name, "dünya 2");
     }
 
     /// Changing pins in the panel applies them to the chip.

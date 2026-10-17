@@ -39,6 +39,9 @@ pub struct Progress {
     /// Block worlds, by name.
     #[serde(default)]
     pub worlds: BTreeMap<String, makine_world::World>,
+    /// The world open last.
+    #[serde(default)]
+    pub last_world: Option<String>,
 }
 
 fn yes() -> bool {
@@ -56,6 +59,7 @@ impl Default for Progress {
             fullscreen: false,
             sandbox: Sandbox::default(),
             worlds: BTreeMap::new(),
+            last_world: None,
         }
     }
 }
