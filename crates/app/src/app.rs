@@ -82,6 +82,10 @@ pub struct App {
     /// World list UI state.
     world_rename: String,
     confirm_delete_world: bool,
+    /// Building together on the local network.
+    session: Option<crate::session::Session>,
+    net_name: String,
+    net_addr: String,
 }
 
 enum TestResult {
@@ -134,6 +138,9 @@ impl App {
             pin_editor: None,
             world_rename: String::new(),
             confirm_delete_world: false,
+            session: None,
+            net_name: crate::session::default_name(),
+            net_addr: String::new(),
         };
         app.open_level(first_open);
         app
@@ -657,12 +664,17 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| {
+                    self.net_tick();
                     if let Some(w) = &mut self.world {
                         let rev = w.world.revision();
                         w.show(ui);
                         if w.world.revision() != rev {
                             self.store_world();
                         }
+                    }
+                    if self.session.is_some() {
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(30));
                     }
                 });
             return;
@@ -763,6 +775,119 @@ impl App {
     }
 
     /// The list of worlds and what can be done with them.
+    /// Move edits between the world view and the network.
+    fn net_tick(&mut self) {
+        let (Some(s), Some(w)) = (&mut self.session, &mut self.world) else {
+            return;
+        };
+        let rev = w.world.revision();
+        let (closed, new_chips) = s.tick(w, &self.lib, &mut self.progress.sandbox);
+        let changed = w.world.revision() != rev;
+        if changed {
+            self.store_world();
+        }
+        if new_chips {
+            self.refresh_library();
+            self.save();
+        }
+        if let Some(reason) = closed {
+            self.leave_session(Some(reason));
+        }
+    }
+
+    fn leave_session(&mut self, reason: Option<String>) {
+        let Some(s) = self.session.take() else { return };
+        if let Some(w) = &mut self.world {
+            w.others.clear();
+        }
+        let msg = reason.unwrap_or_else(|| "Paylaşım bitti.".into());
+        if s.is_host() {
+            self.status = Some(msg);
+            return;
+        }
+        // A guest goes back to their own last world.
+        self.status = Some(format!("{msg} Kendi dünyana döndün."));
+        self.world = None;
+        self.open_world();
+    }
+
+    /// Hosting and joining.
+    fn network_section(&mut self, ui: &mut Ui) {
+        let title = match &self.session {
+            Some(s) => format!("🔗 Birlikte kur ({} kişi)", s.players().len().max(1)),
+            None => "🔗 Birlikte kur".into(),
+        };
+        egui::CollapsingHeader::new(RichText::new(title).strong())
+            .id_salt("network")
+            .show(ui, |ui| {
+                let Some(s) = &self.session else {
+                    ui.label(
+                        RichText::new(
+                            "Aynı ağdaki (aynı Wi-Fi) arkadaşlarınla aynı dünyada birlikte kur.",
+                        )
+                        .weak()
+                        .small(),
+                    );
+                    ui.horizontal(|ui| {
+                        let l = ui.label("Adın").id;
+                        ui.add(egui::TextEdit::singleline(&mut self.net_name).desired_width(120.0))
+                            .labelled_by(l);
+                    });
+                    if ui
+                        .button("📡 Bu dünyayı paylaşıma aç")
+                        .on_hover_text("Arkadaşların bu dünyaya bağlanabilir")
+                        .clicked()
+                    {
+                        match crate::session::Session::host(&self.net_name, makine_net::PORT) {
+                            Ok(s) => self.session = Some(s),
+                            Err(e) => {
+                                self.status = Some(format!(
+                                    "Paylaşım açılamadı ({e}). Başka bir makine zaten açık olabilir."
+                                ))
+                            }
+                        }
+                    }
+                    ui.horizontal(|ui| {
+                        let l = ui.label("Adres").id;
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.net_addr)
+                                .hint_text("192.168.1.20")
+                                .desired_width(120.0),
+                        )
+                        .labelled_by(l);
+                        if ui.button("Bağlan").clicked() {
+                            // Save our own world before showing theirs.
+                            self.store_world();
+                            match crate::session::Session::join(&self.net_addr, &self.net_name) {
+                                Ok(s) => self.session = Some(s),
+                                Err(e) => {
+                                    self.status = Some(format!(
+                                        "Bağlanılamadı: {e}. Adresi ve aynı ağda olduğunuzu kontrol et."
+                                    ))
+                                }
+                            }
+                        }
+                    });
+                    return;
+                };
+                ui.label(RichText::new(&s.status).small());
+                let me = s.my_id();
+                for p in s.players() {
+                    let tag = match (p.id == makine_net::HOST_ID, Some(p.id) == me) {
+                        (true, true) => " (sen, ev sahibi)",
+                        (true, false) => " (ev sahibi)",
+                        (false, true) => " (sen)",
+                        _ => "",
+                    };
+                    ui.colored_label(crate::session::color(p.id), format!("● {}{tag}", p.name));
+                }
+                let label = if s.is_host() { "Paylaşımı kapat" } else { "Ayrıl" };
+                if ui.button(label).clicked() {
+                    self.leave_session(None);
+                }
+            });
+    }
+
     fn worlds_section(&mut self, ui: &mut Ui) {
         let current = self.world.as_ref().map(|w| w.world.name.clone());
         let n = self.progress.worlds.len();
@@ -924,6 +1049,10 @@ impl App {
     /// Save the open world into the progress file. Called after edits;
     /// saving is cheap for worlds of reasonable size.
     fn store_world(&mut self) {
+        // A world joined over the network belongs to its host.
+        if self.session.as_ref().is_some_and(|s| !s.is_host()) {
+            return;
+        }
         if let Some(w) = &self.world {
             self.progress
                 .worlds
@@ -939,7 +1068,11 @@ impl App {
         }
         let title = self.world.as_ref().unwrap().world.name.clone();
         ui.heading(format!("🌍 {title}"));
-        self.worlds_section(ui);
+        // Switching worlds mid-session would leave the others behind.
+        if self.session.is_none() {
+            self.worlds_section(ui);
+        }
+        self.network_section(ui);
         ui.separator();
         let Some(w) = &mut self.world else { return };
         ui.label(
@@ -2024,6 +2157,47 @@ mod tests {
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-world-chips.png")).unwrap();
 
+        // Building together: a guest's cursor in the host's world.
+        {
+            let mut a = app.borrow_mut();
+            a.session = Some(crate::session::Session::host("ray", 0).unwrap());
+            a.world.as_mut().unwrap().selection = None;
+        }
+        let mut guest = crate::session::Session::join(
+            &format!(
+                "127.0.0.1:{}",
+                match &app.borrow().session.as_ref().unwrap().link {
+                    crate::session::Link::Host(h) => h.port(),
+                    _ => unreachable!(),
+                }
+            ),
+            "ayşe",
+        )
+        .unwrap();
+        let mut gview = crate::worldview::WorldView::default();
+        let mut gsand = crate::sandbox::Sandbox::default();
+        let glib = app.borrow().lib.clone();
+        for _ in 0..40 {
+            guest.tick(&mut gview, &glib, &mut gsand);
+            harness.run();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if let crate::session::Link::Client(c) = &mut guest.link {
+            c.send_cursor(Some(makine_world::Pos::new(4, 1, 0)));
+        }
+        for _ in 0..20 {
+            guest.tick(&mut gview, &glib, &mut gsand);
+            harness.run();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        egui_kittest::kittest::Queryable::get_by_label_contains(&harness, "Birlikte kur").click();
+        harness.run_steps(3);
+        let img = harness.render().unwrap();
+        img.save(format!("{dir}/makine-world-together.png"))
+            .unwrap();
+        drop(guest);
+        app.borrow_mut().leave_session(None);
+
         // Wiki pages, with their images loaded.
         for slug in ["nand", "kapilar", "hafiza", "islemci"] {
             {
@@ -2460,6 +2634,113 @@ mod sandbox_tests {
         let names: Vec<String> = app.borrow().progress.worlds.keys().cloned().collect();
         assert_eq!(names, ["dünya 2"]);
         assert_eq!(app.borrow().world.as_ref().unwrap().world.name, "dünya 2");
+    }
+
+    /// Two apps on this machine build together: edits and free chips
+    /// travel both ways, and the guest's own worlds are left alone.
+    #[test]
+    fn build_together() {
+        use makine_world::{Block, Device, Dir, Edit, Pos};
+        let host = app_with_levels();
+        let guest = app_with_levels();
+        for a in [&host, &guest] {
+            a.borrow_mut().open_world();
+        }
+        // The host has a free chip and places it in the world.
+        {
+            let mut h = host.borrow_mut();
+            let mut b = makine_sim::ChipBuilder::new("Ikili", &["a"], &["q"]);
+            let x = b.input("a");
+            let y = b.chip1("Not", &[x]);
+            let z = b.chip1("Not", &[y]);
+            b.output("q", z);
+            h.progress
+                .sandbox
+                .chips
+                .insert("Ikili".into(), Design::new(b.build()));
+            h.refresh_library();
+            let w = h.world.as_mut().unwrap();
+            w.edit(Edit::Set {
+                pos: Pos::new(0, 0, 0),
+                block: Some(Block::Lamp),
+            });
+            h.session = Some(crate::session::Session::host("ev", 0).unwrap());
+        }
+        let port = match &host.borrow().session.as_ref().unwrap().link {
+            crate::session::Link::Host(h) => h.port(),
+            _ => unreachable!(),
+        };
+        let guest_world_before = guest.borrow().world.as_ref().unwrap().world.name.clone();
+        guest.borrow_mut().session =
+            Some(crate::session::Session::join(&format!("127.0.0.1:{port}"), "misafir").unwrap());
+        let pump = |until: &dyn Fn() -> bool| {
+            let t = std::time::Instant::now();
+            while !until() {
+                host.borrow_mut().net_tick();
+                guest.borrow_mut().net_tick();
+                assert!(t.elapsed() < std::time::Duration::from_secs(5), "timed out");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        pump(&|| guest.borrow().session.as_ref().unwrap().ready);
+        assert_eq!(guest.borrow().world.as_ref().unwrap().world.len(), 1);
+
+        // Host places the free chip; the guest gets the block and the chip.
+        {
+            let mut h = host.borrow_mut();
+            let p = h.lib.kind_pins(&PartKind::Chip("Ikili".into())).unwrap();
+            let d = Device::Chip {
+                name: "Ikili".into(),
+                inputs: p.inputs,
+                outputs: p.outputs,
+            };
+            let w = h.world.as_mut().unwrap();
+            let e = w
+                .world
+                .place_device(d, Pos::new(3, 3, 0), Dir::East)
+                .unwrap();
+            w.edit(e);
+        }
+        pump(&|| guest.borrow().progress.sandbox.chips.contains_key("Ikili"));
+        pump(&|| {
+            guest.borrow().world.as_ref().unwrap().world.len()
+                == host.borrow().world.as_ref().unwrap().world.len()
+        });
+        assert!(guest.borrow().lib.contains("Ikili"));
+
+        // Guest edits; the host sees it and saves it.
+        guest.borrow_mut().world.as_mut().unwrap().edit(Edit::Set {
+            pos: Pos::new(9, 9, 0),
+            block: Some(Block::Wire),
+        });
+        pump(&|| {
+            host.borrow()
+                .world
+                .as_ref()
+                .unwrap()
+                .world
+                .get(Pos::new(9, 9, 0))
+                .is_some()
+        });
+        let hname = host.borrow().world.as_ref().unwrap().world.name.clone();
+        assert!(host.borrow().progress.worlds[&hname]
+            .get(Pos::new(9, 9, 0))
+            .is_some());
+        // The shared world is not saved among the guest's worlds.
+        assert!(guest
+            .borrow()
+            .progress
+            .worlds
+            .values()
+            .all(|w| w.get(Pos::new(9, 9, 0)).is_none()));
+
+        // The host stops sharing: the guest goes back to their own world.
+        host.borrow_mut().leave_session(None);
+        pump(&|| guest.borrow().session.is_none());
+        assert_eq!(
+            guest.borrow().world.as_ref().unwrap().world.name,
+            guest_world_before
+        );
     }
 
     /// Changing pins in the panel applies them to the chip.

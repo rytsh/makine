@@ -2053,6 +2053,7 @@ dependencies = [
  "egui_kittest",
  "image",
  "makine-levels",
+ "makine-net",
  "makine-pack",
  "makine-rv",
  "makine-sim",
@@ -2068,6 +2069,16 @@ version = "0.1.0"
 dependencies = [
  "makine-rv",
  "makine-sim",
+]
+
+[[package]]
+name = "makine-net"
+version = "0.1.0"
+dependencies = [
+ "makine-pack",
+ "makine-world",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ mod canvas;
 mod computer;
 mod design;
 mod sandbox;
+mod session;
 mod store;
 mod wiki;
 mod worlds;

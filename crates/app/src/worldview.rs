@@ -178,6 +178,10 @@ pub struct WorldView {
     pub chip_name: String,
     /// Something the app must do (it owns the chip library).
     pub request: Option<Request>,
+    /// Edits made here since the app last took them (to share them).
+    pub outbox: Vec<Edit>,
+    /// Other players' cursors: name, colour, cell.
+    pub others: Vec<(String, Color32, Pos)>,
 }
 
 /// Requests from the world view to the app.
@@ -229,7 +233,27 @@ impl WorldView {
             clipboard: None,
             chip_name: String::new(),
             request: None,
+            outbox: Vec::new(),
+            others: Vec::new(),
         }
+    }
+
+    /// Apply another player's edit. It is not undoable here (undo only
+    /// takes back this player's own edits).
+    pub fn apply_remote(&mut self, e: Edit) {
+        self.world.apply(e);
+        // A device deleted by someone else cannot stay selected.
+        if self
+            .selected
+            .is_some_and(|a| self.world.device_at(a).is_none())
+        {
+            self.selected = None;
+        }
+    }
+
+    /// The cell under the pointer, if any.
+    pub fn hover(&self) -> Option<Pos> {
+        self.hover
     }
 
     /// Set the player's chip library (used by chip blocks).
@@ -697,6 +721,7 @@ impl WorldView {
 
     /// Apply an edit made by the player (undoable).
     pub fn edit(&mut self, e: Edit) {
+        self.outbox.push(e.clone());
         let inv = self.world.apply(e);
         self.undo.push(inv);
         self.redo.clear();
@@ -707,6 +732,7 @@ impl WorldView {
 
     pub fn undo(&mut self) {
         if let Some(e) = self.undo.pop() {
+            self.outbox.push(e.clone());
             let inv = self.world.apply(e);
             self.redo.push(inv);
         }
@@ -714,6 +740,7 @@ impl WorldView {
 
     pub fn redo(&mut self) {
         if let Some(e) = self.redo.pop() {
+            self.outbox.push(e.clone());
             let inv = self.world.apply(e);
             self.undo.push(inv);
         }
@@ -1513,6 +1540,25 @@ impl WorldView {
                     Stroke::new(1.0, Color32::from_rgba_unmultiplied(120, 200, 255, 160)),
                 ));
             }
+        }
+
+        // Other players' cursors, with their names.
+        for (name, color, p) in &self.others {
+            let (x, y, zz) = (p.x as f32, p.y as f32, p.z as f32);
+            let tile = vec![
+                self.to_screen(origin, x, y, zz),
+                self.to_screen(origin, x + 1.0, y, zz),
+                self.to_screen(origin, x + 1.0, y + 1.0, zz),
+                self.to_screen(origin, x, y + 1.0, zz),
+            ];
+            painter.add(Shape::closed_line(tile, Stroke::new(2.5, *color)));
+            painter.text(
+                self.to_screen(origin, x + 0.5, y + 0.5, zz + 1.2),
+                Align2::CENTER_BOTTOM,
+                name,
+                FontId::proportional(12.0),
+                *color,
+            );
         }
 
         // The selected device.
