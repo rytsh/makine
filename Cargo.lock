@@ -2053,6 +2053,7 @@ dependencies = [
  "egui_kittest",
  "image",
  "makine-levels",
+ "makine-pack",
  "makine-rv",
  "makine-sim",
  "rfd",
@@ -2069,6 +2070,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "makine-pack"
+version = "0.1.0"
+dependencies = [
+ "makine-sim",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "makine-rv"
 version = "0.1.0"
 
@@ -2078,6 +2088,10 @@ version = "0.1.0"
 dependencies = [
  "serde",
 ]
+
+[[package]]
+name = "makine-world"
+version = "0.1.0"
 
 [[package]]
 name = "memchr"

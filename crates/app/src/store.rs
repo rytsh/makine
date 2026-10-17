@@ -10,6 +10,7 @@ use makine_sim::{ChipDef, Library};
 use serde::{Deserialize, Serialize};
 
 use crate::design::Design;
+use crate::sandbox::Sandbox;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Progress {
@@ -32,6 +33,9 @@ pub struct Progress {
     /// Start in full screen.
     #[serde(default)]
     pub fullscreen: bool,
+    /// Free-form chips.
+    #[serde(default)]
+    pub sandbox: Sandbox,
 }
 
 fn yes() -> bool {
@@ -47,15 +51,21 @@ impl Default for Progress {
             program: None,
             symbols: true,
             fullscreen: false,
+            sandbox: Sandbox::default(),
         }
     }
 }
 
 impl Progress {
-    /// The chips the player has built. With `fast`, solved chips are
-    /// simulated by their native models instead of their gates.
+    /// The chips the player has built: solved levels and sandbox chips.
+    /// With `fast`, solved level chips are simulated by their native models
+    /// instead of their gates.
     pub fn library(&self, fast: bool) -> Library {
-        makine_levels::fast::library(self.solutions.values(), fast)
+        let mut lib = makine_levels::fast::library(self.solutions.values(), fast);
+        for d in self.sandbox.chips.values() {
+            lib.insert(d.def.clone());
+        }
+        lib
     }
 
     pub fn solved(&self, chip: &str) -> bool {

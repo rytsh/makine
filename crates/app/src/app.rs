@@ -9,8 +9,27 @@ use makine_sim::{Circuit, Library, PartKind, Pin, Verdict};
 use crate::canvas::{format_value, Canvas, NewPart, ON};
 use crate::computer::{self, Computer, Engine};
 use crate::design::Design;
+use crate::sandbox::{self, PinEditor};
 use crate::store::Progress;
 use crate::wiki::{self, Wiki};
+
+/// What the editor is working on.
+#[derive(Clone)]
+enum Target {
+    Level(&'static Level),
+    /// A sandbox chip, by name.
+    Free(String),
+}
+
+impl PartialEq for Target {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Target::Level(a), Target::Level(b)) => a.chip == b.chip,
+            (Target::Free(a), Target::Free(b)) => a == b,
+            _ => false,
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
@@ -26,7 +45,9 @@ enum View {
 pub struct App {
     progress: Progress,
     save_path: Option<PathBuf>,
+    /// The last level opened; the editor shows it when `target` is a level.
     level: &'static Level,
+    target: Target,
     canvas: Canvas,
     /// Library of solved chips, rebuilt when a level is passed.
     lib: Library,
@@ -50,6 +71,10 @@ pub struct App {
     wiki: Wiki,
     /// Wiki images are registered with egui on the first frame.
     wiki_installed: bool,
+    /// Sandbox UI state.
+    new_chip_name: String,
+    rename_to: String,
+    pin_editor: Option<PinEditor>,
 }
 
 enum TestResult {
@@ -79,6 +104,7 @@ impl App {
             progress,
             save_path,
             level: first_open,
+            target: Target::Level(first_open),
             canvas: Canvas::new(),
             lib,
             sim: Err(String::new()),
@@ -95,36 +121,61 @@ impl App {
             play_started: 0.0,
             wiki: Wiki::default(),
             wiki_installed: false,
+            new_chip_name: String::new(),
+            rename_to: String::new(),
+            pin_editor: None,
         };
         app.open_level(first_open);
         app
     }
 
     fn design(&mut self) -> &mut Design {
-        let level = self.level;
-        self.progress
-            .designs
-            .entry(level.chip.to_string())
-            .or_insert_with(|| Design::new(level.blank()))
+        design_for(&mut self.progress, &self.target)
     }
 
     fn open_level(&mut self, level: &'static Level) {
         self.level = level;
         self.just_opened = true;
+        self.open_target(Target::Level(level));
+    }
+
+    fn open_free(&mut self, name: String) {
+        self.view = View::Editor;
+        self.rename_to = name.clone();
+        self.pin_editor = None;
+        self.open_target(Target::Free(name));
+    }
+
+    fn open_target(&mut self, target: Target) {
+        self.target = target;
         self.canvas = Canvas::new();
         self.canvas.symbols = self.progress.symbols;
-        self.inputs = vec![0; level.inputs.len()];
+        self.inputs = vec![0; self.design().def.inputs.len()];
         self.result = None;
-        // Earlier levels may have been re-solved; drop wires that no longer fit.
+        // Chips used here may have changed; drop wires that no longer fit.
         let lib = self.lib.clone();
         self.design().prune(&lib);
         self.rebuild();
     }
 
+    /// Rebuild the library after sandbox chips changed.
+    fn refresh_library(&mut self) {
+        self.lib = self.progress.library(self.progress.fast);
+        self.computer = None;
+    }
+
     /// Recompile the live simulation after the design changed.
     fn rebuild(&mut self) {
         let def = self.design().def.clone();
-        self.sim = Circuit::compile_def(&self.lib, &def).map_err(|e| e.to_string());
+        // A sandbox chip's own entry in the library is the saved version;
+        // compile against a library without it, so it cannot contain itself.
+        let mut lib = self.lib.clone();
+        if let Target::Free(name) = &self.target {
+            lib.remove(name);
+            lib.insert(def.clone());
+        }
+        self.sim = Circuit::compile_def(&lib, &def).map_err(|e| e.to_string());
+        self.inputs.resize(def.inputs.len(), 0);
         self.run();
     }
 
@@ -148,7 +199,9 @@ impl App {
     }
 
     fn run_test(&mut self) {
-        let level = self.level;
+        let Target::Level(level) = self.target else {
+            return;
+        };
         let def = self.design().def.clone();
         self.result = Some(match check(level, &self.lib, &def) {
             Err(e) => TestResult::Error(e.to_string()),
@@ -188,7 +241,7 @@ impl App {
                 .iter()
                 .filter(|l| self.progress.solved(l.chip))
                 .count();
-            let current = all[start..end].iter().any(|l| l.chip == self.level.chip);
+            let current = matches!(&self.target, Target::Level(t) if all[start..end].iter().any(|l| l.chip == t.chip));
             let header = format!("{section}  ({done}/{})", end - start);
             egui::CollapsingHeader::new(RichText::new(header).strong())
                 .id_salt(section)
@@ -208,7 +261,8 @@ impl App {
                         } else {
                             "🔒"
                         };
-                        let selected = self.level.chip == level.chip && self.view == View::Editor;
+                        let selected =
+                            self.target == Target::Level(level) && self.view == View::Editor;
                         let label = format!("{mark}  {}", level.title);
                         let r = ui.add_enabled(unlocked, egui::Button::selectable(selected, label));
                         if r.clicked() && !selected {
@@ -224,6 +278,8 @@ impl App {
             self.open_level(level);
         }
         ui.add_space(6.0);
+        ui.separator();
+        self.sandbox_list(ui);
         ui.separator();
         if ui
             .add(egui::Button::selectable(
@@ -279,35 +335,47 @@ impl App {
     fn parts_panel(&mut self, ui: &mut Ui) {
         ui.label(RichText::new("Parçalar").strong());
         ui.label(RichText::new("Tuvale sürükle").weak().small());
-        let mut kinds: Vec<(String, PartKind, &str)> = vec![(
+        let mut kinds: Vec<(String, PartKind, String)> = vec![(
             "NAND".into(),
             PartKind::Nand,
-            "Her şeyin temeli: iki giriş de 1 ise 0, değilse 1.",
+            "Her şeyin temeli: iki giriş de 1 ise 0, değilse 1.".into(),
         )];
-        let solved: Vec<&Level> = self
-            .level
-            .allowed_chips()
-            .filter(|l| self.progress.solved(l.chip))
-            .collect();
-        for l in &solved {
-            kinds.push((l.chip.into(), PartKind::Chip(l.chip.into()), l.title));
+        let (allowed, buses): (Vec<&Level>, bool) = match &self.target {
+            Target::Level(level) => (
+                level.allowed_chips().collect(),
+                level.index() >= find("Mux32").unwrap().index(),
+            ),
+            Target::Free(_) => (levels().to_vec(), true),
+        };
+        for l in allowed.iter().filter(|l| self.progress.solved(l.chip)) {
+            kinds.push((l.chip.into(), PartKind::Chip(l.chip.into()), l.title.into()));
         }
-        let buses = self.level.index() >= find("Mux32").unwrap().index();
+        if let Target::Free(me) = &self.target {
+            for name in self.progress.sandbox.chips.keys() {
+                if !self.progress.sandbox.uses(name, me) {
+                    kinds.push((
+                        format!("★ {name}"),
+                        PartKind::Chip(name.clone()),
+                        "Senin çipin".into(),
+                    ));
+                }
+            }
+        }
         if buses {
             kinds.push((
                 "Böl".into(),
                 PartKind::Split(vec![1; 8]),
-                "Bus'ı parçalara ayır. Sağ tıkla: grupları ayarla.",
+                "Bus'ı parçalara ayır. Sağ tıkla: grupları ayarla.".into(),
             ));
             kinds.push((
                 "Birleştir".into(),
                 PartKind::Join(vec![1; 8]),
-                "Parçaları tek bus yap. Sağ tıkla: grupları ayarla.",
+                "Parçaları tek bus yap. Sağ tıkla: grupları ayarla.".into(),
             ));
             kinds.push((
                 "Sabit".into(),
                 PartKind::Const { width: 1, value: 1 },
-                "Hep aynı değeri verir. Sağ tıkla: değeri ayarla.",
+                "Hep aynı değeri verir. Sağ tıkla: değeri ayarla.".into(),
             ));
         }
         for (i, (name, kind, tip)) in kinds.into_iter().enumerate() {
@@ -379,30 +447,7 @@ impl App {
                 .weak()
                 .small(),
         );
-        let def_inputs = self.design().def.inputs.clone();
-        let mut changed = false;
-        for (i, p) in def_inputs.iter().enumerate().filter(|(_, p)| p.width > 1) {
-            ui.horizontal(|ui| {
-                let label = ui.label(&p.name).id;
-                let mut v = self.inputs[i];
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut v)
-                            .hexadecimal(1, false, true)
-                            .prefix("0x")
-                            .range(0..=makine_sim::mask(p.width)),
-                    )
-                    .labelled_by(label)
-                    .changed()
-                {
-                    self.inputs[i] = v;
-                    changed = true;
-                }
-            });
-        }
-        if changed {
-            self.run();
-        }
+        self.bus_inputs(ui);
         ui.horizontal(|ui| {
             if ui
                 .button("Durumu sıfırla")
@@ -565,10 +610,11 @@ impl App {
             .default_size(320.0)
             .resizable(true)
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| match self.view {
-                    View::Editor => self.level_panel(ui),
-                    View::Computer | View::Play => self.computer_controls(ui),
-                    View::Wiki => self.wiki.contents(ui),
+                egui::ScrollArea::vertical().show(ui, |ui| match (&self.view, &self.target) {
+                    (View::Editor, Target::Level(_)) => self.level_panel(ui),
+                    (View::Editor, Target::Free(_)) => self.sandbox_panel(ui),
+                    (View::Computer | View::Play, _) => self.computer_controls(ui),
+                    (View::Wiki, _) => self.wiki.contents(ui),
                 });
             });
         if let Some(status) = self.status.clone() {
@@ -618,12 +664,7 @@ impl App {
                     .ok()
                     .filter(|_| !self.oscillating)
                     .cloned();
-                let level = self.level;
-                let design = self
-                    .progress
-                    .designs
-                    .entry(level.chip.to_string())
-                    .or_insert_with(|| Design::new(level.blank()));
+                let design = design_for(&mut self.progress, &self.target);
                 let out = self
                     .canvas
                     .show(ui, design, &lib, sim.as_ref(), &inputs, output_x);
@@ -632,10 +673,275 @@ impl App {
                     self.run();
                 }
                 if out.changed {
+                    // Sandbox chips are part of the library: refresh it so
+                    // chips that use this one see the change.
+                    if matches!(self.target, Target::Free(_)) {
+                        self.refresh_library();
+                    }
                     self.rebuild();
                     self.save();
                 }
             });
+    }
+}
+
+/// The design being edited for a target, created on first use.
+fn design_for<'a>(progress: &'a mut Progress, target: &Target) -> &'a mut Design {
+    match target {
+        Target::Level(level) => progress
+            .designs
+            .entry(level.chip.to_string())
+            .or_insert_with(|| Design::new(level.blank())),
+        Target::Free(name) => progress
+            .sandbox
+            .chips
+            .entry(name.clone())
+            .or_insert_with(|| sandbox::new_chip(name)),
+    }
+}
+
+impl App {
+    /// The sandbox section of the left panel: list of free chips and a
+    /// field to create a new one.
+    fn sandbox_list(&mut self, ui: &mut Ui) {
+        let n = self.progress.sandbox.chips.len();
+        let editing = match &self.target {
+            Target::Free(name) if self.view == View::Editor => Some(name.clone()),
+            _ => None,
+        };
+        let mut open = None;
+        egui::CollapsingHeader::new(RichText::new(format!("🔧 Serbest çipler  ({n})")).strong())
+            .id_salt("sandbox")
+            .default_open(editing.is_some())
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(
+                        "Seviye olmadan kendi çiplerini tasarla, paylaş, birbirinde kullan.",
+                    )
+                    .weak()
+                    .small(),
+                );
+                for name in self.progress.sandbox.chips.keys() {
+                    let selected = editing.as_deref() == Some(name.as_str());
+                    if ui
+                        .selectable_label(selected, format!("★  {name}"))
+                        .clicked()
+                        && !selected
+                    {
+                        open = Some(name.clone());
+                    }
+                }
+                ui.horizontal(|ui| {
+                    let l = ui.label("Yeni:").id;
+                    let r = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.new_chip_name)
+                                .hint_text("çip adı")
+                                .desired_width(100.0),
+                        )
+                        .labelled_by(l);
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("+ Oluştur").clicked() || enter {
+                        let name = self.new_chip_name.trim().to_string();
+                        match sandbox::check_name(&name, &self.lib, &self.progress.sandbox, None) {
+                            Ok(()) => {
+                                self.progress
+                                    .sandbox
+                                    .chips
+                                    .insert(name.clone(), sandbox::new_chip(&name));
+                                self.new_chip_name.clear();
+                                self.refresh_library();
+                                self.save();
+                                open = Some(name);
+                            }
+                            Err(e) => self.status = Some(e),
+                        }
+                    }
+                });
+                if ui.button("📥  Çip dosyası aç…").clicked() {
+                    self.import_package();
+                }
+            });
+        if let Some(name) = open {
+            self.open_free(name);
+        }
+    }
+
+    fn import_package(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("makine çipi", &[sandbox::EXT])
+            .pick_file()
+        else {
+            return;
+        };
+        let result = std::fs::read_to_string(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))
+            .and_then(|text| sandbox::import(&self.lib, &mut self.progress.sandbox, &text));
+        match result {
+            Ok(name) => {
+                self.refresh_library();
+                self.save();
+                self.status = Some(format!("'{name}' eklendi."));
+                self.open_free(name);
+            }
+            Err(e) => self.status = Some(e),
+        }
+    }
+
+    fn export_package(&mut self, name: &str) {
+        let package = match sandbox::export(&self.lib, &self.progress.sandbox, name) {
+            Ok(p) => p,
+            Err(e) => {
+                self.status = Some(e);
+                return;
+            }
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("makine çipi", &[sandbox::EXT])
+            .set_file_name(format!("{name}.{}", sandbox::EXT))
+            .save_file()
+        else {
+            return;
+        };
+        self.status = Some(match std::fs::write(&path, package.to_json()) {
+            Ok(()) => format!("Kaydedildi: {}", path.display()),
+            Err(e) => format!("{}: {e}", path.display()),
+        });
+    }
+
+    /// Right panel for a sandbox chip: name, pins, simulation, sharing.
+    fn sandbox_panel(&mut self, ui: &mut Ui) {
+        let Target::Free(name) = self.target.clone() else {
+            return;
+        };
+        ui.heading(format!("★ {name}"));
+        ui.label(RichText::new("Serbest çip: test yok, kural yok.").weak());
+        ui.add_space(6.0);
+
+        // Rename.
+        ui.horizontal(|ui| {
+            let l = ui.label("Ad").id;
+            ui.add(egui::TextEdit::singleline(&mut self.rename_to).desired_width(140.0))
+                .labelled_by(l);
+            if ui.button("Değiştir").clicked() && self.rename_to.trim() != name {
+                let to = self.rename_to.trim().to_string();
+                match sandbox::check_name(&to, &self.lib, &self.progress.sandbox, None) {
+                    Ok(()) => {
+                        self.progress.sandbox.rename(&name, &to);
+                        self.target = Target::Free(to);
+                        self.refresh_library();
+                        self.rebuild();
+                        self.save();
+                    }
+                    Err(e) => self.status = Some(e),
+                }
+            }
+        });
+
+        // Pins.
+        ui.add_space(6.0);
+        ui.label(RichText::new("Uçlar").strong());
+        let def = self.design().def.clone();
+        let editor = self.pin_editor.get_or_insert_with(|| PinEditor::new(&def));
+        if let Some((ins, outs)) = editor.show(ui) {
+            self.progress.sandbox.set_pins(&name, ins, outs);
+            self.pin_editor = None;
+            self.refresh_library();
+            let lib = self.lib.clone();
+            self.design().prune(&lib);
+            self.rebuild();
+            self.save();
+        }
+        ui.separator();
+
+        // Live simulation.
+        match &self.sim {
+            Err(e) if !e.is_empty() => {
+                ui.colored_label(Color32::LIGHT_RED, e);
+            }
+            Ok(sim) => {
+                ui.label(
+                    RichText::new(format!(
+                        "{} NAND kapısı + {} hızlı model",
+                        sim.gate_count(),
+                        sim.native_count()
+                    ))
+                    .weak(),
+                );
+                if self.oscillating {
+                    ui.colored_label(Color32::LIGHT_RED, "Devre salınıyor.");
+                }
+            }
+            _ => {}
+        }
+        self.bus_inputs(ui);
+        ui.horizontal(|ui| {
+            if ui.button("Durumu sıfırla").clicked() {
+                if let Ok(sim) = &mut self.sim {
+                    sim.reset();
+                }
+                self.run();
+            }
+        });
+
+        // Sharing and deleting.
+        ui.separator();
+        ui.label(RichText::new("Paylaş").strong());
+        ui.label(
+            RichText::new(
+                "Çipi, kullandığı diğer serbest çiplerle birlikte tek bir .makine dosyası \
+                 olarak kaydet. Başkası 'Çip dosyası aç' ile ekleyebilir.",
+            )
+            .weak()
+            .small(),
+        );
+        if ui.button("📤  Çip dosyası olarak kaydet…").clicked() {
+            self.export_package(&name);
+        }
+        ui.add_space(10.0);
+        let users = self.progress.sandbox.users_of(&name);
+        let can_delete = users.is_empty();
+        let r = ui.add_enabled(can_delete, egui::Button::new("🗑  Çipi sil"));
+        let r = if can_delete {
+            r
+        } else {
+            r.on_disabled_hover_text(format!("Önce şu çiplerden çıkar: {}", users.join(", ")))
+        };
+        if r.clicked() {
+            self.progress.sandbox.chips.remove(&name);
+            self.refresh_library();
+            self.save();
+            let level = self.level;
+            self.open_level(level);
+        }
+    }
+
+    /// Value fields for bus inputs (1-bit inputs are toggled on the canvas).
+    fn bus_inputs(&mut self, ui: &mut Ui) {
+        let def_inputs = self.design().def.inputs.clone();
+        let mut changed = false;
+        for (i, p) in def_inputs.iter().enumerate().filter(|(_, p)| p.width > 1) {
+            ui.horizontal(|ui| {
+                let label = ui.label(&p.name).id;
+                let mut v = self.inputs[i];
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut v)
+                            .hexadecimal(1, false, true)
+                            .prefix("0x")
+                            .range(0..=makine_sim::mask(p.width)),
+                    )
+                    .labelled_by(label)
+                    .changed()
+                {
+                    self.inputs[i] = v;
+                    changed = true;
+                }
+            });
+        }
+        if changed {
+            self.run();
+        }
     }
 }
 
@@ -1232,5 +1538,130 @@ mod play_tests {
             keys.contains(&(makine_rv::machine::key::UP, true)),
             "{keys:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod sandbox_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+    use makine_levels::reference::reference;
+    use std::{cell::RefCell, rc::Rc};
+
+    fn app_with_levels() -> Rc<RefCell<App>> {
+        let mut progress = Progress::default();
+        for l in levels() {
+            progress.solutions.insert(l.chip.into(), reference(l.chip));
+        }
+        Rc::new(RefCell::new(App::new(progress, None)))
+    }
+
+    /// Create a chip through the UI, then use it inside another one.
+    #[test]
+    fn create_and_nest() {
+        let app = app_with_levels();
+        let a = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui(move |ui| a.borrow_mut().ui(ui));
+        h.run_steps(2);
+        h.get_by_label_contains("Serbest çipler").click();
+        h.run_steps(2);
+        h.get_by_label("Yeni:").focus();
+        h.run();
+        h.get_by_label("Yeni:").type_text("Tampon");
+        h.run();
+        h.get_by_label("+ Oluştur").click();
+        h.run_steps(2);
+        let (name, status) = {
+            let a = app.borrow();
+            (a.new_chip_name.clone(), a.status.clone())
+        };
+        assert!(
+            app.borrow().target == Target::Free("Tampon".into()),
+            "field={name:?} status={status:?}"
+        );
+
+        // Make Tampon = out = a via two NOTs, by editing its definition
+        // directly (wiring by mouse is covered by the level test).
+        {
+            let mut a = app.borrow_mut();
+            let mut b = makine_sim::ChipBuilder::new("Tampon", &["a", "b"], &["out"]);
+            let x = b.input("a");
+            let y = b.chip1("Not", &[x]);
+            let z = b.chip1("Not", &[y]);
+            b.output("out", z);
+            *a.design() = Design::new(b.build());
+            a.refresh_library();
+            a.rebuild();
+        }
+        // A second chip sees Tampon in its parts list, Tampon does not see
+        // the second one if the second one uses it.
+        h.get_by_label("Yeni:").focus();
+        h.run();
+        h.get_by_label("Yeni:").type_text("Dis");
+        h.run();
+        h.get_by_label("+ Oluştur").click();
+        h.run_steps(2);
+        assert!(
+            h.query_by_label("★ Tampon").is_some(),
+            "Tampon not in parts"
+        );
+        {
+            let mut a = app.borrow_mut();
+            let mut b = makine_sim::ChipBuilder::new("Dis", &["a", "b"], &["out"]);
+            let x = b.input("a");
+            let y = b.chip1("Tampon", &[x]);
+            b.output("out", y);
+            *a.design() = Design::new(b.build());
+            a.refresh_library();
+            a.rebuild();
+            a.inputs = vec![1, 0];
+            a.run();
+            assert_eq!(a.sim.as_ref().unwrap().output(0), 1);
+        }
+        h.run_steps(2);
+        let tampon = app
+            .borrow()
+            .progress
+            .sandbox
+            .chips
+            .keys()
+            .position(|k| k == "Tampon");
+        assert!(tampon.is_some());
+        app.borrow_mut().open_free("Tampon".into());
+        h.run_steps(2);
+        assert!(h.query_by_label("★ Dis").is_none(), "cycle offered");
+        // Tampon is used by Dis, so it cannot be deleted.
+        assert!(!app.borrow().progress.sandbox.users_of("Tampon").is_empty());
+    }
+
+    /// Changing pins in the panel applies them to the chip.
+    #[test]
+    fn edit_pins() {
+        let app = app_with_levels();
+        app.borrow_mut()
+            .progress
+            .sandbox
+            .chips
+            .insert("P".into(), sandbox::new_chip("P"));
+        app.borrow_mut().refresh_library();
+        app.borrow_mut().open_free("P".into());
+        let a = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui(move |ui| a.borrow_mut().ui(ui));
+        h.run_steps(2);
+        let inputs = h.get_by_label("Girişler");
+        inputs.focus();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Girişler").type_text("x[8], y");
+        h.run();
+        h.get_by_label("Uçları uygula").click();
+        h.run_steps(2);
+        let ins = app.borrow().progress.sandbox.chips["P"].def.inputs.clone();
+        assert_eq!(ins, makine_sim::parse_pins(&["x[8]", "y"]));
+        assert_eq!(app.borrow().inputs.len(), 2);
     }
 }

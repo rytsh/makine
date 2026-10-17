@@ -6,6 +6,7 @@ mod app;
 mod canvas;
 mod computer;
 mod design;
+mod sandbox;
 mod store;
 mod wiki;
 
