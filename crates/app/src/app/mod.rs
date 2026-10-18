@@ -19,7 +19,9 @@ mod computer_ui;
 mod debug_ui;
 mod home_ui;
 mod mini_ui;
+mod programming_ui;
 mod sandbox_ui;
+mod small_ui;
 mod solution_ui;
 #[cfg(test)]
 mod tests;
@@ -51,6 +53,7 @@ impl PartialEq for Target {
 enum View {
     Editor,
     Computer,
+    Programming,
     /// Only the computer's screen, filling the window (and the monitor, in
     /// full screen): like playing a game.
     Play,
@@ -152,7 +155,8 @@ impl App {
         app
     }
 
-    pub fn new(progress: Progress, save_path: Option<PathBuf>) -> Self {
+    pub fn new(mut progress: Progress, save_path: Option<PathBuf>) -> Self {
+        progress.notebook.ensure(progress.program.as_deref());
         let first_open = levels()
             .iter()
             .enumerate()
@@ -198,7 +202,13 @@ impl App {
             reveal: Default::default(),
             profiles: None,
             home: Default::default(),
-            debug: Default::default(),
+            debug: debug_ui::Debug {
+                beginner: true,
+                lesson: Some("sum".into()),
+                selected_line: 1,
+                number_format: 1,
+                ..Default::default()
+            },
             mini: None,
             history: Default::default(),
             snapshot: None,
@@ -873,12 +883,17 @@ impl App {
                     (View::Editor, Target::Level(_)) => self.level_panel(ui),
                     (View::Editor, Target::Free(_)) => self.sandbox_panel(ui),
                     (View::Computer | View::Play, _) => self.computer_controls(ui),
+                    (View::Programming, _) => self.programming_panel(ui),
                     (View::Wiki, _) => self.wiki.contents(ui),
                     (View::World, _) => self.world_panel(ui),
                     (View::Home, _) => self.home_panel(ui),
                 });
             });
         self.toast(&ctx);
+        if self.view == View::Programming {
+            egui::CentralPanel::default().show(ui, |ui| self.programming_view(ui));
+            return;
+        }
         if self.view == View::Computer {
             egui::CentralPanel::default().show(ui, |ui| self.computer_view(ui));
             return;

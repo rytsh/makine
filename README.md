@@ -152,9 +152,26 @@ fotoğraflar yapay zekâ ile üretilmiştir.
 çalıştırır ve her komuttan sonra karşılaştırır. Bir fark olursa hangi komutun, hangi
 register'ın yanlış olduğunu söyler.
 
+## Programlama atölyesi
+
+Üstteki **Programlama** sekmesi CPU'yu bitirmeden de açılır. Program taslakları
+profilde otomatik saklanır. **Derle → Baştan yükle → Bir kaynak satırı** ile
+kendi assembly'ni yazıp izle; adres/makine kodu, register, bellek ve son adımda
+değişenler birlikte gösterilir. Referans işlemci veya tamamladığın CPU kullanılabilir.
+
+- On uygulamalı ders: register'lardan döngülere, dizi/metin, fonksiyon, konsol,
+  piksel ve bellek kopyalamaya. Görevler farklı girişlerle test edilir;
+  hatalı örneği debugger'da yeniden açabilirsin.
+- Mini CPU ve 4004 için etiketli assembler, ROM hex dışa aktarımı ve devreye yükleme.
+- Özel komut seti tasarımı: kelime/opcode/argüman tanımları, JSON paylaşımı ve kendi
+  serbest CPU çipine ROM/RAM bağlama. Kodlama tanımı otomatik emülatör eklemez.
+- Fibonacci, sıralama, iç içe çağrılar, konsol yankısı ve grafik/klavye projeleri.
+
+[Ayrıntılı kullanım ve örnekler](docs/wiki/programlama.md).
+
 ## Bilgisayar
 
-İşlemciyi bitirince soldaki **Bilgisayar** açılır: senin işlemcin + 16 MB RAM +
+İşlemciyi bitirince üstteki **Bilgisayar** açılır: senin işlemcin + 16 MB RAM +
 320×200 ekran + konsol + klavye. Örnek programlar (assembly) ya da kendi programın
 (assembly `.s` veya RISC-V ELF) yüklenebilir.
 

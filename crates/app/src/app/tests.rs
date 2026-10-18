@@ -162,7 +162,6 @@ mod editor {
         img.save(format!("{dir}/makine-computer.png")).unwrap();
         // Scrolled to the debugger, in English.
         makine_lang::set_for_thread(Some(makine_lang::Lang::En));
-        app.borrow_mut().debug.source = Some(String::new());
         harness.set_size(egui::vec2(1280.0, 1400.0));
         harness.run_steps(3);
         harness
@@ -542,6 +541,13 @@ mod glyph_tests {
             include_str!("chrome.rs"),
             include_str!("truth_ui.rs"),
             include_str!("debug_ui.rs"),
+            include_str!("programming_ui.rs"),
+            include_str!("small_ui.rs"),
+            include_str!("../lessons.rs"),
+            include_str!("../instruction_help.rs"),
+            include_str!("../programming.rs"),
+            include_str!("../../../rv/src/explain.rs"),
+            include_str!("../../../rv/src/smallasm.rs"),
             include_str!("mini_ui.rs"),
             include_str!("../../../world/src/projects/examples.rs"),
             include_str!("../../../levels/src/mini.rs"),

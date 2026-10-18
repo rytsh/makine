@@ -1,9 +1,9 @@
 //! Looking inside the computer while it runs: registers, the instructions
-//! around pc (click one to stop there), memory, and a small assembly
-//! editor to write a program and run it at once.
+//! around pc (click one to stop there) and memory. Editing lives in the
+//! source-first workbench so every draft is saved in the notebook.
 
 use egui::{RichText, Ui};
-use makine_lang::{tr, trf};
+use makine_lang::tr;
 use makine_rv::isa::REG_NAMES;
 
 use super::App;
@@ -13,10 +13,26 @@ use crate::theme;
 /// What the debugger shows; not saved.
 #[derive(Default)]
 pub(super) struct Debug {
+    pub built: Option<(u64, String, makine_rv::asm::Program)>,
+    pub selected_line: usize,
+    pub slow: bool,
+    pub last_tick: f64,
+    pub lesson: Option<String>,
+    pub prediction: String,
+    pub show_answer: bool,
+    pub show_hint: bool,
+    pub report: Option<crate::lessons::Report>,
+    pub show_solution: bool,
+    pub beginner: bool,
+    pub number_format: u8,
+    pub small_built: Option<(u64, String, makine_rv::smallasm::Program)>,
+    pub mini_execution: Option<super::small_ui::MiniExecution>,
+    pub mini_source: Option<String>,
+    pub last_case: Option<(u64, String, crate::lessons::Case)>,
+    pub help_query: String,
     /// Memory viewer address, as typed.
     pub mem_addr: String,
-    /// The assembly being edited, and its last error.
-    pub source: Option<String>,
+    /// The last build error; invalid source stays in the saved notebook.
     pub asm_error: Option<(usize, String)>,
     /// Registers before the last step, to light up what changed.
     pub before: Option<[u32; 32]>,
@@ -25,11 +41,6 @@ pub(super) struct Debug {
 impl App {
     /// The tools under the screen: registers, code, memory, editor.
     pub(super) fn debugger(&mut self, ui: &mut Ui) {
-        let source_default = self
-            .progress
-            .program
-            .clone()
-            .unwrap_or_else(|| crate::computer::EXAMPLES[0].1.to_string());
         let Some(c) = self.computer.as_mut() else {
             return;
         };
@@ -39,80 +50,39 @@ impl App {
             code(&mut cols[1], c);
         });
         memory(ui, c, &mut self.debug.mem_addr);
-        // The editor: write, then assemble and run.
-        let mut run = None;
-        egui::CollapsingHeader::new(
-            RichText::new(tr!("✎ Assembly yaz", "✎ Write assembly")).strong(),
-        )
-        .id_salt("asm_editor")
-        .show(ui, |ui| {
-            let src = self.debug.source.get_or_insert(source_default);
-            ui.label(
-                RichText::new(tr!(
-                    "RISC-V assembly yaz; ▶ Derle ve çalıştır programı senin işlemcine yükler. \
-                     Program ebreak ile durur. Bellek haritası sağ panelde.",
-                    "Write RISC-V assembly; ▶ Assemble and run loads it into your processor. \
-                     The program stops at ebreak. The memory map is in the right panel."
-                ))
-                .small()
-                .weak(),
-            );
-            let error_line = self.debug.asm_error.as_ref().map(|(l, _)| *l);
-            let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap: f32| {
-                let mut job = egui::text::LayoutJob::default();
-                for (i, line) in text.as_str().split_inclusive('\n').enumerate() {
-                    let color = if Some(i + 1) == error_line {
-                        theme::BAD
-                    } else if line.trim_start().starts_with('#') {
-                        theme::INK_DIM
-                    } else {
-                        theme::INK
-                    };
-                    job.append(
-                        line,
-                        0.0,
-                        egui::TextFormat::simple(egui::FontId::monospace(13.0), color),
+        if ui
+            .button(tr!(
+                "Kaynağı Programlama'da aç",
+                "Open source in Programming"
+            ))
+            .clicked()
+        {
+            if let Some((source, _)) = c.source.clone() {
+                if let Some(id) = self
+                    .progress
+                    .notebook
+                    .drafts
+                    .iter()
+                    .find(|d| d.source == source)
+                    .map(|d| d.id)
+                {
+                    self.progress.notebook.selected = id;
+                } else {
+                    self.progress.notebook.add(
+                        tr!("Yüklenen program", "Loaded program"),
+                        crate::programming::Architecture::RiscV,
+                        &source,
                     );
                 }
-                job.wrap.max_width = wrap;
-                ui.fonts_mut(|f| f.layout_job(job))
-            };
-            ui.add(
-                egui::TextEdit::multiline(src)
-                    .code_editor()
-                    .desired_rows(14)
-                    .desired_width(f32::INFINITY)
-                    .layouter(&mut layouter),
-            );
-            if let Some((line, e)) = &self.debug.asm_error {
-                ui.colored_label(theme::BAD, trf!("Satır {line}: {e}", "Line {line}: {e}"));
+                self.save_soon();
             }
-            ui.horizontal(|ui| {
-                if ui
-                    .button(tr!("▶ Derle ve çalıştır", "▶ Assemble and run"))
-                    .clicked()
-                {
-                    run = Some(src.clone());
-                }
-                if ui.button(tr!("Örneği yükle", "Load the example")).clicked() {
-                    *src = crate::computer::EXAMPLES[0].1.to_string();
-                }
-            });
-        });
-        if let Some(src) = run {
-            match makine_rv::asm::assemble(&src) {
-                Ok(_) => {
-                    self.debug.asm_error = None;
-                    self.load_program("program", src.as_bytes());
-                }
-                Err(e) => self.debug.asm_error = Some((e.line, e.message)),
-            }
+            self.view = super::View::Programming;
         }
     }
 }
 
 /// The 32 registers in two columns; those changed by the last step lit.
-fn registers(ui: &mut Ui, c: &Computer, debug: &Debug) {
+pub(super) fn registers(ui: &mut Ui, c: &Computer, debug: &Debug) {
     ui.label(RichText::new(tr!("Register'lar", "Registers")).strong());
     let Some(x) = c.registers() else {
         ui.label(
@@ -132,11 +102,21 @@ fn registers(ui: &mut Ui, c: &Computer, debug: &Debug) {
         return;
     };
     egui::Grid::new("regs")
-        .num_columns(4)
+        .num_columns(if debug.number_format == 2 { 2 } else { 4 })
         .spacing(egui::vec2(8.0, 1.0))
         .show(ui, |ui| {
             for row in 0..16 {
                 for r in [row, row + 16] {
+                    if debug.beginner
+                        && c.source.is_some()
+                        && !c.source.as_ref().is_some_and(|(s, _)| {
+                            s.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                                .filter_map(makine_rv::isa::parse_reg)
+                                .any(|n| n as usize == r)
+                        })
+                    {
+                        continue;
+                    }
                     let changed = debug.before.is_some_and(|b| b[r] != x[r]);
                     ui.label(
                         RichText::new(format!("{:>4}", REG_NAMES[r]))
@@ -145,9 +125,12 @@ fn registers(ui: &mut Ui, c: &Computer, debug: &Debug) {
                             .color(theme::INK_DIM),
                     )
                     .on_hover_text(format!("x{r}"));
-                    let v = RichText::new(format!("{:08x}", x[r]))
-                        .monospace()
-                        .size(12.0);
+                    let value = match debug.number_format {
+                        1 => (x[r] as i32).to_string(),
+                        2 => format!("{:032b}", x[r]),
+                        _ => format!("{:08x}", x[r]),
+                    };
+                    let v = RichText::new(value).monospace().size(12.0);
                     let v = if changed {
                         v.color(theme::SIGNAL)
                     } else if x[r] == 0 {
@@ -157,8 +140,13 @@ fn registers(ui: &mut Ui, c: &Computer, debug: &Debug) {
                     };
                     ui.label(v)
                         .on_hover_text(format!("{} = {}", x[r], x[r] as i32));
+                    if debug.number_format == 2 {
+                        ui.end_row();
+                    }
                 }
-                ui.end_row();
+                if debug.number_format != 2 {
+                    ui.end_row();
+                }
             }
         });
 }
@@ -219,7 +207,7 @@ fn code(ui: &mut Ui, c: &mut Computer) {
 }
 
 /// Eight rows of memory from an address the player types.
-fn memory(ui: &mut Ui, c: &Computer, addr: &mut String) {
+pub(super) fn memory(ui: &mut Ui, c: &Computer, addr: &mut String) {
     egui::CollapsingHeader::new(RichText::new(tr!("Bellek", "Memory")).strong())
         .id_salt("memory_view")
         .show(ui, |ui| {

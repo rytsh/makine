@@ -66,7 +66,7 @@ impl App {
     /// The computer, created on first use from the current CPU.
     pub(super) fn computer(&mut self) -> Result<&mut Computer, String> {
         if self.computer.is_none() {
-            let engine = if self.turbo {
+            let engine = if self.turbo || !self.progress.solved("Cpu") {
                 Engine::Reference(makine_rv::emu::Cpu::new())
             } else {
                 Computer::circuit_engine(&self.lib)?
@@ -79,12 +79,22 @@ impl App {
                 .unwrap_or_else(|| computer::EXAMPLES[0].1.to_string());
             let (segs, entry) = computer::parse_program("program", src.as_bytes())?;
             c.load_program(segs, entry)?;
+            if let Ok(p) = makine_rv::asm::assemble(&src) {
+                c.source = Some((src, p));
+            }
             self.computer = Some(c);
         }
         Ok(self.computer.as_mut().unwrap())
     }
 
     pub(super) fn load_program(&mut self, name: &str, bytes: &[u8]) {
+        let assembly = if !bytes.starts_with(b"\x7fELF") {
+            std::str::from_utf8(bytes)
+                .ok()
+                .and_then(|s| makine_rv::asm::assemble(s).ok().map(|p| (s.to_string(), p)))
+        } else {
+            None
+        };
         let result = computer::parse_program(name, bytes).and_then(|(segs, entry)| {
             // Big programs need hundreds of millions of instructions; on the
             // circuit CPU that would take hours.
@@ -101,6 +111,7 @@ impl App {
             }
             let c = self.computer()?;
             c.load_program(segs, entry)?;
+            c.source = assembly;
             c.running = true;
             Ok(())
         });

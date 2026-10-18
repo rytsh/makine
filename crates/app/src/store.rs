@@ -14,6 +14,8 @@ use crate::sandbox::Sandbox;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Progress {
+    #[serde(default)]
+    pub notebook: crate::programming::Notebook,
     /// Work in progress, per level.
     #[serde(default)]
     pub designs: BTreeMap<String, Design>,
@@ -79,6 +81,7 @@ fn worlds_or_nothing<'de, D: serde::Deserializer<'de>>(
 impl Default for Progress {
     fn default() -> Self {
         Self {
+            notebook: Default::default(),
             designs: BTreeMap::new(),
             solutions: BTreeMap::new(),
             fast: true,

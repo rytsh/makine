@@ -45,10 +45,30 @@ pub struct Computer {
     pub breakpoints: std::collections::BTreeSet<u32>,
     /// With the player's CPU: the reference emulator run beside it, for
     /// showing registers (the circuit's are inside it). Dropped (and the
-    /// registers hidden) once the two disagree or a device is read.
+    /// registers hidden) once an observed PC or memory write disagrees.
+    /// Matching observations do not prove equality of internal registers.
     pub shadow: Option<Cpu>,
     /// Where the shadow first disagreed with the circuit.
     pub shadow_lost: Option<String>,
+    /// Exact source and address mapping of the loaded image (not the draft).
+    pub source: Option<(String, makine_rv::asm::Program)>,
+    stopped_at: Option<u32>,
+    pub run_until: Option<u32>,
+    pub instruction_limit: Option<u64>,
+    pub pause_reason: Option<String>,
+    pub trace_enabled: bool,
+    pub trace: Option<Trace>,
+}
+
+/// One observed architectural transition. Circuit register values remain
+/// explicitly labelled as reference-shadow values in the UI.
+pub struct Trace {
+    pub pc: u32,
+    pub instr: u32,
+    pub next_pc: u32,
+    pub before: Option<[u32; 32]>,
+    pub after: Option<[u32; 32]>,
+    pub store: Option<(u32, u32, u8)>,
 }
 
 impl Computer {
@@ -69,6 +89,13 @@ impl Computer {
             breakpoints: Default::default(),
             shadow: None,
             shadow_lost: None,
+            source: None,
+            stopped_at: None,
+            run_until: None,
+            instruction_limit: None,
+            pause_reason: None,
+            trace_enabled: false,
+            trace: None,
         }
     }
 
@@ -103,6 +130,7 @@ impl Computer {
         }
         self.image = segments;
         self.entry = entry;
+        self.source = None;
         self.reset()
     }
 
@@ -113,6 +141,12 @@ impl Computer {
         }
         self.halted = None;
         self.instructions = 0;
+        self.stopped_at = None;
+        self.run_until = None;
+        self.instruction_limit = None;
+        self.pause_reason = None;
+        self.trace = None;
+        self.speed_window = (Instant::now(), 0);
         self.shown_frame = u64::MAX;
         match &mut self.engine {
             Engine::Circuit(cpu) => {
@@ -142,6 +176,7 @@ impl Computer {
         }
         let start = Instant::now();
         // The first instruction may be at a breakpoint we just stopped at.
+        let resume = self.stopped_at.take();
         let mut first = true;
         'run: while start.elapsed() < budget {
             let chunk = match self.engine {
@@ -150,8 +185,28 @@ impl Computer {
                 Engine::Reference(_) => 10_000,
             };
             for _ in 0..chunk {
-                if !first && self.breakpoints.contains(&self.pc()) {
+                if self
+                    .instruction_limit
+                    .is_some_and(|n| self.instructions >= n)
+                {
                     self.running = false;
+                    self.pause_reason = Some(
+                        makine_lang::tr!(
+                            "Komut sınırında duraklatıldı; döngünün koşulunu kontrol et.",
+                            "Paused at the instruction limit; check your loop condition."
+                        )
+                        .into(),
+                    );
+                    break 'run;
+                }
+                if self.run_until == Some(self.pc()) {
+                    self.run_until = None;
+                    self.running = false;
+                    break 'run;
+                }
+                if self.breakpoints.contains(&self.pc()) && !(first && resume == Some(self.pc())) {
+                    self.running = false;
+                    self.stopped_at = Some(self.pc());
                     break 'run;
                 }
                 first = false;
@@ -172,6 +227,14 @@ impl Computer {
 
     pub fn step_n(&mut self, n: u64) -> Result<(), String> {
         for _ in 0..n {
+            let observation = self.trace_enabled.then(|| {
+                (
+                    self.pc(),
+                    self.machine.peek_ram(self.pc()),
+                    self.registers().copied(),
+                )
+            });
+            let mut store = None;
             let r = match &mut self.engine {
                 Engine::Circuit(cpu) => {
                     let pc = cpu.pc();
@@ -186,9 +249,20 @@ impl Computer {
                             let ok = s.step(&mut m).is_ok();
                             (s, ok)
                         });
-                        let r = cpu.step(&mut self.machine).map(|_| ());
+                        let r = cpu.step(&mut self.machine).map(|c| {
+                            store = c.store;
+                        });
                         if let Some((s, ok)) = shadow {
-                            if ok && s.pc == cpu.pc() && r.is_ok() {
+                            let writes_match = match (s.last_store, store) {
+                                (None, None) => true,
+                                (Some(a), Some((addr, data, bytes))) => {
+                                    a.addr == addr
+                                        && a.bytes == bytes
+                                        && a.masked() == (data & makine_rv::emu::byte_mask(bytes))
+                                }
+                                _ => false,
+                            };
+                            if ok && s.pc == cpu.pc() && r.is_ok() && writes_match {
                                 self.shadow = Some(s);
                             } else if self.shadow_lost.is_none() {
                                 self.shadow_lost = Some(makine_lang::trf!(
@@ -200,10 +274,26 @@ impl Computer {
                         r
                     }
                 }
-                Engine::Reference(cpu) => cpu.step(&mut self.machine).map_err(|t| t.to_string()),
+                Engine::Reference(cpu) => {
+                    let r = cpu.step(&mut self.machine).map_err(|t| t.to_string());
+                    store = cpu.last_store.map(|s| (s.addr, s.data, s.bytes));
+                    r
+                }
             };
             match r {
-                Ok(()) => self.instructions += 1,
+                Ok(()) => {
+                    self.instructions += 1;
+                    if let Some((pc, instr, before)) = observation {
+                        self.trace = Some(Trace {
+                            pc,
+                            instr,
+                            before,
+                            next_pc: self.pc(),
+                            after: self.registers().copied(),
+                            store,
+                        });
+                    }
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -215,6 +305,25 @@ impl Computer {
             Engine::Circuit(c) => c.pc(),
             Engine::Reference(c) => c.pc,
         }
+    }
+
+    pub fn source_line(&self) -> Option<usize> {
+        self.source.as_ref()?.1.lines.get(&self.pc()).copied()
+    }
+
+    /// Execute one source statement, including both halves of li/la/call.
+    /// Bounded even if a branch jumps back to the same source line.
+    pub fn step_source(&mut self) -> Result<(), String> {
+        let line = self.source_line();
+        for _ in 0..16 {
+            let previous = self.pc();
+            self.step_n(1)?;
+            if line.is_none() || self.source_line() != line || self.pc() != previous.wrapping_add(4)
+            {
+                break;
+            }
+        }
+        Ok(())
     }
 
     pub fn press(&mut self, k: u8, pressed: bool) {
@@ -433,6 +542,38 @@ pub fn parse_program(name: &str, bytes: &[u8]) -> Result<Image, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_steps_include_pseudo_instruction_expansion_and_run_limits() {
+        let src = "li a0,0x12345\naddi a0,a0,1\nloop: j loop\n";
+        let p = makine_rv::asm::assemble(src).unwrap();
+        assert_eq!(p.lines.get(&4), Some(&1));
+        let mut c = Computer::new(Engine::Reference(Cpu::new()));
+        c.load_program(vec![(0, p.bytes.clone())], 0).unwrap();
+        c.source = Some((src.into(), p));
+        c.trace_enabled = true;
+        c.step_source().unwrap();
+        assert_eq!(c.pc(), 8);
+        assert_eq!(c.registers().unwrap()[10], 0x12345);
+        c.breakpoints.insert(8);
+        c.running = true;
+        c.run_for(Duration::from_millis(10));
+        assert_eq!(c.pc(), 8);
+        assert!(!c.running);
+        c.running = true;
+        c.run_until = Some(12);
+        c.run_for(Duration::from_millis(10));
+        assert_eq!(c.pc(), 12);
+        assert!(!c.running);
+        c.running = true;
+        c.instruction_limit = Some(c.instructions + 20);
+        c.run_for(Duration::from_millis(20));
+        assert!(!c.running);
+        assert!(c.pause_reason.is_some());
+        c.reset().unwrap();
+        assert!(c.pause_reason.is_none());
+        assert!(c.trace.is_none());
+    }
 
     fn run_example(name: &str, engine: Engine, steps: u64) -> Computer {
         let src = EXAMPLES.iter().find(|(n, _)| *n == name).unwrap().1;

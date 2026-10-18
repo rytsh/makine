@@ -152,6 +152,23 @@ The CPU test runs real programs on your CPU and on a reference CPU side by side 
 compares them after every instruction. When they differ, it tells you which
 instruction and which register went wrong.
 
+## Programming workshop
+
+The **Programming** tab opens before completing the CPU. Drafts save automatically
+in your profile. **Build → Load from start → One source line** lets you write and
+trace assembly, with machine code, registers, memory and the last step's changes.
+Use the reference processor or your completed CPU circuit.
+
+- Ten hands-on lessons: registers, bits, decisions, loops, arrays, strings,
+  functions, console, pixels and memory copying. Behaviour tests use different
+  inputs; reopen a failing case in the debugger.
+- Label-based Mini CPU and 4004 assemblers, ROM hex export and circuit loading.
+- Custom ISA design: word/opcode/operand definitions, JSON sharing, and ROM/RAM
+  wiring to your free CPU chip. An encoding definition does not add an emulator.
+- Fibonacci, sorting, nested calls, echo, graphics and keyboard projects.
+
+[Detailed guide and examples](docs/wiki/en/programlama.md).
+
 ## The computer
 
 Finishing the CPU unlocks **Bilgisayar** (computer) on the left: your CPU + 16 MB RAM +
