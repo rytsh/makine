@@ -81,6 +81,7 @@ pub static PAGES: &[Page] = pages![
     "hafiza",
     "register",
     "alu",
+    "verimlilik",
     "riscv",
     "islemci",
     "bilgisayar",
@@ -114,8 +115,7 @@ static IMAGES: &[(&str, &[u8])] = images![
 
 const IMAGE_SCHEME: &str = "bytes://wiki/";
 
-#[cfg(test)]
-fn page(slug: &str) -> Option<&'static Page> {
+pub fn page(slug: &str) -> Option<&'static Page> {
     PAGES.iter().find(|p| p.slug == slug)
 }
 

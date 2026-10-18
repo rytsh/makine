@@ -121,6 +121,7 @@ pub fn levels() -> &'static [&'static Level] {
     })
 }
 
+pub mod cost;
 pub mod cpu;
 pub mod fast;
 pub mod reference;

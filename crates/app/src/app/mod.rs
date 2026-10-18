@@ -15,6 +15,7 @@ use crate::wiki::{self, Wiki};
 
 mod computer_ui;
 mod sandbox_ui;
+mod solution_ui;
 #[cfg(test)]
 mod tests;
 mod world_ui;
@@ -97,6 +98,11 @@ pub struct App {
     session: Option<crate::session::Session>,
     net_name: String,
     net_addr: String,
+    /// How the player's design compares with the example solution.
+    cost: Option<makine_levels::cost::Cost>,
+    /// The example solution, when open instead of the player's design.
+    solution: Option<solution_ui::Solution>,
+    reveal: solution_ui::Reveal,
 }
 
 enum TestResult {
@@ -153,6 +159,9 @@ impl App {
             session: None,
             net_name: crate::session::default_name(),
             net_addr: String::new(),
+            cost: None,
+            solution: None,
+            reveal: Default::default(),
         };
         app.open_level(first_open);
         app
@@ -177,6 +186,8 @@ impl App {
 
     fn open_target(&mut self, target: Target) {
         self.target = target;
+        self.solution = None;
+        self.reveal = Default::default();
         self.canvas = Canvas::new();
         self.canvas.symbols = self.progress.symbols;
         self.inputs = vec![0; self.design().def.inputs.len()];
@@ -185,6 +196,7 @@ impl App {
         let lib = self.lib.clone();
         self.design().prune(&lib);
         self.rebuild();
+        self.update_cost();
     }
 
     /// Rebuild the library after sandbox chips changed.
@@ -271,6 +283,7 @@ impl App {
             Ok(Verdict::Oscillates { step }) => TestResult::Oscillates { step },
             Ok(Verdict::Wrong { message, .. }) => TestResult::Wrong(message),
         });
+        self.update_cost();
     }
 
     fn levels_panel(&mut self, ui: &mut Ui) {
@@ -541,6 +554,8 @@ impl App {
         }
         ui.add_space(6.0);
         self.result_view(ui);
+        ui.add_space(6.0);
+        self.cost_view(ui);
     }
 
     fn result_view(&mut self, ui: &mut Ui) {
@@ -675,6 +690,9 @@ impl App {
             .resizable(true)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| match (&self.view, &self.target) {
+                    (View::Editor, Target::Level(_)) if self.solution.is_some() => {
+                        self.solution_panel(ui)
+                    }
                     (View::Editor, Target::Level(_)) => self.level_panel(ui),
                     (View::Editor, Target::Free(_)) => self.sandbox_panel(ui),
                     (View::Computer | View::Play, _) => self.computer_controls(ui),
@@ -727,6 +745,12 @@ impl App {
                     }
                 }
             }
+            return;
+        }
+        if self.solution.is_some() && self.view == View::Editor {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| self.solution_canvas(ui));
             return;
         }
         egui::CentralPanel::default()

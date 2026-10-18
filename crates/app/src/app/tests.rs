@@ -61,15 +61,36 @@ mod editor {
             let mut app = App::new(progress, None);
             app.inputs = inputs;
             app.run();
+            let app = std::rc::Rc::new(std::cell::RefCell::new(app));
+            let a = app.clone();
             let mut harness = egui_kittest::Harness::builder()
                 .with_size(egui::vec2(1280.0, 720.0))
                 .wgpu()
-                .build_ui(move |ui| app.ui(ui));
+                .build_ui(move |ui| a.borrow_mut().ui(ui));
             harness.run();
             let img = harness.render().unwrap();
             let dir = std::env::var("MAKINE_SHOT_DIR").unwrap_or("/tmp/opencode".into());
             std::fs::create_dir_all(&dir).unwrap();
             img.save(format!("{dir}/makine-{chip}.png")).unwrap();
+            if chip == "Mux" {
+                // The clear but big MUX, then the example solution.
+                app.borrow_mut().run_test();
+                harness.run();
+                harness
+                    .render()
+                    .unwrap()
+                    .save(format!("{dir}/makine-cost.png"))
+                    .unwrap();
+                let lib = app.borrow().lib.clone();
+                let s = super::super::solution_ui::Solution::new(find("Mux").unwrap(), &lib, true);
+                app.borrow_mut().solution = Some(s);
+                harness.run();
+                harness
+                    .render()
+                    .unwrap()
+                    .save(format!("{dir}/makine-solution.png"))
+                    .unwrap();
+            }
         }
 
         // The computer, running Doom if it has been built.
@@ -442,6 +463,8 @@ mod glyph_tests {
             include_str!("../worldview/workbench.rs"),
             include_str!("../worldview/scope.rs"),
             include_str!("../worldview/routing.rs"),
+            include_str!("solution_ui.rs"),
+            include_str!("../../../levels/src/cost.rs"),
             include_str!("../worldsim.rs"),
             include_str!("../session.rs"),
             include_str!("../worlds.rs"),
