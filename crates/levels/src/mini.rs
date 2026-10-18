@@ -25,7 +25,7 @@ use makine_sim::{out, ChipBuilder, ChipDef, Circuit, Part, PartKind, Source, Ver
 
 use crate::{find, Level, Test};
 
-pub const SECTION: &str = "★ Mini işlemci";
+pub const SECTION: &str = "Mini işlemci";
 
 pub static LEVELS: &[Level] = &[
     Level {

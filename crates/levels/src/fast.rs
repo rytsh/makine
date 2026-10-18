@@ -91,6 +91,29 @@ pub fn model(chip: &str) -> Option<NativeDef> {
             },
             |m, i, o| o[0] = m[i[0] as usize & 7],
         ),
+        "Ram4x8" => NativeDef::clocked(
+            ins,
+            outs,
+            &["addr"],
+            [0u64; 4],
+            |m, i| {
+                if i[2] == 1 {
+                    m[i[0] as usize] = i[1];
+                }
+            },
+            |m, i, o| o[0] = m[i[0] as usize],
+        ),
+        "RomSequencer" => NativeDef::clocked(
+            ins,
+            outs,
+            &[],
+            0u64,
+            |pc, i| *pc = crate::memory::next_pc(*pc, i[0], i[1], i[2], i[3]),
+            |pc, _, o| {
+                o[0] = *pc;
+                o[1] = crate::memory::PROGRAM[*pc as usize] as u64;
+            },
+        ),
         "RegFile" => NativeDef::clocked(
             ins,
             outs,

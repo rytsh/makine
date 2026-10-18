@@ -228,7 +228,7 @@ impl WorldView {
 
     /// Where the player is: the world, then each module looked into. A
     /// click goes back out to that level.
-    pub(super) fn breadcrumbs(&mut self, ui: &mut Ui) {
+    pub fn breadcrumbs(&mut self, ui: &mut Ui) {
         if self.scope.is_empty() {
             return;
         }
@@ -263,85 +263,109 @@ impl WorldView {
         }
     }
 
-    pub(super) fn map_ui(&mut self, ui: &mut Ui) {
+    /// The overview map's place: the board's bottom-left corner.
+    pub(super) fn map_rect(&self, board: Rect) -> Option<Rect> {
         if !self.minimap || self.world.is_empty() {
-            return;
+            return None;
         }
+        let size = vec2(180.0, 110.0);
+        if board.width() < size.x * 2.0 || board.height() < size.y * 2.0 {
+            return None;
+        }
+        Some(Rect::from_min_size(
+            board.left_bottom() + vec2(12.0, -12.0 - size.y),
+            size,
+        ))
+    }
+
+    /// Drawn over the board; clicking or dragging on it moves the camera.
+    pub(super) fn map_ui(&mut self, ui: &mut Ui, r: Rect) {
         let l = self.layout(self.origin);
         let Some(bounds) = l.bounds() else { return };
         let bounds = bounds.expand(30.0);
-        // Reserve a top strip; it is a real UI region, not an overlay stealing
-        // board clicks. The map remains usable at the minimum window size.
-        ui.horizontal(|ui| {
-            let (r, response) = ui.allocate_exact_size(vec2(150.0, 74.0), Sense::click_and_drag());
-            let p = ui.painter();
-            p.rect_filled(r, 4.0, theme::WELL);
-            let scale = (r.width() / bounds.width()).min(r.height() / bounds.height());
-            let at = r.center() - bounds.center().to_vec2() * scale;
-            let map = |q: egui::Pos2| at + q.to_vec2() * scale;
-            for (id, _, _) in &l.parts {
-                if !l.visible(*id) {
-                    continue;
-                }
-                if let Some(pr) = l.part_rect(*id) {
-                    p.rect_filled(
-                        Rect::from_min_max(map(pr.min), map(pr.max)),
-                        1.0,
-                        theme::INK_DIM,
-                    );
-                }
+        let response = ui
+            .interact(r, ui.scope_id().with("world-map"), Sense::click_and_drag())
+            .on_hover_cursor(egui::CursorIcon::Crosshair);
+        let p = ui.painter();
+        p.rect(
+            r,
+            6.0,
+            theme::WELL.gamma_multiply(0.92),
+            Stroke::new(1.0, theme::LINE),
+            StrokeKind::Inside,
+        );
+        let inner = r.shrink(6.0);
+        let scale = (inner.width() / bounds.width()).min(inner.height() / bounds.height());
+        let at = inner.center() - bounds.center().to_vec2() * scale;
+        let map = |q: egui::Pos2| at + q.to_vec2() * scale;
+        let p = p.with_clip_rect(inner);
+        for (id, _, _) in &l.parts {
+            if !l.visible(*id) {
+                continue;
             }
-            for m in &l.modules {
-                p.rect_stroke(
-                    Rect::from_min_max(map(m.rect.min), map(m.rect.max)),
+            if let Some(pr) = l.part_rect(*id) {
+                p.rect_filled(
+                    Rect::from_min_max(map(pr.min), map(pr.max)),
                     1.0,
-                    Stroke::new(1.0, theme::COPPER),
-                    StrokeKind::Inside,
+                    theme::INK_DIM,
                 );
             }
-            if self.board.is_positive() {
-                let view = Rect::from_min_max(
-                    map(l.to_world(self.board.min)),
-                    map(l.to_world(self.board.max)),
-                )
-                .intersect(r);
-                p.rect_stroke(view, 0.0, Stroke::new(1.0, theme::BUS), StrokeKind::Inside);
-            }
-            if (response.clicked() || response.dragged())
-                && response.interact_pointer_pos().is_some()
-            {
-                let point = response.interact_pointer_pos().unwrap();
-                let world = (point - at) / scale;
-                self.offset = self.board.size() * 0.5 - world * self.zoom;
-                self.fit = false;
-            }
-            p.text(
-                r.right_bottom() - vec2(3.0, 3.0),
-                Align2::RIGHT_BOTTOM,
-                tr!("HARİTA", "MAP"),
-                FontId::monospace(8.0),
-                theme::INK_DIM,
+        }
+        for m in &l.modules {
+            p.rect_stroke(
+                Rect::from_min_max(map(m.rect.min), map(m.rect.max)),
+                1.0,
+                Stroke::new(1.0, theme::COPPER),
+                StrokeKind::Inside,
             );
-            ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(trf!(
-                        "{} parça · {} modül",
-                        "{} parts · {} modules",
-                        self.world.len(),
-                        self.world.modules().count()
-                    ))
-                    .weak()
-                    .small(),
-                );
-                ui.label(
-                    RichText::new(tr!(
-                        "Shift+sürükle: seç · Modüle çift tık: içine gir · Esc: dışarı çık",
-                        "Shift+drag: select · Double click a module: go inside · Esc: go out"
-                    ))
-                    .weak()
-                    .small(),
-                );
-            });
+        }
+        if self.board.is_positive() {
+            let view = Rect::from_min_max(
+                map(l.to_world(self.board.min)),
+                map(l.to_world(self.board.max)),
+            )
+            .intersect(inner);
+            p.rect_stroke(view, 0.0, Stroke::new(1.0, theme::BUS), StrokeKind::Inside);
+        }
+        if let Some(point) = response
+            .interact_pointer_pos()
+            .filter(|_| response.clicked() || response.dragged())
+        {
+            let world = (point - at) / scale;
+            self.offset = self.board.size() * 0.5 - world * self.zoom;
+            self.fit = false;
+        }
+        p.text(
+            r.right_bottom() - vec2(5.0, 4.0),
+            Align2::RIGHT_BOTTOM,
+            tr!("HARİTA", "MAP"),
+            FontId::monospace(8.0),
+            theme::INK_DIM,
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::Role::Image, true, tr!("Harita", "Map"))
         });
+    }
+
+    /// Part and module counts with the main board gestures, for a side panel.
+    pub fn summary(&self, ui: &mut Ui) {
+        ui.label(
+            RichText::new(trf!(
+                "{} parça · {} modül",
+                "{} parts · {} modules",
+                self.world.len(),
+                self.world.modules().count()
+            ))
+            .weak()
+            .small(),
+        );
+        ui.label(
+            RichText::new(tr!(
+                "Shift+sürükle: seç · Modüle çift tık: içine gir · Esc: dışarı çık",
+                "Shift+drag: select · Double click a module: go inside · Esc: go out"
+            ))
+            .weak()
+            .small(),
+        );
     }
 }

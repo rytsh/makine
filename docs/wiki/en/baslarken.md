@@ -32,6 +32,9 @@ this order.
 ## How to play
 
 - Drag a part from the **Parts** list on the left onto the canvas.
+- **Find a part** searches chip ids and Turkish/English titles. Long lists
+  are grouped by subject; search expands matching groups. **Esc** clears
+  the filter. Level unlock rules still apply.
 - Drag from a part's **output pin** (the dot on the right) to an **input pin**
   to draw a wire.
 - **Click** the input boxes on the left to switch them between 0 and 1. Wires
@@ -60,6 +63,7 @@ this order.
 | [Negative numbers and subtraction](cikarma.md) | Two's complement |
 | [Memory](hafiza.md) | Latch, flip-flop, clock |
 | [Registers and RAM](register.md) | Turning bits into words, and words into memory |
+| [Memory and ROM](rom.md) | Building ROM/RAM, encoding a program and fetching instructions |
 | [ALU](alu.md) | The processor's calculator |
 | [RISC-V instructions](riscv.md) | The language the processor speaks |
 | [Processor](islemci.md) | Putting it all together |

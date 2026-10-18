@@ -5,9 +5,11 @@ use std::path::PathBuf;
 use egui::{RichText, Ui};
 use makine_lang::{tr, trf};
 use makine_levels::{check, find, levels, Level};
-use makine_sim::{Circuit, Library, PartKind, Pin, Verdict};
+#[cfg(test)]
+use makine_sim::PartKind;
+use makine_sim::{Circuit, Library, Pin, Verdict};
 
-use crate::canvas::{format_value, Canvas, NewPart, ON};
+use crate::canvas::{format_value, Canvas, ON};
 use crate::computer::Computer;
 use crate::design::Design;
 use crate::sandbox::{self, PinEditor};
@@ -18,8 +20,10 @@ mod chrome;
 mod computer_ui;
 mod debug_ui;
 mod home_ui;
+mod inspector_ui;
 mod journey_ui;
 mod mini_ui;
+mod parts_ui;
 mod programming_ui;
 mod sandbox_ui;
 mod small_ui;
@@ -28,6 +32,7 @@ mod teaching_ui;
 #[cfg(test)]
 mod tests;
 mod truth_ui;
+mod workspace_ui;
 mod world_ui;
 
 #[cfg(test)]
@@ -77,6 +82,7 @@ pub struct App {
     canvas: Canvas,
     /// Library of solved chips, rebuilt when a level is passed.
     lib: Library,
+    library_revision: u64,
     sim: Result<Circuit, String>,
     oscillating: bool,
     inputs: Vec<u64>,
@@ -90,6 +96,7 @@ pub struct App {
     /// Code is a tool inside Levels or World, not a separate destination.
     editor_code: bool,
     world_code: bool,
+    world_tab: world_ui::WorldTab,
     computer: Option<Computer>,
     /// Use the reference emulator instead of the player's CPU.
     turbo: bool,
@@ -120,9 +127,12 @@ pub struct App {
     /// How the player's design compares with the example solution.
     cost: Option<makine_levels::cost::Cost>,
     delay: Option<makine_levels::depth::Delay>,
-    /// The example solution, when open instead of the player's design.
+    /// An independent example workspace: a tab or a detached native window.
     solution: Option<solution_ui::Solution>,
     reveal: solution_ui::Reveal,
+    inspector: inspector_ui::Inspector,
+    parts_browser: parts_ui::PartsBrowser,
+    workspace: workspace_ui::Workspace,
     /// Players on this computer; saving goes to the current one's file.
     profiles: Option<crate::profiles::Profiles>,
     home: home_ui::Home,
@@ -185,6 +195,7 @@ impl App {
             target: Target::Level(first_open),
             canvas: Canvas::new(),
             lib,
+            library_revision: 0,
             sim: Err(String::new()),
             oscillating: false,
             inputs: Vec::new(),
@@ -195,6 +206,7 @@ impl App {
             view: View::Editor,
             editor_code: false,
             world_code: false,
+            world_tab: Default::default(),
             computer: None,
             turbo: false,
             just_opened: true,
@@ -216,6 +228,9 @@ impl App {
             delay: None,
             solution: None,
             reveal: Default::default(),
+            inspector: Default::default(),
+            parts_browser: Default::default(),
+            workspace: Default::default(),
             profiles: None,
             home: Default::default(),
             debug: debug_ui::Debug {
@@ -239,22 +254,34 @@ impl App {
     }
 
     fn open_level(&mut self, level: &'static Level) {
-        self.level = level;
         self.just_opened = true;
         self.open_target(Target::Level(level));
     }
 
     fn open_free(&mut self, name: String) {
         self.view = View::Editor;
-        self.rename_to = name.clone();
-        self.pin_editor = None;
         self.open_target(Target::Free(name));
     }
 
     fn open_target(&mut self, target: Target) {
+        self.open_editor_tab(target);
+    }
+
+    fn initialize_target(&mut self, target: Target) {
         self.editor_code = false;
+        self.inspector.circuit = inspector_ui::CircuitSection::Circuit;
+        if self.target != target {
+            self.parts_browser.query.clear();
+        }
         self.target = target;
-        self.solution = None;
+        match &self.target {
+            Target::Level(level) => self.level = level,
+            Target::Free(name) => self.rename_to = name.clone(),
+        }
+        self.pin_editor = None;
+        if let Some(solution) = &mut self.solution {
+            solution.active = false;
+        }
         self.mini = None;
         self.reveal = Default::default();
         self.canvas = Canvas::new();
@@ -317,6 +344,7 @@ impl App {
 
     /// Rebuild the library after sandbox chips changed.
     fn refresh_library(&mut self) {
+        self.library_revision = self.library_revision.wrapping_add(1);
         self.lib = self.progress.library(self.progress.fast);
         self.computer = None;
         if let Some(w) = &mut self.world {
@@ -434,6 +462,16 @@ impl App {
                         .filter(|_| self.view == View::Editor && self.just_opened),
                 )
                 .show(ui, |ui| {
+                    if all[start].optional() {
+                        ui.label(
+                            RichText::new(tr!(
+                                "İsteğe bağlı: ana yolu engellemez.",
+                                "Optional: does not block the main path."
+                            ))
+                            .small()
+                            .weak(),
+                        );
+                    }
                     for (i, &level) in all.iter().enumerate().take(end).skip(start) {
                         let unlocked = self.progress.unlocked(i);
                         let mark = if self.progress.solved(level.chip) {
@@ -484,110 +522,9 @@ impl App {
         self.sandbox_list(ui);
     }
 
-    fn parts_panel(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new(tr!("Parçalar", "Parts")).strong());
-        ui.label(
-            RichText::new(tr!("Tuvale sürükle", "Drag onto the board"))
-                .weak()
-                .small(),
-        );
-        let mut kinds: Vec<(String, PartKind, String)> = vec![(
-            "NAND".into(),
-            PartKind::Nand,
-            tr!(
-                "Her şeyin temeli: iki giriş de 1 ise 0, değilse 1.",
-                "The base of everything: 0 if both inputs are 1, otherwise 1."
-            )
-            .into(),
-        )];
-        let (allowed, buses): (Vec<&Level>, bool) = match &self.target {
-            Target::Level(level) => (
-                level.allowed_chips().collect(),
-                level.index() >= find("Mux32").unwrap().index(),
-            ),
-            Target::Free(_) => (levels().to_vec(), true),
-        };
-        for l in allowed.iter().filter(|l| self.progress.solved(l.chip)) {
-            kinds.push((
-                l.chip.into(),
-                PartKind::Chip(l.chip.into()),
-                l.name().into(),
-            ));
-        }
-        if let Target::Free(me) = &self.target {
-            for name in self.progress.sandbox.chips.keys() {
-                if !self.progress.sandbox.uses(name, me) {
-                    kinds.push((
-                        format!("★ {name}"),
-                        PartKind::Chip(name.clone()),
-                        tr!("Senin çipin", "Your chip").into(),
-                    ));
-                }
-            }
-        }
-        if buses {
-            kinds.push((
-                tr!("Böl", "Split").into(),
-                PartKind::Split(vec![1; 8]),
-                tr!(
-                    "Bus'ı parçalara ayır. Sağ tıkla: grupları ayarla.",
-                    "Split a bus into parts. Right-click: set the groups."
-                )
-                .into(),
-            ));
-            kinds.push((
-                tr!("Birleştir", "Join").into(),
-                PartKind::Join(vec![1; 8]),
-                tr!(
-                    "Parçaları tek bus yap. Sağ tıkla: grupları ayarla.",
-                    "Join parts into one bus. Right-click: set the groups."
-                )
-                .into(),
-            ));
-            kinds.push((
-                tr!("Sabit", "Constant").into(),
-                PartKind::Const { width: 1, value: 1 },
-                tr!(
-                    "Hep aynı değeri verir. Sağ tıkla: değeri ayarla.",
-                    "Always gives the same value. Right-click: set the value."
-                )
-                .into(),
-            ));
-        }
-        for (i, (name, kind, tip)) in kinds.into_iter().enumerate() {
-            let id = egui::Id::unique(("palette", i));
-            ui.dnd_drag_source(id, NewPart(kind), |ui| {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-                    ui.label(name);
-                });
-            })
-            .response
-            .on_hover_text(tip);
-        }
-    }
-
     fn level_panel(&mut self, ui: &mut Ui) {
         let level = self.level;
-        ui.heading(level.name());
-        ui.add_space(4.0);
         ui.label(level.about());
-        self.level_activities(ui);
-        self.circuit_teaching(ui);
-        if let Some(page) = wiki::page_for_level(level.chip) {
-            ui.add_space(4.0);
-            if ui
-                .link(trf!(
-                    "📖 Wiki'de oku: {}",
-                    "📖 Read in the wiki: {}",
-                    page.title()
-                ))
-                .clicked()
-            {
-                self.wiki.open(page);
-                self.view = View::Wiki;
-            }
-        }
         ui.add_space(8.0);
 
         let pins = |ps: Vec<Pin>| {
@@ -642,49 +579,36 @@ impl App {
         );
         self.bus_inputs(ui);
         self.truth_table(ui);
-        self.undo_buttons(ui);
-        ui.horizontal(|ui| {
-            if ui
-                .button(tr!("Durumu sıfırla", "Reset state"))
-                .on_hover_text(tr!("Bütün mandalları 0'a çek", "Set every latch to 0"))
-                .clicked()
-            {
-                if let Ok(sim) = &mut self.sim {
-                    sim.reset();
-                }
-                self.run();
-            }
-            if ui
-                .button(tr!("Temizle", "Clear"))
-                .on_hover_text(tr!(
-                    "Bütün parçaları sil, baştan başla",
-                    "Delete every part and start over"
-                ))
-                .clicked()
-            {
-                *self.design() = Design::new(level.blank());
-                self.design_changed();
-            }
-        });
-
-        ui.separator();
-        if ui
-            .add(
-                egui::Button::new(RichText::new(tr!("▶  Test et", "▶  Test")).size(16.0))
-                    .min_size(egui::vec2(120.0, 32.0)),
-            )
-            .clicked()
-        {
-            self.run_test();
-        }
+        egui::CollapsingHeader::new(tr!("Devre araçları", "Circuit tools"))
+            .id_salt("circuit-tools")
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button(tr!("Durumu sıfırla", "Reset state"))
+                        .on_hover_text(tr!("Bütün mandalları 0'a çek", "Set every latch to 0"))
+                        .clicked()
+                    {
+                        if let Ok(sim) = &mut self.sim {
+                            sim.reset();
+                        }
+                        self.run();
+                    }
+                    if ui
+                        .button(tr!("Temizle", "Clear"))
+                        .on_hover_text(tr!(
+                            "Bütün parçaları sil, baştan başla",
+                            "Delete every part and start over"
+                        ))
+                        .clicked()
+                    {
+                        *self.design() = Design::new(level.blank());
+                        self.design_changed();
+                    }
+                });
+            });
         ui.add_space(6.0);
         self.result_view(ui);
         self.mini_view(ui);
-        if !self.progress.solved(level.chip) {
-            self.hints_view(ui);
-        }
-        ui.add_space(6.0);
-        self.cost_view(ui);
     }
 
     /// The last message, at the bottom of the window over everything, gone
@@ -871,6 +795,9 @@ impl App {
             self.wiki_installed = true;
         }
         self.save_if_due(&ctx);
+        // Keep detached examples alive while visiting other levels or views.
+        self.solution_window(&ctx);
+        self.editor_windows(&ctx);
         if self.session.is_some() {
             self.net_tick();
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -896,7 +823,9 @@ impl App {
         self.resize_edges(&ctx);
         self.window_border(&ctx);
         self.top_bar(ui);
-        if self.view == View::Editor {
+        if self.view == View::Editor
+            && !(self.showing_solution() && ctx.content_rect().width() < 1100.)
+        {
             egui::Panel::left("levels")
                 .default_size(220.0)
                 .resizable(true)
@@ -905,33 +834,47 @@ impl App {
                         .id_salt("levels_scroll")
                         .show(ui, |ui| self.levels_panel(ui));
                 });
-            if !self.editor_code {
+            if !self.editor_code && !self.showing_solution() {
                 egui::Panel::left("parts")
                     .default_size(130.0)
                     .resizable(true)
                     .show(ui, |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_salt("parts_scroll")
-                            .show(ui, |ui| self.parts_panel(ui));
+                        self.parts_panel(ui);
                     });
             }
+        }
+        if self.view == View::Editor
+            || self.workspace.has_detached()
+            || self.solution.as_ref().is_some_and(|s| s.detached)
+        {
+            self.workspace_tabs(ui);
         }
         egui::Panel::right("level")
             .default_size(320.0)
             .resizable(true)
             .show(ui, |ui| {
+                if self.showing_code() {
+                    self.code_inspector(ui);
+                    return;
+                }
+                if self.view == View::Editor
+                    && !self.showing_solution()
+                    && matches!(self.target, Target::Level(_))
+                {
+                    self.circuit_inspector(ui);
+                    return;
+                }
+                if self.view == View::World {
+                    self.world_panel(ui);
+                    return;
+                }
                 egui::ScrollArea::vertical().show(ui, |ui| match (&self.view, &self.target) {
-                    (View::Editor | View::World, _) if self.showing_code() => {
-                        self.programming_panel(ui)
-                    }
-                    (View::Editor, Target::Level(_)) if self.solution.is_some() => {
-                        self.solution_panel(ui)
-                    }
+                    (View::Editor, _) if self.showing_solution() => self.solution_panel(ui),
                     (View::Editor, Target::Level(_)) => self.level_panel(ui),
                     (View::Editor, Target::Free(_)) => self.sandbox_panel(ui),
                     (View::Computer | View::Play, _) => self.computer_controls(ui),
                     (View::Wiki, _) => self.wiki.contents(ui),
-                    (View::World, _) => self.world_panel(ui),
+                    (View::World, _) => {}
                     (View::Home, _) => self.home_panel(ui),
                 });
             });
@@ -1007,7 +950,7 @@ impl App {
             }
             return;
         }
-        if self.solution.is_some() && self.view == View::Editor {
+        if self.showing_solution() {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
                 .show(ui, |ui| self.solution_canvas(ui));
@@ -1017,7 +960,7 @@ impl App {
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
                 let output_x =
-                    (ui.available_width() / self.canvas.zoom.max(0.3) - 110.0).max(400.0);
+                    (ui.available_width() / self.canvas.zoom.max(0.03) - 110.0).max(400.0);
                 self.output_x = output_x;
                 let lib = self.lib.clone();
                 let inputs = self.inputs.clone();
@@ -1031,6 +974,10 @@ impl App {
                 let out = self
                     .canvas
                     .show(ui, design, &lib, sim.as_ref(), &inputs, output_x);
+                if let Some(message) = out.status {
+                    self.status = Some(message);
+                    self.status_since = None;
+                }
                 if let Some((pin, v)) = out.toggled_input {
                     self.inputs[pin] = v;
                     self.run();

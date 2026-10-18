@@ -7,6 +7,16 @@ use makine_levels::levels;
 use makine_sim::PartKind;
 
 use super::{App, View};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum WorldTab {
+    #[default]
+    Build,
+    Parts,
+    Signals,
+    Worlds,
+    Learn,
+}
 use crate::design::Design;
 use crate::sandbox;
 
@@ -482,13 +492,162 @@ impl App {
     }
 
     /// Right panel in the world view: parts, simulation, the selection.
+    /// The World inspector: a fixed header, tabs for what used to share one
+    /// long column, and the simulation controls pinned to the bottom.
     pub(super) fn world_panel(&mut self, ui: &mut Ui) {
-        if self.world.is_none() {
-            return;
+        let Some(w) = &mut self.world else { return };
+        ui.label(crate::theme::strong(w.world.name.clone(), 20.0));
+        w.breadcrumbs(ui);
+        w.summary(ui);
+        ui.add_space(6.0);
+        // One row of equal tabs, so the panel never grows a second tab line.
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().button_padding.x = 2.0;
+            let tabs = [
+                (WorldTab::Build, tr!("Kur", "Build")),
+                (WorldTab::Parts, tr!("Parçalar", "Parts")),
+                (WorldTab::Signals, tr!("Sinyal", "Signals")),
+                (WorldTab::Worlds, tr!("Dünyalar", "Worlds")),
+                (WorldTab::Learn, tr!("Öğren", "Learn")),
+            ];
+            let width = (ui.available_width() - 2.0 * (tabs.len() - 1) as f32) / tabs.len() as f32;
+            for (tab, label) in tabs {
+                let on = self.world_tab == tab;
+                if ui
+                    .add_sized(
+                        [width, 26.0],
+                        egui::Button::selectable(on, label).truncate(),
+                    )
+                    .clicked()
+                {
+                    self.world_tab = tab;
+                }
+            }
+        });
+        ui.separator();
+        egui::Panel::bottom("world-sim-controls")
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::theme::PANEL)
+                    .inner_margin(egui::Margin::symmetric(0, 8)),
+            )
+            .show(ui, |ui| self.world_sim_controls(ui));
+        egui::ScrollArea::vertical()
+            .id_salt("world-tab-scroll")
+            .show(ui, |ui| match self.world_tab {
+                WorldTab::Build => self.world_build_tab(ui),
+                WorldTab::Parts => self.world_parts_tab(ui),
+                WorldTab::Signals => {
+                    if let Some(w) = &mut self.world {
+                        w.scope_panel(ui);
+                    }
+                }
+                WorldTab::Worlds => self.world_worlds_tab(ui),
+                WorldTab::Learn => self.world_learning_panel(ui),
+            });
+        if let Some(req) = self.world.as_mut().and_then(|w| w.request.take()) {
+            self.handle_world_request(req);
         }
-        let title = self.world.as_ref().unwrap().world.name.clone();
-        ui.label(crate::theme::strong(title, 22.0));
-        ui.add_space(4.0);
+    }
+
+    /// The selection, modules and wire tools; what the player works on.
+    fn world_build_tab(&mut self, ui: &mut Ui) {
+        let Some(w) = &mut self.world else { return };
+        w.symbols = self.progress.symbols;
+        if w.selected.is_empty() && w.selected_module.is_none() {
+            ui.label(
+                RichText::new(tr!(
+                    "Bir parça ya da modül seç; ayarları burada görünür.",
+                    "Select a part or module; its settings show here."
+                ))
+                .weak(),
+            );
+        }
+        w.module_panel(ui);
+        w.selection_panel(ui);
+        egui::CollapsingHeader::new(RichText::new(tr!("⌨ Kısayollar", "⌨ Shortcuts")).strong())
+            .id_salt("world-shortcuts")
+            .show(ui, |ui| {
+                egui::Grid::new("world-shortcut-grid")
+                    .num_columns(2)
+                    .spacing([10.0, 2.0])
+                    .show(ui, |ui| {
+                        for (keys, what) in crate::worldview::shortcuts() {
+                            ui.label(RichText::new(keys).monospace().small().strong());
+                            ui.label(RichText::new(what).small());
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
+    fn world_parts_tab(&mut self, ui: &mut Ui) {
+        let Some(w) = &mut self.world else { return };
+        crate::theme::section(ui, tr!("Parçalar", "Parts"));
+        w.palette_ui(ui, crate::worldview::palette());
+        crate::theme::section(ui, tr!("Cihazlar", "Devices"));
+        w.palette_ui(ui, crate::worldview::device_palette());
+        // Chips from the library, as parts.
+        let mut chips: Vec<(String, String)> = levels()
+            .iter()
+            .filter(|l| self.progress.solved(l.chip))
+            .map(|l| (l.chip.to_string(), l.title.to_string()))
+            .collect();
+        chips.extend(
+            self.progress
+                .sandbox
+                .chips
+                .keys()
+                .map(|n| (n.clone(), tr!("Senin çipin", "Your chip").to_string())),
+        );
+        if !chips.is_empty() {
+            egui::CollapsingHeader::new(
+                RichText::new(trf!("Çiplerin ({})", "Your chips ({})", chips.len())).strong(),
+            )
+            .id_salt("world-chips")
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new(tr!(
+                        "Çözdüğün seviyeler ve serbest çiplerin. Sürükle ya da tıkla.",
+                        "Levels you solved and your free chips. Drag or click."
+                    ))
+                    .weak()
+                    .small(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    for (name, tip) in &chips {
+                        let kind = makine_world::Kind::Part(makine_sim::Part::new(PartKind::Chip(
+                            name.clone(),
+                        )));
+                        let selected = w.placing.as_ref() == Some(&kind);
+                        let b = egui::Button::new(name.as_str())
+                            .selected(selected)
+                            .sense(egui::Sense::click_and_drag());
+                        let r = ui.add(b);
+                        let r = crate::worldview::draggable(ui, r, &kind).on_hover_text(tip);
+                        if r.clicked() {
+                            w.placing = if selected { None } else { Some(kind) };
+                        }
+                    }
+                });
+            });
+        }
+        if w.placing.is_some() {
+            ui.label(
+                RichText::new(tr!(
+                    "Koymak için tahtaya tıkla. Bırakmak için Esc.",
+                    "Click the board to place. Esc to drop."
+                ))
+                .color(crate::theme::COPPER_BRIGHT)
+                .small(),
+            );
+        }
+
+    }
+
+    /// Worlds, building together and example projects.
+    fn world_worlds_tab(&mut self, ui: &mut Ui) {
         // Switching worlds mid-session would leave the others behind.
         if self.session.is_none() {
             self.worlds_section(ui);
@@ -565,97 +724,12 @@ impl App {
                     );
                 });
         }
+    }
+
+    fn world_sim_controls(&mut self, ui: &mut Ui) {
         let Some(w) = &mut self.world else { return };
-        egui::CollapsingHeader::new(RichText::new(tr!("⌨ Kısayollar", "⌨ Shortcuts")).strong())
-            .id_salt("world-shortcuts")
-            .show(ui, |ui| {
-                egui::Grid::new("world-shortcut-grid")
-                    .num_columns(2)
-                    .spacing([10.0, 2.0])
-                    .show(ui, |ui| {
-                        for (keys, what) in crate::worldview::shortcuts() {
-                            ui.label(RichText::new(keys).monospace().small().strong());
-                            ui.label(RichText::new(what).small());
-                            ui.end_row();
-                        }
-                    });
-            });
-        ui.separator();
-
-        // What is selected comes first: it is what the player works on.
-        w.symbols = self.progress.symbols;
-        w.module_panel(ui);
-        w.selection_panel(ui);
-        let watched = w.sim.traces.len();
-        egui::CollapsingHeader::new(trf!(
-            "Sinyal izleme ({watched})",
-            "Signal watch ({watched})"
-        ))
-        .id_salt("world-scope")
-        .show(ui, |ui| w.scope_panel(ui));
-
-        crate::theme::section(ui, tr!("Parçalar", "Parts"));
-        w.palette_ui(ui, crate::worldview::palette());
-        crate::theme::section(ui, tr!("Cihazlar", "Devices"));
-        w.palette_ui(ui, crate::worldview::device_palette());
-        // Chips from the library, as parts.
-        let mut chips: Vec<(String, String)> = levels()
-            .iter()
-            .filter(|l| self.progress.solved(l.chip))
-            .map(|l| (l.chip.to_string(), l.title.to_string()))
-            .collect();
-        chips.extend(
-            self.progress
-                .sandbox
-                .chips
-                .keys()
-                .map(|n| (n.clone(), tr!("Senin çipin", "Your chip").to_string())),
-        );
-        if !chips.is_empty() {
-            egui::CollapsingHeader::new(
-                RichText::new(trf!("Çiplerin ({})", "Your chips ({})", chips.len())).strong(),
-            )
-            .id_salt("world-chips")
-            .show(ui, |ui| {
-                ui.label(
-                    RichText::new(tr!(
-                        "Çözdüğün seviyeler ve serbest çiplerin. Sürükle ya da tıkla.",
-                        "Levels you solved and your free chips. Drag or click."
-                    ))
-                    .weak()
-                    .small(),
-                );
-                ui.horizontal_wrapped(|ui| {
-                    for (name, tip) in &chips {
-                        let kind = makine_world::Kind::Part(makine_sim::Part::new(PartKind::Chip(
-                            name.clone(),
-                        )));
-                        let selected = w.placing.as_ref() == Some(&kind);
-                        let b = egui::Button::new(name.as_str())
-                            .selected(selected)
-                            .sense(egui::Sense::click_and_drag());
-                        let r = ui.add(b);
-                        let r = crate::worldview::draggable(ui, r, &kind).on_hover_text(tip);
-                        if r.clicked() {
-                            w.placing = if selected { None } else { Some(kind) };
-                        }
-                    }
-                });
-            });
-        }
-        if w.placing.is_some() {
-            ui.label(
-                RichText::new(tr!(
-                    "Koymak için tahtaya tıkla. Bırakmak için Esc.",
-                    "Click the board to place. Esc to drop."
-                ))
-                .color(crate::theme::COPPER_BRIGHT)
-                .small(),
-            );
-        }
-
         crate::theme::section(ui, tr!("Simülasyon", "Simulation"));
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let label = if w.sim.running {
                 tr!("⏸ Durdur", "⏸ Pause")
             } else {
@@ -694,7 +768,7 @@ impl App {
                 w.refit();
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .button(tr!("Saat çevrimi", "Clock cycle"))
                 .on_hover_text(tr!(
@@ -710,7 +784,7 @@ impl App {
                 w.sim.reset();
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(
                     !w.sim.running,
@@ -770,11 +844,6 @@ impl App {
         if let Some(e) = &w.status {
             ui.colored_label(crate::theme::WARN, e);
         }
-        if let Some(req) = w.request.take() {
-            self.handle_world_request(req);
-        }
-        ui.separator();
-        self.world_learning_panel(ui);
     }
 
     pub(super) fn handle_world_request(&mut self, req: crate::worldview::Request) {

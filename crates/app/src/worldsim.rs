@@ -677,4 +677,85 @@ mod example_tests {
         run(&mut s, &p.world, 1);
         assert_eq!(s.value(End::new(ram, 0)), Some(77));
     }
+
+    #[test]
+    fn rom_benches_match_level_tables_and_split_instruction_fields() {
+        for lang in makine_lang::Lang::ALL {
+            makine_lang::set_for_thread(Some(lang));
+            for (id, words) in [
+                ("rom_bench", makine_levels::memory::DATA.as_slice()),
+                ("program_rom", makine_levels::memory::PROGRAM.as_slice()),
+            ] {
+                let (mut p, mut s) = open(id);
+                let rom = find(&p, |k| {
+                    matches!(k, Kind::Device(makine_world::Device::Rom { .. }))
+                })[0];
+                let outputs = find(&p, |k| matches!(k, Kind::Output { .. }));
+                for addr in (0..words.len()).rev() {
+                    set_input(&mut p, "addr", addr as u64);
+                    run(&mut s, &p.world, 1);
+                    let value = words[addr] as u64;
+                    assert_eq!(s.value(End::new(rom, 0)), Some(value));
+                    if id == "program_rom" {
+                        assert_eq!(
+                            s.input_value(&p.world, End::new(outputs[0], 0)),
+                            Some(value & 15)
+                        );
+                        assert_eq!(
+                            s.input_value(&p.world, End::new(outputs[1], 0)),
+                            Some(value >> 4)
+                        );
+                    }
+                }
+            }
+        }
+        makine_lang::set_for_thread(None);
+    }
+
+    #[test]
+    fn byte_ram_bench_separates_enable_edges_and_combinational_reads() {
+        let (mut p, mut s) = open("byte_ram_bench");
+        let ram = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::Ram { .. }))
+        })[0];
+        run(&mut s, &p.world, 1);
+        set_input(&mut p, "addr", 1);
+        set_input(&mut p, "we", 1);
+        run(&mut s, &p.world, 1);
+        assert_eq!(s.value(End::new(ram, 0)), Some(0), "no rising edge yet");
+        set_input(&mut p, "clk", 1);
+        run(&mut s, &p.world, 1);
+        assert_eq!(s.value(End::new(ram, 0)), Some(0xA5));
+        set_input(&mut p, "d", 0x3C);
+        set_input(&mut p, "addr", 2);
+        run(&mut s, &p.world, 1);
+        assert_eq!(
+            s.value(End::new(ram, 0)),
+            Some(0),
+            "high clock must not write new address"
+        );
+        set_input(&mut p, "clk", 0);
+        run(&mut s, &p.world, 1);
+        set_input(&mut p, "clk", 1);
+        run(&mut s, &p.world, 1);
+        assert_eq!(s.value(End::new(ram, 0)), Some(0x3C));
+        set_input(&mut p, "we", 0);
+        set_input(&mut p, "addr", 1);
+        run(&mut s, &p.world, 1);
+        assert_eq!(
+            s.value(End::new(ram, 0)),
+            Some(0xA5),
+            "we=0 must allow reads"
+        );
+        set_input(&mut p, "d", 0xFF);
+        set_input(&mut p, "clk", 0);
+        run(&mut s, &p.world, 1);
+        set_input(&mut p, "clk", 1);
+        run(&mut s, &p.world, 1);
+        assert_eq!(
+            s.value(End::new(ram, 0)),
+            Some(0xA5),
+            "we=0 must prevent writes"
+        );
+    }
 }

@@ -31,6 +31,9 @@ izler.
 ## Oyun nasıl oynanır?
 
 - Soldaki **Parçalar** listesinden bir parçayı tuvale sürükle.
+- **Parça ara** ile çip adını veya Türkçe/İngilizce başlığını yaz. Uzun
+  listeler konu gruplarına ayrılır; arama eşleşen grupları açar. **Esc**
+  filtreyi temizler. Seviye ilerlemesiyle açılan parça kuralları değişmez.
 - Bir parçanın **çıkış ucundan** (sağdaki nokta) bir **giriş ucuna** sürükleyerek
   tel çek.
 - Soldaki giriş kutularına **tıklayarak** 0 ile 1 arasında değiştir. Teller
@@ -58,6 +61,7 @@ izler.
 | [Negatif sayılar ve çıkarma](cikarma.md) | İkiye tümleyen |
 | [Hafıza](hafiza.md) | Mandal, flip-flop, saat |
 | [Register ve RAM](register.md) | Bitleri kelimelere, kelimeleri belleğe dönüştürmek |
+| [Bellek ve ROM](rom.md) | Kendi ROM/RAM'ini kurmak, programı baytlara kodlamak ve komut getirmek |
 | [ALU](alu.md) | İşlemcinin hesap makinesi |
 | [RISC-V komutları](riscv.md) | İşlemcinin konuştuğu dil |
 | [İşlemci](islemci.md) | Hepsini birleştirmek |

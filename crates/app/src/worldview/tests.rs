@@ -7,6 +7,67 @@ use super::*;
 
 type Harness = egui_kittest::Harness<'static, WorldView>;
 
+#[test]
+fn duplicate_keeps_the_original_clipboard_and_repeated_pastes_separate() {
+    let mut w = World::new("clipboard");
+    let ids: Vec<_> = (0..4)
+        .map(|i| put(&mut w, Kind::Gate(Gate::Nand), 100. + i as f32 * 150., 100.))
+        .collect();
+    let mut v = view(w);
+    v.selected = ids[..2].iter().copied().collect();
+    let text = v.copy().unwrap();
+    v.selected = ids.iter().copied().collect();
+    v.duplicate();
+    assert_eq!(v.selected.len(), 4);
+    assert_eq!(v.clipboard.as_ref().unwrap().parts.len(), 2);
+    v.paste(None, pos2(100., 300.));
+    let first = v.world.part(*v.selected.first().unwrap()).unwrap().pos;
+    v.paste(Some(&text), pos2(100., 300.));
+    let second = v.world.part(*v.selected.first().unwrap()).unwrap().pos;
+    assert_ne!(
+        first, second,
+        "repeated paste must not hide the previous parts under itself"
+    );
+    assert_eq!(v.selected.len(), 2);
+    let count = v.world.parts().count();
+    v.paste(Some("unrelated text, not circuit parts"), pos2(100., 300.));
+    assert_eq!(
+        v.world.parts().count(),
+        count,
+        "invalid external text must not silently paste the old clipboard"
+    );
+}
+
+#[test]
+fn four_nands_pasted_at_the_edge_are_all_visible_and_undo_together() {
+    let mut w = World::new("clipboard");
+    let ids: Vec<_> = (0..4)
+        .map(|i| put(&mut w, Kind::Gate(Gate::Nand), 100. + i as f32 * 200., 100.))
+        .collect();
+    let mut h = harness(view(w));
+    h.state_mut().selected = ids.iter().copied().collect();
+    h.hover_at(pos2(-10., -10.));
+    h.run();
+    h.event(egui::Event::Copy);
+    h.run();
+    assert_eq!(h.state().clipboard.as_ref().unwrap().parts.len(), 4);
+    let at = h.state().drop_point();
+    h.state_mut().paste(None, at + vec2(700., 450.));
+    h.run();
+    assert_eq!(h.state().selected.len(), 4);
+    let v = h.state();
+    let layout = v.layout(v.origin);
+    for id in &v.selected {
+        assert!(v
+            .board
+            .contains_rect(layout.rect(layout.part_rect(*id).unwrap())));
+    }
+    h.state_mut().undo();
+    assert_eq!(h.state().world.parts().count(), 4);
+    h.state_mut().redo();
+    assert_eq!(h.state().world.parts().count(), 8);
+}
+
 fn harness(v: WorldView) -> Harness {
     let mut h = egui_kittest::Harness::builder()
         .with_size(vec2(900.0, 600.0))

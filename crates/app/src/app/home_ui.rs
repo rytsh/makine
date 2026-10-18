@@ -12,6 +12,7 @@ use crate::theme;
 /// Home page state that does not need saving.
 #[derive(Default)]
 pub(super) struct Home {
+    pub settings: bool,
     new_name: String,
     rename: Option<(usize, String)>,
     pub paste: String,
@@ -86,6 +87,13 @@ impl App {
                             .desired_height(3.0)
                             .fill(fill),
                     );
+                    if all[start].optional() {
+                        ui.label(
+                            RichText::new(tr!("İsteğe bağlı", "Optional"))
+                                .small()
+                                .weak(),
+                        );
+                    }
                 })
                 .response
                 .interact(egui::Sense::click());
@@ -152,6 +160,52 @@ impl App {
     }
 
     pub(super) fn home_view(&mut self, ui: &mut Ui) {
+        ui.vertical_centered(|ui| {
+            ui.horizontal(|ui| {
+                let labels = [tr!("Genel bakış", "Overview"), tr!("Ayarlar", "Settings")];
+                // Measure the pair, then indent it to the middle.
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let pad = ui.spacing().button_padding.x * 2.;
+                let width: f32 = labels
+                    .iter()
+                    .map(|l| {
+                        ui.painter()
+                            .layout_no_wrap(l.to_string(), font.clone(), egui::Color32::PLACEHOLDER)
+                            .size()
+                            .x
+                            + pad
+                    })
+                    .sum::<f32>()
+                    + ui.spacing().item_spacing.x;
+                ui.add_space(((ui.available_width() - width) / 2.).max(0.));
+                ui.selectable_value(&mut self.home.settings, false, labels[0]);
+                ui.selectable_value(&mut self.home.settings, true, labels[1]);
+            });
+        });
+        ui.separator();
+        if self.home.settings {
+            egui::ScrollArea::vertical()
+                .id_salt("home-settings")
+                .show(ui, |ui| {
+                    // A centred column like the overview; the form stays
+                    // left-aligned inside it so checkboxes line up.
+                    let width = ui.available_width().min(640.);
+                    ui.add_space(24.);
+                    ui.horizontal(|ui| {
+                        ui.add_space((ui.available_width() - width) / 2.);
+                        ui.vertical(|ui| {
+                            ui.set_width(width);
+                            egui::Frame::group(ui.style())
+                                .inner_margin(14.)
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    self.settings_view(ui);
+                                });
+                        });
+                    });
+                });
+            return;
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.add_space(24.0);
             ui.vertical_centered(|ui| {

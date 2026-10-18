@@ -492,6 +492,26 @@ pub fn hints(chip: &str) -> Vec<&'static str> {
                 "Split instr as 4,4 (low: arg, high: op). acc's d: rdata, AddSub(acc, rdata) or arg; 0 on reset. pc's d: pc+1 or arg (jump); its load is NOT hold. addr = arg.",
             ],
         ),
+        "AddressDecode2" => (
+            &["İki adres biti dört farklı birleşim verir. Her çıkış yalnızca bir birleşimde açılsın.", "Böl (1,1), iki NOT ve AND kapıları kullan; her seçimi en ile sınırla.", "s0=en AND !a1 AND !a0; s1=en AND !a1 AND a0; s2=en AND a1 AND !a0; s3=en AND a1 AND a0."],
+            &["Two address bits give four combinations. Each output enables only one combination.", "Use Split (1,1), two NOTs and AND gates; gate every selection with en.", "s0=en AND !a1 AND !a0; s1=en AND !a1 AND a0; s2=en AND a1 AND !a0; s3=en AND a1 AND a0."],
+        ),
+        "Rom4x8" => (
+            &["Adres, dört sabitten birini seçsin. Veriyi saklamak için saat gerekmez.", "8-bit Sabitler: 0x12, 0xA5, 0x3C, 0x80. Üç MUX×8 ve Böl (1,1).", "a0 ile (0x12,0xA5) ve (0x3C,0x80) çiftlerini seç; a1 ile bu iki sonucu seç. Böl'ün ilk çıkışı a0'dır."],
+            &["Let the address select one of four constants. No clock is needed.", "8-bit Constants: 0x12, 0xA5, 0x3C, 0x80. Three MUX×8 and Split (1,1).", "Use a0 to select within (0x12,0xA5) and (0x3C,0x80); use a1 to select between those results. Split's first output is a0."],
+        ),
+        "Ram4x8" => (
+            &["ROM'daki sabitlerin yerine yazılabilir kayıtlar koy. Her kayıt kendi yazma iznine sahip olsun.", "Dört Bit×8, bir AddressDecode2 ve ROM'daki gibi üç MUX×8.", "addr,we → çözücü; s0–s3 ilgili Bit×8'in load'una. d ve clk bütün kayıtlara ortak. Okuma MUX ağacı addr ile q'yu seçer; we okuma yolunu kapatmaz."],
+            &["Replace ROM constants with writable registers. Give each register its own write enable.", "Four Bit×8, one AddressDecode2 and three MUX×8 as in ROM.", "addr,we → decoder; s0–s3 → each Bit×8 load. Share d and clk across registers. An addr-selected MUX tree drives q; we must not disable reads."],
+        ),
+        "ProgramRom" => (
+            &["Komut da sekiz bitlik bir veridir. Opcode ve argümanı doğru yarılara koy.", "16 Sabit ve dört katmanlı MUX×8 ağacı; sıfır sabitini paylaşabilirsin.", "LDI 3=0x13, ST 0=0x30, ADD 0=0x40, ST 1=0x31, HLT=0xF0. Katmanlar düşük adres bitinden yükseğe seçim yapar; kalan yapraklar 0."],
+            &["An instruction is also eight-bit data. Put opcode and argument in the correct halves.", "16 Constants and four MUX×8 layers; share a zero constant if useful.", "LDI 3=0x13, ST 0=0x30, ADD 0=0x40, ST 1=0x31, HLT=0xF0. Layers select from low address bit to high; remaining leaves are zero."],
+        ),
+        "RomSequencer" => (
+            &["Bir kayıt adresi tutar, ROM o adresteki komutu verir. İzin yoksa adres aynı kalmalı.", "Bit×4, ProgramRom, +1 için Adder8, yükleme/reset için MUX×4; HLT için komutun üst dört bitini AND ile birleştir.", "d_reg=MUX(MUX((pc+1)&15,d,load),0,reset); load_reg=reset OR load OR (run AND !halt). clk doğrudan kayda; pc ROM'un addr'ına, ROM çıkışı instr'a."],
+            &["A register holds the address; ROM supplies that instruction. Without permission the address must hold.", "Bit×4, ProgramRom, Adder8 for +1, MUX×4 for load/reset; AND the instruction's upper four bits to detect HLT.", "d_reg=MUX(MUX((pc+1)&15,d,load),0,reset); load_reg=reset OR load OR (run AND !halt). Wire clk directly to the register, pc to ROM addr and ROM output to instr."],
+        ),
         _ => (&[], &[]),
     };
     pick(tr, en).to_vec()

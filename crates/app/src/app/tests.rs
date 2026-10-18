@@ -360,6 +360,8 @@ mod editor {
             harness.run();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        app.borrow_mut().world_tab = crate::app::world_ui::WorldTab::Worlds;
+        harness.run();
         egui_kittest::kittest::Queryable::get_by_label_contains(&harness, "Birlikte kur").click();
         harness.run_steps(3);
         let img = harness.render().unwrap();
@@ -720,7 +722,7 @@ mod sandbox_tests {
         h.get_by_label("+ Oluştur").click();
         h.run_steps(2);
         assert!(
-            h.query_by_label("★ Tampon").is_some(),
+            h.query_by_label("Çip: Tampon").is_some(),
             "Tampon not in parts"
         );
         {
@@ -747,7 +749,7 @@ mod sandbox_tests {
         assert!(tampon.is_some());
         app.borrow_mut().open_free("Tampon".into());
         h.run_steps(2);
-        assert!(h.query_by_label("★ Dis").is_none(), "cycle offered");
+        assert!(h.query_by_label("Çip: Dis").is_none(), "cycle offered");
         // Tampon is used by Dis, so it cannot be deleted.
         assert!(!app.borrow().progress.sandbox.users_of("Tampon").is_empty());
     }
@@ -804,8 +806,13 @@ mod sandbox_tests {
         assert_eq!(sim.eval_values(&[0]).unwrap(), vec![1]);
 
         // The chip list offers it; pick it and click the board to place it.
+        h.get_by_label("Parçalar").click();
+        h.run_steps(2);
         h.get_by_label_contains("Çiplerin (").click();
         h.run_steps(2);
+        // More curriculum chips can put the free chip below the viewport.
+        h.get_by_label("Ters").scroll_to_me();
+        h.run();
         h.get_by_label("Ters").click();
         h.run_steps(2);
         let placing = app.borrow().world.as_ref().unwrap().placing.clone();
@@ -875,6 +882,8 @@ mod sandbox_tests {
             a.store_world();
         };
         edit(&app, 0.0);
+        h.get_by_label("Dünyalar").click();
+        h.run_steps(2);
         h.get_by_label_contains("Dünyalar (").click();
         h.run_steps(2);
         h.get_by_label("+ Yeni").click();

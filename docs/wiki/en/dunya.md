@@ -47,8 +47,22 @@ takes only one wire.
 - With a selection, **Ctrl+C / Ctrl+V** copies, **Ctrl+D** duplicates, and
   **Delete** removes. Wires between copied parts come along too.
 - **Align top / Align left** lines up the selected parts.
-- The **minimap** keeps you from getting lost in a big circuit; click the map
-  to jump to another area. **Home / Center** shows the whole circuit.
+- The **minimap** in the board's bottom-left corner keeps you from getting lost
+  in a big circuit; click or drag on it to jump to another area. **Home / Center** shows the whole circuit.
+
+Copy and paste messages report **how many parts** were included. Repeated
+pastes at the same point are slightly offset. If the new group would fall
+outside the view, the camera adjusts to show it. **Ctrl+D** preserves the
+previous clipboard. Invalid clipboard text produces a warning instead of
+silently pasting an older circuit.
+
+Only wires **whose two ends are within the selected parts** are copied.
+Reconnect links to unselected parts at the new location. The level editor's
+fixed input/output boxes are not part of a gate selection; World's Input/Output
+devices can be selected separately. Level and World clipboards have different
+formats and cannot be pasted directly into one another. Use chip files to
+transfer a circuit as a chip. With a text field focused, Ctrl+C/V acts on its
+text rather than circuit parts; click the canvas to return to the circuit.
 
 ## Modules and signal watching
 
@@ -68,7 +82,7 @@ Details: [Modules](moduller.md), [Signal watching](sinyaller.md).
 
 ## Try the 4004 workshop
 
-In the right panel, go to **Example projects → Open 4004 workshop**. Your
+In the right panel's **Worlds** tab, go to **Example projects → Open 4004 workshop**. Your
 current world stays; the example opens in a new world. It is an arithmetic and
 control core made of real gates, not a full MCS-4 system.
 [Read what works and see the example program](4004.md).

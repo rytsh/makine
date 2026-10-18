@@ -177,6 +177,7 @@ pub struct WorldView {
     rom_text: Option<(Id, String, Option<String>, Option<String>)>,
     /// The last copied parts.
     pub clipboard: Option<Clip>,
+    last_paste: Option<(Clip, Pos2, u32)>,
     /// Name typed for a new chip made from the selection.
     pub chip_name: String,
     /// Something the app must do (it owns the chip library).
@@ -260,6 +261,7 @@ impl WorldView {
             status: None,
             rom_text: None,
             clipboard: None,
+            last_paste: None,
             chip_name: String::new(),
             request: None,
             outbox: Vec::new(),
@@ -510,6 +512,7 @@ impl WorldView {
     /// Copy the selected parts (and the wires between them); also returns
     /// them as text for the system clipboard.
     pub fn copy(&mut self) -> Option<String> {
+        self.selected.retain(|id| self.world.part(*id).is_some());
         let ids: Vec<Id> = self.selected.iter().copied().collect();
         if ids.is_empty() {
             return None;
@@ -558,6 +561,12 @@ impl WorldView {
                 .collect(),
         };
         let text = serde_json::to_string(&clip).ok();
+        self.last_paste = None;
+        self.status = Some(makine_lang::trf!(
+            "{} parça kopyalandı. Yalnızca seçili parçalar arasındaki teller alınır.",
+            "Copied {} parts. Only wires between selected parts are included.",
+            clip.parts.len()
+        ));
         self.clipboard = Some(clip);
         text
     }
@@ -568,15 +577,32 @@ impl WorldView {
         Some(t)
     }
 
-    /// Paste `text` if it holds parts (else the last copy) at world point
+    /// Paste `text` if it holds parts (or the last copy if absent) at world point
     /// `at`. The pasted parts are selected.
     pub fn paste(&mut self, text: Option<&str>, at: Pos2) {
-        let Some(clip) = text
-            .and_then(Clip::from_text)
-            .or_else(|| self.clipboard.clone())
-        else {
+        let Some(clip) = (match text {
+            Some(text) => Clip::from_text(text),
+            None => self.clipboard.clone(),
+        }) else {
+            self.status = Some(
+                tr!(
+                    "Panoda Dünya parçaları bulunamadı. Parçaları seçip yeniden kopyala.",
+                    "No World parts found on the clipboard. Select the parts and copy again."
+                )
+                .into(),
+            );
             return;
         };
+        if clip.parts.is_empty() {
+            return;
+        }
+        let anchor = at;
+        let count = self
+            .last_paste
+            .as_ref()
+            .filter(|(previous, point, _)| previous == &clip && *point == anchor)
+            .map_or(0, |(_, _, count)| count + 1);
+        let at = at + vec2(24., 24.) * count as f32;
         let mut ids = Vec::new();
         let mut edits = Vec::new();
         let mut scratch = self.world.clone();
@@ -637,20 +663,49 @@ impl WorldView {
         self.edit(Edit::Batch(edits));
         self.selected = ids.into_iter().collect();
         self.selected_module = None;
+        self.status = Some(makine_lang::trf!(
+            "{} parça yapıştırıldı; yeni parçalar seçili.",
+            "Pasted {} parts; the new parts are selected.",
+            self.selected.len()
+        ));
+        self.last_paste = Some((clip, anchor, count));
+        self.reveal_pasted_selection();
     }
 
     /// Copy and paste the selection a little lower and to the right.
     pub fn duplicate(&mut self) {
+        let original_clipboard = self.clipboard.clone();
         let first = self
             .selected
             .first()
             .and_then(|id| self.world.part(*id))
             .map(|p| p.pos);
         if let (Some(_), Some(p)) = (self.copy(), first) {
-            let clip = self.clipboard.clone();
             self.paste(None, pos2(p.x + 24.0, p.y + 24.0));
             // The clipboard keeps what the player copied before.
-            self.clipboard = clip;
+        }
+        self.clipboard = original_clipboard;
+    }
+
+    fn reveal_pasted_selection(&mut self) {
+        if !self.board.is_finite() || self.board.width() <= 40. || self.board.height() <= 40. {
+            return;
+        }
+        let layout = self.layout(self.origin);
+        let bounds = self
+            .selected
+            .iter()
+            .filter_map(|id| layout.part_rect(*id))
+            .fold(Rect::NOTHING, Rect::union);
+        let viewport = self.board.shrink(20.);
+        if bounds.is_finite() && !viewport.contains_rect(layout.rect(bounds)) {
+            self.zoom = self
+                .zoom
+                .min(viewport.width() / bounds.width().max(1.))
+                .min(viewport.height() / bounds.height().max(1.))
+                .clamp(0.03, 3.);
+            self.offset = self.board.size() / 2. - bounds.center().to_vec2() * self.zoom;
+            self.origin = self.board.min + self.offset;
         }
     }
 
@@ -782,14 +837,13 @@ impl WorldView {
 
     pub fn show(&mut self, ui: &mut Ui) {
         self.after_remote_edits();
-        self.breadcrumbs(ui);
-        self.map_ui(ui);
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let board = response.rect;
         self.board = board;
         if std::mem::take(&mut self.fit) {
             self.fit_to(board);
         }
+        let map = self.map_rect(board);
         self.zoom_at_pointer(ui, &response);
         let origin = board.min + self.offset;
         self.origin = origin;
@@ -798,7 +852,7 @@ impl WorldView {
         let pointer = ui
             .ctx()
             .pointer_interact_pos()
-            .filter(|p| board.contains(*p));
+            .filter(|p| board.contains(*p) && !map.is_some_and(|m| m.contains(*p)));
         self.hover_pos = pointer.map(|p| l.to_world(p));
         let hover = pointer.map_or_else(Hover::default, |p| {
             self.hover_at(&l, p, self.drag == Drag::None)
@@ -818,12 +872,15 @@ impl WorldView {
         self.sim.run_frame(&self.world);
         self.screens = draw::read_screens(self);
         // Layout again: this frame's edits moved or added parts.
-        let l = self.layout(origin);
+        let l = self.layout(self.origin);
         self.draw(&painter, board, &l, &hover);
         if let (Drag::Wire(from), Some(p)) = (self.drag, pointer) {
             self.draw_new_wire(&painter, &l, from, p, &hover);
         }
         self.set_cursor(ui, &hover);
+        if let Some(map) = map {
+            self.map_ui(ui, map);
+        }
         let clocks = self
             .world
             .parts()
@@ -880,7 +937,9 @@ impl WorldView {
             }
             return;
         }
-        if !(response.hovered() || response.has_focus()) || ui.ctx().egui_wants_keyboard_input() {
+        if !(response.hovered() || response.has_focus() || !self.selected.is_empty())
+            || ui.ctx().egui_wants_keyboard_input()
+        {
             return;
         }
         use egui::Key;

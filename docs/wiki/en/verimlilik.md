@@ -20,7 +20,7 @@ Every level has an **Efficiency** section in its right panel:
   the example solution is the yardstick.
 
 If your count matches the target you get a ✔; if it's smaller than the
-example you get a ★: you've found something better than the game knows.
+example a message highlights it: you've found something better than the game knows.
 
 ## Where do extra gates come from?
 
@@ -63,10 +63,28 @@ well how roundabout your design is.
 
 ## Seeing the example solution
 
-The **💡 See the solution** button opens the example circuit on the canvas.
-Your own circuit isn't deleted; you come back with **Back to my circuit**. You
-can change the example circuit's inputs and watch how it works, but your
-changes aren't saved.
+The **💡 See the solution** button opens a separate **Example** tab.
+Switch between your named circuit and **Example** in one click. Your own layout, zoom,
+inputs and undo history stay intact. Experiment with the example's inputs
+and parts; these temporary changes are not saved to your profile.
+
+Drag the example tab down to detach
+it into an independent window. Drag its system title bar to another monitor
+to see your circuit and the example simultaneously. The example stays open
+while you visit another level or the Wiki; its title identifies its level.
+
+**Dock as tab**, or the detached window's close button, returns the example
+to a tab without closing the application or interrupting your current work.
+**Close example tab** closes the temporary example workspace. Environments
+without native multi-window support use an in-app floating window instead.
+**Fit example circuit** brings a large example back into view; normal zoom
+and pan still work.
+
+Other levels and free chips open named tabs on the same strip. Drag circuit
+tabs to reorder them, or down to detach them just like the example. On tabs opened
+later, **×** closes the workspace, not its saved circuit; the first tab stays open.
+Change window frames under **Home → Settings**; root and detached windows use
+the same preference.
 
 If you want to look at the solution before passing the test, the game asks
 you once more. Try it yourself first: when you get stuck, the

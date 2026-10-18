@@ -18,38 +18,32 @@ impl App {
             self.debug.report = None;
             self.debug.report_source = None;
         }
-        self.workspace_header(ui);
-        ui.heading(tr!("Kodla uygula", "Apply with code"));
-        ui.label(tr!(
-            "Taslaklar otomatik kaydedilir. Derlemek programı çalıştırmaz.",
-            "Drafts save automatically. Building does not run your program."
-        ));
-        let risc_v = self
-            .progress
-            .notebook
-            .current()
-            .is_some_and(|d| d.architecture == Architecture::RiscV);
-        if risc_v && self.progress.solved("Cpu") {
-            if ui
-                .checkbox(
-                    &mut self.turbo,
-                    tr!("Referans işlemciyi kullan", "Use reference processor"),
-                )
-                .changed()
-            {
-                self.computer = None;
-                self.debug.slow = false;
+        if let Some(draft) = self.progress.notebook.current().cloned() {
+            self.mini_task_panel(ui, &draft);
+            if draft.architecture != Architecture::RiscV {
+                if draft.architecture == Architecture::Mini
+                    && draft
+                        .activity
+                        .as_deref()
+                        .is_some_and(|key| key.starts_with("mini-lesson:"))
+                {
+                    return;
+                }
+                self.machine_programming_guide(ui, draft.architecture);
+                if draft.architecture == Architecture::Custom {
+                    self.isa_panel(ui);
+                }
+                return;
             }
-        } else if risc_v {
-            ui.label(
-                RichText::new(tr!(
-                    "CPU'yu bitirmeden referans işlemcide öğrenebilirsin.",
-                    "Learn on the reference processor before completing your CPU."
-                ))
-                .small()
-                .weak(),
-            );
         }
+        self.risc_v_lesson_panel(ui);
+    }
+
+    pub(super) fn program_files(&mut self, ui: &mut Ui) {
+        ui.label(tr!(
+            "Taslaklar ve dosyalar; değişiklikler profiline otomatik kaydedilir.",
+            "Drafts and files; changes save automatically to your profile."
+        ));
         theme::section(ui, tr!("Programlarım", "My programs"));
         let drafts = self.progress.notebook.drafts.clone();
         for d in drafts {
@@ -143,25 +137,10 @@ impl App {
                     .set_file_name("program.s")
                     .save_file()
                 {
-                    if let Err(e) = std::fs::write(p, d.source) {
+                    if let Err(e) = std::fs::write(p, &d.source) {
                         self.status = Some(e.to_string());
                     }
                 }
-            }
-            if d.architecture != Architecture::RiscV {
-                theme::section(
-                    ui,
-                    tr!("Bu makineyi programlamak", "Programming this machine"),
-                );
-                ui.label(match d.architecture{
-                    Architecture::Mini=>tr!("Önce Derle, sonra Devreye yükle. Adım ile acc, pc ve RAM'i izle. MiniCpu seviyesini bitirdiysen kendi devren kullanılır; yoksa örnek devre açıkça etiketlenir.","Build, then Load into circuit. Step to watch acc, pc and RAM. If you solved MiniCpu, your circuit is used; otherwise the example circuit is explicitly labelled."),
-                    Architecture::Mcs4=>tr!("Derlenen kod Dünya'da 4004 atölyesine yüklenir; mevcut dünyan korunur. Saat çevrimi ile komut yürüt. WPM bu donanımda desteklenmez.","Compiled code opens in the 4004 World workshop, keeping your current world. Clock cycle executes an instruction. This hardware does not implement WPM."),
-                    _=>tr!("Bir komutun adını, opcode'unu ve argümanını tanımla. CPU çipini Serbest çipler'de kendin kur; Derle ve Devreye yükle ROM'u o devreye bağlar. Hazır davranış emülatörü eklenmez.","Define instruction names, opcodes and operands. Build the CPU in Free chips; Build and Load into circuit connect ROM to that circuit. No behaviour emulator is added."),
-                });
-                if d.architecture == Architecture::Custom {
-                    self.isa_panel(ui);
-                }
-                return;
             }
         }
         egui::CollapsingHeader::new(tr!("Daha büyük projeler", "Larger projects"))
@@ -176,6 +155,9 @@ impl App {
                     }
                 }
             });
+    }
+
+    fn risc_v_lesson_panel(&mut self, ui: &mut Ui) {
         if let Some(chip) = self
             .debug
             .lesson
@@ -215,29 +197,34 @@ impl App {
                     ),
                 );
             }
-            ui.label(l.about);
-            theme::section(ui, tr!("Tahmin et", "Predict"));
-            ui.label(l.predict);
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut self.debug.prediction)
-                        .hint_text(tr!("Tahminin", "Your prediction")),
-                )
-                .changed()
-            {
-                self.progress
-                    .notebook
-                    .lesson_notes
-                    .insert(format!("predict:{}", l.id), self.debug.prediction.clone());
-                self.save_soon();
-            }
-            if ui.button(tr!("Yanıtı açıkla", "Reveal answer")).clicked() {
-                self.debug.show_answer = true;
-            }
-            if self.debug.show_answer {
-                ui.label(trf!("Yanıt: {}", "Answer: {}", l.answer));
-            }
-            ui.label(l.change);
+            ui.label(RichText::new(l.task).strong());
+            egui::CollapsingHeader::new(tr!("Anlatım ve tahmin", "Explanation and prediction"))
+                .id_salt(("code-lesson-explanation", l.id))
+                .show(ui, |ui| {
+                    ui.label(l.about);
+                    theme::section(ui, tr!("Tahmin et", "Predict"));
+                    ui.label(l.predict);
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut self.debug.prediction)
+                                .hint_text(tr!("Tahminin", "Your prediction")),
+                        )
+                        .changed()
+                    {
+                        self.progress
+                            .notebook
+                            .lesson_notes
+                            .insert(format!("predict:{}", l.id), self.debug.prediction.clone());
+                        self.save_soon();
+                    }
+                    if ui.button(tr!("Yanıtı açıkla", "Reveal answer")).clicked() {
+                        self.debug.show_answer = true;
+                    }
+                    if self.debug.show_answer {
+                        ui.label(trf!("Yanıt: {}", "Answer: {}", l.answer));
+                    }
+                    ui.label(l.change);
+                });
             ui.horizontal_wrapped(|ui| {
                 if ui.button(tr!("Örneği aç", "Open example")).clicked() {
                     self.progress
@@ -255,30 +242,29 @@ impl App {
                     self.save_soon();
                 }
             });
-            theme::section(ui, tr!("Kendin yaz", "Write it yourself"));
-            ui.label(l.task);
-            if ui
-                .add_enabled(ready, egui::Button::new(tr!("Görevi test et", "Test task")))
-                .clicked()
-            {
-                self.test_program(l.id);
-            }
-            if ui.button(tr!("İpucu", "Hint")).clicked() {
-                self.debug.show_hint = true;
-            }
-            if self.debug.show_hint {
-                ui.label(l.hint);
-            }
-            ui.checkbox(
-                &mut self.debug.show_solution,
-                tr!(
-                    "Örnek çözümü göster (taslağım değişmesin)",
-                    "Reveal solution (keep my draft)"
-                ),
-            );
-            if self.debug.show_solution {
-                ui.code(l.solution);
-            }
+            egui::CollapsingHeader::new(tr!(
+                "Ders ipucu ve örnek çözüm",
+                "Lesson hint and example solution"
+            ))
+            .id_salt(("code-lesson-hint", l.id))
+            .show(ui, |ui| {
+                if ui.button(tr!("İpucu", "Hint")).clicked() {
+                    self.debug.show_hint = true;
+                }
+                if self.debug.show_hint {
+                    ui.label(l.hint);
+                }
+                ui.checkbox(
+                    &mut self.debug.show_solution,
+                    tr!(
+                        "Örnek çözümü göster (taslağım değişmesin)",
+                        "Reveal solution (keep my draft)"
+                    ),
+                );
+                if self.debug.show_solution {
+                    ui.code(l.solution);
+                }
+            });
         }
         if let Some(r) = &self.debug.report {
             let passed = r.failure.is_none() && r.total > 0;
@@ -338,6 +324,46 @@ impl App {
                 }
             }
         }
+    }
+
+    pub(super) fn program_inspection(&mut self, ui: &mut Ui) {
+        let architecture = self
+            .progress
+            .notebook
+            .current()
+            .map(|d| d.architecture)
+            .unwrap_or_default();
+        self.machine_programming_guide(ui, architecture);
+        if architecture == Architecture::Mini {
+            if let Some(machine) = &self.debug.mini_execution {
+                if self
+                    .progress
+                    .notebook
+                    .current()
+                    .is_some_and(|draft| self.debug.mini_source.as_ref() != Some(&draft.source))
+                {
+                    ui.colored_label(theme::WARN,tr!("Çalışan program taslaktan farklı; güncel kaynak için yeniden derle ve yükle.", "The running program differs from this draft; rebuild and load the current source."));
+                }
+                machine.inspector(ui);
+            } else {
+                ui.label(tr!("Henüz yüklü Mini program yok. Derle → Devreye yükle ile başlat; PC, acc ve RAM burada görünecek.", "No Mini program is loaded yet. Use Build → Load into circuit; PC, acc and RAM will appear here."));
+            }
+            return;
+        }
+        if architecture != Architecture::RiscV {
+            return;
+        }
+        if self.progress.solved("Cpu")
+            && ui
+                .checkbox(
+                    &mut self.turbo,
+                    tr!("Referans işlemciyi kullan", "Use reference processor"),
+                )
+                .changed()
+        {
+            self.computer = None;
+            self.debug.slow = false;
+        }
         if let Some(c) = &self.computer {
             ui.separator();
             ui.label(
@@ -380,10 +406,24 @@ impl App {
                 .response
                 .labelled_by(radix_label);
             debug_ui::registers(ui, c, &self.debug);
+        } else {
+            ui.label(tr!(
+                "Önce Derle → Baştan yükle. Ardından register değerlerini burada inceleyebilirsin.",
+                "Build → Load from start first, then inspect register values here."
+            ));
         }
     }
 
-    fn test_program(&mut self, id: &str) {
+    fn machine_programming_guide(&self, ui: &mut Ui, architecture: Architecture) {
+        ui.label(match architecture {
+            Architecture::Mini => tr!("Derle → Devreye yükle → Adım. MiniCpu tamamlandıysa kendi devren, değilse örnek devre kullanılır.", "Build → Load into circuit → Step. Uses your MiniCpu if completed; otherwise the example circuit."),
+            Architecture::Mcs4 => tr!("Kod Dünya'daki 4004 atölyesinde çalışır. Saat çevrimi ile ilerlet. WPM desteklenmez.", "Code runs in the World 4004 workshop. Advance with Clock cycle. WPM is not supported."),
+            Architecture::Custom => tr!("Kodlama komutların bitlerini tanımlar; davranışı kendi CPU devrende kurmalısın.", "The encoding defines instruction bits; implement their behaviour in your CPU circuit."),
+            Architecture::RiscV => tr!("Derlemek programı çalıştırmaz. Baştan yükle ile hazırla, sonra bir komut veya kaynak satırı ilerle.", "Building does not run the program. Prepare with Load from start, then step an instruction or source line."),
+        });
+    }
+
+    pub(super) fn test_program(&mut self, id: &str) {
         if !crate::lessons::unlocked(id, &self.progress.notebook.solved) {
             self.status = Some(
                 tr!(
@@ -453,7 +493,7 @@ impl App {
         let Some(draft) = self.progress.notebook.current().cloned() else {
             return;
         };
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.heading(if self.view == super::View::World {
                 tr!("Dünya kodu", "World code")
             } else {
@@ -463,31 +503,26 @@ impl App {
         });
         let mut dirty = false;
         let mut architecture_changed = false;
+        let compact = ui.available_width() < 560.;
         if let Some(d) = self.progress.notebook.current_mut() {
             ui.horizontal(|ui| {
                 let label = ui.label(tr!("Ad", "Name")).id;
                 dirty |= ui
-                    .add(egui::TextEdit::singleline(&mut d.name).desired_width(200.0))
+                    .add(
+                        egui::TextEdit::singleline(&mut d.name)
+                            .desired_width(200.0_f32.min((ui.available_width() - 12.).max(80.))),
+                    )
                     .labelled_by(label)
                     .changed();
-                let arch_label = ui.label(tr!("Mimari", "Architecture")).id;
-                egui::ComboBox::from_id_salt("draft_architecture")
-                    .selected_text(d.architecture.name())
-                    .show_ui(ui, |ui| {
-                        for a in [
-                            Architecture::RiscV,
-                            Architecture::Mini,
-                            Architecture::Mcs4,
-                            Architecture::Custom,
-                        ] {
-                            architecture_changed |= ui
-                                .selectable_value(&mut d.architecture, a, a.name())
-                                .changed();
-                        }
-                    })
-                    .response
-                    .labelled_by(arch_label);
+                if !compact {
+                    architecture_changed |= architecture_picker(ui, &mut d.architecture);
+                }
             });
+            if compact {
+                ui.horizontal(|ui| {
+                    architecture_changed |= architecture_picker(ui, &mut d.architecture);
+                });
+            }
         }
         if architecture_changed {
             self.debug.built = None;
@@ -896,6 +931,26 @@ impl App {
             ui.label(RichText::new(tr!("Bu, bir çevrimin açıklayıcı veri yolu şemasıdır; ek saat aşamaları veya devreden ölçülmüş sinyaller değildir.","This explains the datapath within a cycle, not extra clock stages or signals measured from the circuit.")).small().weak());
         });
     }
+}
+
+fn architecture_picker(ui: &mut Ui, architecture: &mut Architecture) -> bool {
+    let mut changed = false;
+    let label = ui.label(tr!("Mimari", "Architecture")).id;
+    egui::ComboBox::from_id_salt("draft_architecture")
+        .selected_text(architecture.name())
+        .show_ui(ui, |ui| {
+            for a in [
+                Architecture::RiscV,
+                Architecture::Mini,
+                Architecture::Mcs4,
+                Architecture::Custom,
+            ] {
+                changed |= ui.selectable_value(architecture, a, a.name()).changed();
+            }
+        })
+        .response
+        .labelled_by(label);
+    changed
 }
 
 #[cfg(test)]

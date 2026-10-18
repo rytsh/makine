@@ -312,6 +312,26 @@ pub(crate) fn level(chip: &str) -> Option<(&'static str, &'static str)> {
              The test runs three programs on your processor (countdown, multiply, Fibonacci) \
              and compares every step with a reference.",
         ),
+        "AddressDecode2" => (
+            "Address Decoder: Select One Cell",
+            "With en=1, set only the output selected by the 2-bit addr to 1. With en=0, all outputs must be 0.\n\nAddresses 0,1,2,3 select s0,s1,s2,s3 respectively. This circuit will route RAM write enable to exactly one cell. An address is not the data itself.",
+        ),
+        "Rom4x8" => (
+            "Build ROM: 4 Addresses × 8 Bits",
+            "For addr=0,1,2,3 output 0x12, 0xA5, 0x3C, 0x80 respectively. q is eight-bit data.\n\nBuild your ROM from four Constants and a MUX tree. There is no clock or write input: changing the address changes the data. Programming this ROM means choosing constants and wiring; unlike RAM, it is not writable while running.",
+        ),
+        "Ram4x8" => (
+            "Byte Memory: 4 Addresses × 8 Bits RAM",
+            "q must always show the byte selected by addr. Only at a rising clk edge with we=1, write d to that address; preserve the other cells.\n\nUse four Bit×8 registers, the Address Decoder and MUX×8 selectors. Unlike ROM constants, RAM changes while running. Changing address or data while the clock stays high is not another write.",
+        ),
+        "ProgramRom" => (
+            "Encode a Program in ROM",
+            "Build a 16-address, 8-bit instruction ROM: 0→0x13, 1→0x30, 2→0x40, 3→0x31, 4→0xF0; addresses 5–15 contain 0x00.\n\nThese encode the Mini CPU program LDI 3; ST 0; ADD 0; ST 1; HLT. The upper four bits are the opcode, the lower four the argument. The program writes 3 to RAM[0] and 6 to RAM[1]. Here you store instructions; you do not execute them yet.",
+        ),
+        "RomSequencer" => (
+            "Fetch Instructions from ROM",
+            "Connect a 4-bit pc register to Program ROM; instr must always equal ROM[pc]. At each rising edge, priority is: reset→pc=0; load→pc=d; if run=1 and instr≠0xF0, pc=pc+1; otherwise hold. 15+1 wraps to 0.\n\nStep through addresses and instruction bytes; stop at HLT, load another address, reset to the start. This is an instruction-fetch circuit: it does not execute ADD or ST. To run the program, connect ALU, control and RAM in the Mini processor path next.",
+        ),
         _ => return None,
     })
 }
@@ -325,7 +345,8 @@ pub(crate) fn section(tr: &str) -> Option<&'static str> {
         "4. ALU" => "4. ALU",
         "5. İşlemci" => "5. Processor",
         "6. İşlemci atölyesi" => "6. Processor workshop",
-        "★ Mini işlemci" => "★ Mini processor",
+        "Mini işlemci" => "Mini processor",
+        "Bellek ve ROM" => "Memory and ROM",
         _ => return None,
     })
 }

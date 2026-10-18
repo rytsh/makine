@@ -87,6 +87,39 @@ Redistributable kurulu olmayan makinelerde de çalışır.
   birlikte taşınır. **Delete** siler, **Ctrl+C / Ctrl+V / Ctrl+D** kopyalar, yapıştırır,
   çoğaltır; **Ctrl+Z / Ctrl+Y** geri alır ve yineler.
 - **Test et** çipini kontrol eder. Geçersen çip sonraki seviyelerde parça olarak açılır.
+- **Çözümü gör**, örneği devrelerinin yanına ayrı bir sekmede açar; devre adı ve **Örnek** sekmesiyle geçiş yap.
+  Örnek sekmesini aşağı sürükle: çözümü başka monitöre
+  taşıyıp kendi devrenle birlikte inceleyebilirsin. Pencereyi kapatmak örneği sekmeye
+  geri alır; kendi devren ve geri alma geçmişin korunur.
+
+Seviye ve serbest çipler tarayıcı gibi ayrı devre sekmelerinde açılır.
+Sekmeleri sürükleyerek sırala; sonradan açılanları **×** veya orta tıklamayla
+kapat (ilk sekme açık kalır). Sekmeyi kapatmak devreyi silmez. Uzun listelerde
+sekme çubuğu kayar; etkin sekme otomatik görünür alana gelir.
+**Ctrl+Tab / Ctrl+Shift+Tab** devreler arasında geçer, **Ctrl+W** sekmeyi kapatır
+(metin alanı odakta değilken). Her devrenin kamera, seçim, giriş, simülasyon ve
+geri alma durumu sekmeler arasında korunur.
+
+Devre sekmesini aşağı sürükleyerek ayrı pencerede düzenle.
+**Sekmeye geri al** ile geri dön; **Çubuğa sürükle** tutamacı sekme çubuğuna
+bırakmayı da destekler. Pencereler arası sürüklemeyi sınırlayan sistemlerde
+düğmeyi kullanabilirsin. Ayrılan pencereler ana pencerenin çerçeve tercihini izler.
+
+**Parçalar** listesinin üstündeki **Parça ara**, çip kimliği ve Türkçe/İngilizce
+başlıklarda arar (`Counter32`, `program sayaci`, `program counter` gibi).
+Temel NAND ve bus araçları önce, tamamlanan çipler bölüm gruplarında görünür.
+Arama grupları otomatik açar; **Esc** veya **Aramayı temizle** filtreyi kaldırır.
+Arama yeni parça açmaz: seviyenin izinleri ve serbest çiplerin döngü kuralları korunur.
+
+Dil, hızlı simülasyon, kapı sembolleri, tam ekran ve pencere çerçevesi seçenekleri
+**Ana sayfa → Ayarlar** bölümündedir; üst çubuktaki dişli kaldırılmıştır.
+
+Sağ panel tek uzun liste yerine konuya göre ayrılır:
+- **Devre / Öğren / Karşılaştır:** hedef ve canlı girişler; kod/Dünya etkinlikleri,
+  anlatım ve ipuçları; kapı sayıları ve örnek çözüm. **Test et**, Geri al ve Yinele
+  panelin altında sabit kalır.
+- Kod görünümünde **Görev / Dosyalar / İzle:** aktif görev; taslak ve dosya yönetimi;
+  çalışan programın register/RAM değerleri. Görev sınama düğmesi kaydırmadan erişilir.
 
 ## Dünya ve işlemci atölyesi
 
@@ -120,7 +153,7 @@ sayacı alıştırmaları bulunur. RISC-V / Doom yolu korunmuştur.
 
 Soldaki **📖 Wiki** bölümü, her parçanın arkasındaki fikri anlatır:
 transistörden NAND'e, De Morgan'dan toplayıcılara, flip-flop'tan RISC-V
-işlemciye. Her seviyenin altındaki **📖 Wiki'de oku** bağlantısı ilgili sayfayı
+işlemciye. Her seviyenin **Öğren** bölümündeki **📖 Wiki'de oku** bağlantısı ilgili sayfayı
 açar; sayfalardaki seviye bağlantıları da seni o seviyeye götürür.
 
 Sayfalar `docs/wiki/` altında düz Markdown dosyalarıdır; GitHub'da da okunabilir.
@@ -141,7 +174,12 @@ fotoğraflar yapay zekâ ile üretilmiştir.
 2. **Aritmetik:** yarım/tam toplayıcı, 8 ve 32-bit toplayıcı, çıkarıcı
 3. **Hafıza:** SR mandal, D mandal, D flip-flop, 1-bit kayıt, 32-bit register,
    program sayacı, 8 kelimelik RAM
-   - **★ Mini işlemci (isteğe bağlı):** topla/çıkar, kontrol ve 8-bit akümülatörlü küçük
+   - **Bellek ve ROM (isteğe bağlı):** adres çözücü, sabitlerden 4×8-bit ROM,
+     4×8-bit RAM, programı ROM'a kodlama ve saatle komut getirme.
+     Üç Mini kod görevi ve üç Dünya deneyiyle kaynak → bayt → devre bağlantısı;
+     adres/veri genişliği, saat kenarı ve bayt sırası için adım tabloları.
+     [Alıştırmalar ve program yazmaya geçiş](docs/wiki/rom.md).
+   - **Mini işlemci (isteğe bağlı):** topla/çıkar, kontrol ve 8-bit akümülatörlü küçük
      bir işlemci; geçince programları kendi devrende adım adım çalıştırırsın
 4. **ALU:** sıfır testi, karşılaştırıcı, sola/sağa kaydırıcı, ALU, register dosyası
 5. **İşlemci:** komut çözücü, kontrol birimi, dallanma, yükleme/saklama birimleri,
@@ -165,6 +203,9 @@ değişenler birlikte gösterilir. Referans işlemci veya tamamladığın CPU ku
 - Yirmi uygulamalı ders: register'lardan döngülere, dizi/metin, fonksiyon, konsol,
   piksel ve bellek kopyalamaya. Görevler farklı girişlerle test edilir;
   hatalı örneği debugger'da yeniden açabilirsin.
+- Bellek ve ROM seviyelerinde ayrıca üç Mini kod görevi: programı değiştirme,
+  farklı RAM girdileriyle iki katını hesaplama ve etiketli geri sayım. Görevler kendi
+  sıralarıyla açılır; örnek MiniCpu devresinde RAM yazma sırası ve HLT sınanır.
 - Mini CPU ve 4004 için etiketli assembler, ROM hex dışa aktarımı ve devreye yükleme.
 - Özel komut seti tasarımı: kelime/opcode/argüman tanımları, JSON paylaşımı ve kendi
   serbest CPU çipine ROM/RAM bağlama. Kodlama tanımı otomatik emülatör eklemez.

@@ -15,7 +15,7 @@
 //! `layout.rs` places everything on screen, `draw.rs` paints it and
 //! `menu.rs` holds the right-click menus.
 
-use egui::{pos2, vec2, FontId, Id, Pos2, Rect, Sense, Stroke, Ui, Vec2};
+use egui::{pos2, vec2, FontId, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 use makine_sim::{mask, Circuit, Library, PartId, PartKind, Sink, Source};
 
 use crate::design::{Design, Port, Symbol};
@@ -23,6 +23,8 @@ use crate::design::{Design, Port, Symbol};
 pub(crate) mod draw;
 mod layout;
 mod menu;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use draw::gate_outline;
 use draw::{bezier, draw_box, draw_gate, pin_dot, port, ERR, GRID, TEXT};
@@ -51,6 +53,7 @@ pub struct Canvas {
     select_from: Option<Pos2>,
     /// How many times the same text was pasted, to offset the copies.
     pastes: u32,
+    last_paste: Option<(String, Option<Pos2>)>,
 }
 
 /// What the canvas wants the app to do after this frame.
@@ -64,6 +67,8 @@ pub struct CanvasOutput {
     /// The change came from a menu field, which changes every frame while
     /// dragged: one undo step for all of it.
     pub merge: bool,
+    pub status: Option<String>,
+    pasted: bool,
 }
 
 /// What can be dropped onto the canvas from the parts list.
@@ -159,6 +164,12 @@ impl Canvas {
         self.click_select(ui, &response, &hover);
         self.keys(ui, &response, design, &layout, &hover, &mut result);
         self.context_menu(ui, &response, design, lib, &hover, &mut result);
+        if result.pasted {
+            self.reveal_selection(design, lib, screen, output_x);
+        }
+        if result.status.is_some() {
+            ui.ctx().request_repaint();
+        }
 
         // Parts dropped from the side panel.
         if let (Some(kind), Some(p)) = (response.dnd_release_payload::<NewPart>(), pointer) {
@@ -211,7 +222,8 @@ impl Canvas {
         hover: &Hover,
         result: &mut CanvasOutput,
     ) {
-        if !response.hovered() || ui.ctx().egui_wants_keyboard_input() {
+        if (!response.hovered() && self.selected.is_empty()) || ui.ctx().egui_wants_keyboard_input()
+        {
             return;
         }
         use egui::Key;
@@ -246,7 +258,7 @@ impl Canvas {
                 result.changed = true;
             }
         }
-        let pointer = ui.ctx().pointer_interact_pos().map(|p| layout.to_world(p));
+        let pointer = response.hover_pos().map(|p| layout.to_world(p));
         if dup {
             if let Some(text) = design.copy(&self.selected) {
                 self.paste(design, &text, None, result);
@@ -259,12 +271,20 @@ impl Canvas {
                     if let Some(t) = design.copy(&self.selected) {
                         ui.ctx().copy_text(t);
                         self.pastes = 0;
+                        self.last_paste = None;
+                        result.status = Some(makine_lang::trf!("{} parça kopyalandı. Yalnızca seçili parçalar arasındaki teller alınır.", "Copied {} parts. Only wires between selected parts are included.", self.selected.len()));
                     }
                 }
                 egui::Event::Cut => {
                     if let Some(t) = design.copy(&self.selected) {
                         ui.ctx().copy_text(t);
                         self.pastes = 0;
+                        self.last_paste = None;
+                        result.status = Some(makine_lang::trf!(
+                            "{} parça kesildi.",
+                            "Cut {} parts.",
+                            self.selected.len()
+                        ));
                         design.remove_parts(&self.selected);
                         self.selected.clear();
                         result.changed = true;
@@ -284,7 +304,12 @@ impl Canvas {
         at: Option<Pos2>,
         result: &mut CanvasOutput,
     ) {
-        self.pastes += 1;
+        let repeated = self
+            .last_paste
+            .as_ref()
+            .is_some_and(|(previous, anchor)| previous == text && *anchor == at);
+        let count = if repeated { self.pastes + 1 } else { 0 };
+        let anchor = at;
         let at = at.unwrap_or_else(|| {
             let min = self
                 .selected
@@ -297,10 +322,56 @@ impl Canvas {
                 min + vec2(30.0, 30.0)
             }
         });
+        let at = if anchor.is_some() {
+            at + vec2(30., 30.) * count as f32
+        } else {
+            at
+        };
         let new = design.paste(text, at);
         if !new.is_empty() {
+            self.pastes = count;
+            self.last_paste = Some((text.into(), anchor));
+            result.status = Some(makine_lang::trf!(
+                "{} parça yapıştırıldı; yeni parçalar seçili.",
+                "Pasted {} parts; the new parts are selected.",
+                new.len()
+            ));
             self.selected = new;
             result.changed = true;
+            result.pasted = true;
+        } else {
+            result.status = Some(
+                makine_lang::tr!(
+                    "Panoda devre parçaları bulunamadı. Parçaları seçip yeniden kopyala.",
+                    "No circuit parts found on the clipboard. Select the parts and copy again."
+                )
+                .into(),
+            );
+        }
+    }
+
+    fn reveal_selection(&mut self, design: &Design, lib: &Library, screen: Rect, output_x: f32) {
+        let layout = Layout::new(design, lib, Pos2::ZERO, self.zoom, self.symbols, output_x);
+        let bounds = self.selected.iter().fold(Rect::NOTHING, |bounds, &id| {
+            let rect = layout.parts[id].as_ref().map_or_else(
+                || Rect::from_min_size(design.part_pos(id), vec2(120., 40.)),
+                |(at, geometry, _)| geometry.rect(*at),
+            );
+            bounds.union(rect)
+        });
+        let viewport = screen.shrink(20.);
+        let shown = Rect::from_min_max(
+            self.origin + bounds.min.to_vec2() * self.zoom,
+            self.origin + bounds.max.to_vec2() * self.zoom,
+        );
+        if bounds.is_finite() && !viewport.contains_rect(shown) {
+            self.zoom = self
+                .zoom
+                .min(viewport.width() / bounds.width().max(1.))
+                .min(viewport.height() / bounds.height().max(1.))
+                .clamp(0.03, 3.);
+            self.offset = screen.size() / 2. - bounds.center().to_vec2() * self.zoom;
+            self.origin = screen.min + self.offset;
         }
     }
 
@@ -317,7 +388,7 @@ impl Canvas {
         let (scroll, zoom) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta()));
         let factor = zoom * (scroll.y * 0.0015).exp();
         if factor != 1.0 {
-            let new = (self.zoom * factor).clamp(0.3, 3.0);
+            let new = (self.zoom * factor).clamp(0.03, 3.0);
             let screen_min = response.rect.min;
             let world = (hover - screen_min - self.offset) / self.zoom;
             self.offset = hover - screen_min - world * new;
@@ -657,7 +728,7 @@ impl Canvas {
     ) {
         // The target is decided when the menu opens and kept while it stays
         // open, since the pointer moves into the menu.
-        let menu_id = Id::unique("canvas_menu_target");
+        let menu_id = ui.scope_id().with("canvas_menu_target");
         if response.secondary_clicked() {
             let target = match (hover.sink, hover.part, hover.port) {
                 (Some((sink, _)), _, _) => MenuTarget::Sink(sink),

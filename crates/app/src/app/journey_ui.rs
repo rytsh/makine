@@ -35,6 +35,7 @@ impl App {
         } else {
             self.world_code = true;
         }
+        self.inspector.code = super::inspector_ui::CodeSection::Task;
         let (key, title, architecture, source) = match a {
             Activity::Program(id) => {
                 self.debug.lesson = Some(id.into());
@@ -69,6 +70,15 @@ impl App {
                     tr!("Kendi ISA çalışmam", "My ISA project"),
                     Architecture::Custom,
                     "LDI 3\nST 0\nADD 0\nST 1\nHLT\n",
+                )
+            }
+            Activity::Mini(id) => {
+                let l = crate::mini_lessons::find(id).unwrap();
+                (
+                    format!("mini-lesson:{id}"),
+                    l.title,
+                    Architecture::Mini,
+                    l.starter,
                 )
             }
         };
@@ -174,6 +184,7 @@ impl App {
     }
 
     pub(super) fn open_mini_activity(&mut self) {
+        self.inspector.code = super::inspector_ui::CodeSection::Task;
         const KEY: &str = "mini-program";
         if let Some(id) = self
             .progress
@@ -239,11 +250,6 @@ impl App {
                 }
             }
         });
-        if self.view == View::World {
-            self.world_code_actions(ui);
-        } else {
-            self.level_activities(ui);
-        }
         ui.separator();
     }
 
@@ -519,6 +525,165 @@ mod tests {
     }
 
     #[test]
+    fn memory_code_tasks_keep_drafts_check_prerequisites_and_do_not_solve_circuits() {
+        let mut p = Progress::default();
+        for level in makine_levels::levels()
+            .iter()
+            .take_while(|l| l.chip != "AddSub8")
+        {
+            p.solutions.insert(
+                level.chip.into(),
+                makine_levels::reference::reference(level.chip),
+            );
+        }
+        let solutions = p.solutions.clone();
+        let mut app = App::new(p, None);
+        app.open_activity(Activity::Mini("mini-memory"));
+        assert_eq!(app.level.chip, "ProgramRom");
+        assert_eq!(
+            app.progress.notebook.current().unwrap().architecture,
+            Architecture::Mini
+        );
+        app.progress.notebook.current_mut().unwrap().source =
+            crate::mini_lessons::find("mini-memory")
+                .unwrap()
+                .solution
+                .into();
+        app.check_mini_task();
+        assert!(
+            app.debug.mini_feedback.as_ref().unwrap().2.is_err(),
+            "cannot skip the first task"
+        );
+        for lesson in crate::mini_lessons::all() {
+            app.open_activity(Activity::Mini(lesson.id));
+            let id = app.progress.notebook.selected;
+            app.progress.notebook.current_mut().unwrap().source = lesson.solution.into();
+            app.check_mini_task();
+            assert!(app.debug.mini_feedback.as_ref().unwrap().2.is_ok());
+            assert!(app.progress.notebook.solved.contains(lesson.id));
+            app.open_activity(Activity::Mini(lesson.id));
+            assert_eq!(app.progress.notebook.selected, id);
+            assert_eq!(
+                app.progress.notebook.current().unwrap().source,
+                lesson.solution
+            );
+        }
+        assert_eq!(app.progress.solutions, solutions);
+        assert!(!app.progress.solved("MiniCpu"));
+        // Invalid edits and completions both survive a profile round-trip.
+        app.progress.notebook.current_mut().unwrap().source = "my unfinished draft".into();
+        let saved = serde_json::to_string(&app.progress).unwrap();
+        let mut restored = App::new(serde_json::from_str(&saved).unwrap(), None);
+        restored.open_activity(Activity::Mini("mini-loop"));
+        assert_eq!(
+            restored.progress.notebook.current().unwrap().source,
+            "my unfinished draft"
+        );
+        assert!(restored.progress.notebook.solved.contains("mini-loop"));
+    }
+
+    #[test]
+    fn memory_task_is_findable_and_checkable_at_the_minimum_window_size() {
+        use egui_kittest::kittest::Queryable;
+        use std::{cell::RefCell, rc::Rc};
+        let mut app = solved_app();
+        app.open_activity(Activity::Mini("mini-rom"));
+        let app = Rc::new(RefCell::new(app));
+        let a = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(900., 560.))
+            .build_ui(move |ui| a.borrow_mut().ui(ui));
+        h.run_steps(3);
+        let right_edge = h.get_by_label("Devreyi kur / incele").rect().left() - 8.;
+        for label in [
+            "Mimari",
+            "Derle",
+            "ROM hex dışa aktar",
+            "Devreye yükle",
+            "Adım",
+            "Kaynak kod",
+        ] {
+            assert!(
+                h.get_by_label(label).rect().right() <= right_edge,
+                "{label} extends behind the right panel"
+            );
+        }
+        h.get_by_label("Mini kod görevini sına").scroll_to_me();
+        h.run();
+        h.get_by_label("Mini kod görevini sına").click();
+        h.run();
+        assert!(app
+            .borrow()
+            .debug
+            .mini_feedback
+            .as_ref()
+            .unwrap()
+            .2
+            .is_err());
+        app.borrow_mut()
+            .progress
+            .notebook
+            .current_mut()
+            .unwrap()
+            .source = crate::mini_lessons::find("mini-rom")
+            .unwrap()
+            .solution
+            .into();
+        h.run();
+        h.get_by_label("Mini kod görevini sına").click();
+        h.run();
+        assert!(app.borrow().debug.mini_feedback.as_ref().unwrap().2.is_ok());
+    }
+
+    #[test]
+    fn memory_world_example_accepts_code_upload_and_preserves_existing_worlds() {
+        let mut app = solved_app();
+        app.open_world();
+        app.store_world();
+        let previous = app.progress.worlds.clone();
+        let example = makine_world::projects::examples::all()
+            .into_iter()
+            .find(|e| e.id == "program_rom")
+            .unwrap();
+        app.open_project((example.build)());
+        app.attach_lab("ProgramRom", None, None);
+        app.open_activity(Activity::Mini("mini-rom"));
+        let draft = app.progress.notebook.current_mut().unwrap();
+        draft.source = crate::mini_lessons::find("mini-rom")
+            .unwrap()
+            .solution
+            .into();
+        let (id, source) = (draft.id, draft.source.clone());
+        let rom = app
+            .world
+            .as_ref()
+            .unwrap()
+            .world
+            .parts()
+            .find(|(_, p)| matches!(p.kind, Kind::Device(Device::Rom { .. })))
+            .unwrap()
+            .0;
+        app.world.as_mut().unwrap().selected.insert(rom);
+        app.bind_selected_rom().unwrap();
+        let program =
+            makine_rv::smallasm::assemble(&source, makine_rv::smallasm::Dialect::Mini).unwrap();
+        app.debug.small_built = Some((id, source, program));
+        app.upload_world_rom().unwrap();
+        assert!(
+            matches!(&app.world.as_ref().unwrap().world.part(rom).unwrap().kind,
+            Kind::Device(Device::Rom { words, .. }) if words == &[0x15,0x30,0x40,0x31,0xF0])
+        );
+        for (name, world) in previous {
+            assert_eq!(app.progress.worlds[&name], world);
+        }
+        app.world.as_mut().unwrap().undo();
+        assert!(
+            matches!(&app.world.as_ref().unwrap().world.part(rom).unwrap().kind,
+            Kind::Device(Device::Rom { words, .. }) if words == &[0x13,0x30,0x40,0x31,0xF0])
+        );
+    }
+
+    #[test]
     fn code_uploads_into_the_same_world_rom_undoably_and_rejects_bad_targets() {
         let mut app = solved_app();
         app.open_world();
@@ -578,6 +743,40 @@ mod tests {
 mod shots {
     use super::*;
     use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    #[ignore]
+    fn memory_learning_screenshots() {
+        let dir = std::env::var("MAKINE_SHOT_DIR").unwrap_or("/tmp/opencode".into());
+        std::fs::create_dir_all(&dir).unwrap();
+        for lang in makine_lang::Lang::ALL {
+            makine_lang::set_for_thread(Some(lang));
+            for (width, height) in [(1440., 900.), (900., 560.)] {
+                let mut p = crate::store::Progress::default();
+                for l in makine_levels::levels()
+                    .iter()
+                    .take_while(|l| l.chip != "AddSub8")
+                {
+                    p.solutions
+                        .insert(l.chip.into(), makine_levels::reference::reference(l.chip));
+                }
+                let mut app = App::new(p, None);
+                app.open_activity(Activity::Mini("mini-rom"));
+                let app = Rc::new(RefCell::new(app));
+                let a = app.clone();
+                let mut h = egui_kittest::Harness::builder()
+                    .with_size(egui::vec2(width, height))
+                    .wgpu()
+                    .build_ui(move |ui| a.borrow_mut().ui(ui));
+                h.run_steps(4);
+                h.render()
+                    .unwrap()
+                    .save(format!("{dir}/memory-code-{}-{width}.png", lang.code()))
+                    .unwrap();
+            }
+        }
+        makine_lang::set_for_thread(None);
+    }
 
     #[test]
     #[ignore]

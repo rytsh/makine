@@ -1,7 +1,7 @@
 //! A level's example solution and how the player's solution compares:
 //! NAND gates in each, the known minimum, and where extra gates come from.
 
-use egui::{vec2, RichText, Ui};
+use egui::{vec2, Pos2, RichText, Ui};
 use makine_lang::{tr, trf};
 use makine_levels::cost::{self, Cost};
 use makine_levels::Level;
@@ -11,13 +11,21 @@ use super::App;
 use crate::canvas::Canvas;
 use crate::design::{geometry, Design};
 
-/// The example solution open on the canvas instead of the player's own.
+/// An independent, temporary workspace. Switching tabs or docking never
+/// replaces the player's design, simulation, camera or undo history.
 pub(super) struct Solution {
     pub chip: &'static str,
     pub design: Design,
     pub sim: Result<Circuit, String>,
     pub inputs: Vec<u64>,
     pub canvas: Canvas,
+    pub active: bool,
+    pub detached: bool,
+    pub return_drag: bool,
+    window_position: Option<Pos2>,
+    lib: Library,
+    fit: bool,
+    status: Option<String>,
 }
 
 /// What the player has seen of a level's solution.
@@ -41,6 +49,13 @@ impl Solution {
             inputs: vec![0; design.def.inputs.len()],
             design,
             canvas,
+            active: true,
+            detached: false,
+            return_drag: false,
+            window_position: None,
+            lib: lib.clone(),
+            fit: true,
+            status: None,
         };
         s.run();
         s
@@ -54,7 +69,35 @@ impl Solution {
             let _ = sim.eval();
         }
     }
+
+    fn level(&self) -> &'static Level {
+        makine_levels::find(self.chip).expect("example level exists")
+    }
+
+    pub(super) fn viewport_id(&self) -> egui::ViewportId {
+        egui::ViewportId::from_hash_of(("example-solution", self.chip))
+    }
+
+    fn window_builder(&self, custom_frame: bool) -> egui::ViewportBuilder {
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(trf!(
+                "Örnek çözüm: {} — makine",
+                "Example solution: {} — makine",
+                self.level().name()
+            ))
+            .with_inner_size([1000., 700.])
+            .with_min_inner_size([540., 360.])
+            .with_decorations(!custom_frame)
+            .with_resizable(true);
+        if let Some(icon) = super::chrome::window_icon() {
+            builder = builder.with_icon(icon);
+        }
+        builder
+    }
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Lay a chip out left to right: each part one column after the parts it
 /// reads from (feedback wires are ignored), stacked within its column.
@@ -225,8 +268,8 @@ impl App {
                 ui.colored_label(
                     crate::theme::GOOD,
                     trf!(
-                        "★ Örnekten {} kapı daha küçük. Harika!",
-                        "★ {} gates smaller than the example. Great!",
+                        "Örnekten {} kapı daha küçük. Harika!",
+                        "{} gates smaller than the example. Great!",
                         t - c.mine
                     ),
                 );
@@ -309,10 +352,10 @@ impl App {
         ui.add_space(4.0);
         if open {
             if ui
-                .button(tr!("Kendi devreme dön", "Back to my circuit"))
+                .button(tr!("Örnek çözüm sekmesine git", "Go to example tab"))
                 .clicked()
             {
-                self.solution = None;
+                self.activate_solution(ui.ctx());
             }
             return;
         }
@@ -323,13 +366,12 @@ impl App {
                     "💡 Show the example solution"
                 ))
                 .on_hover_text(tr!(
-                    "Örnek devre kendi devrenin yerine açılır; seninki silinmez",
-                    "The example opens in place of your circuit; yours is not deleted"
+                    "Örnek ayrı bir sekmede açılır; kendi devrene tek tıkla dönebilirsin",
+                    "The example opens in a separate tab; return to your own circuit with one click"
                 ))
                 .clicked()
             {
-                self.solution = Some(Solution::new(level, &self.lib, self.progress.symbols));
-                self.reveal = Reveal::Hidden;
+                self.open_solution(level);
             }
             if !solved {
                 ui.label(
@@ -353,10 +395,191 @@ impl App {
         }
     }
 
+    pub(super) fn open_solution(&mut self, level: &'static Level) {
+        self.workspace.scroll_to_active = true;
+        if self.solution.as_ref().is_none_or(|s| s.chip != level.chip) {
+            self.solution = Some(Solution::new(level, &self.lib, self.progress.symbols));
+        }
+        if let Some(s) = &mut self.solution {
+            s.active = !s.detached;
+        }
+        self.editor_code = false;
+        self.reveal = Reveal::Hidden;
+    }
+
+    pub(super) fn showing_solution(&self) -> bool {
+        self.view == super::View::Editor
+            && !self.editor_code
+            && self
+                .solution
+                .as_ref()
+                .is_some_and(|s| s.active && !s.detached)
+    }
+
+    pub(super) fn activate_solution(&mut self, ctx: &egui::Context) {
+        self.workspace.scroll_to_active = true;
+        if let Some(s) = &mut self.solution {
+            if s.detached {
+                ctx.send_viewport_cmd_to(s.viewport_id(), egui::ViewportCommand::Focus);
+            } else {
+                s.active = true;
+                self.editor_code = false;
+                self.view = super::View::Editor;
+            }
+        }
+    }
+
+    pub(super) fn detach_solution(&mut self, position: Option<Pos2>) {
+        if let Some(s) = &mut self.solution {
+            s.detached = true;
+            s.active = false;
+            s.window_position = position;
+            s.fit = true;
+        }
+    }
+
+    pub(super) fn dock_solution(&mut self) {
+        if let Some(s) = &mut self.solution {
+            s.detached = false;
+            s.return_drag = false;
+            // Closing a reference window must not interrupt the current work.
+            s.active = false;
+            s.fit = true;
+        }
+    }
+
+    /// The example shares the browser document strip with the user's chips.
+    pub(super) fn solution_tabs(&mut self, ui: &mut Ui, reveal_active: bool) {
+        let Some(solution) = &self.solution else {
+            return;
+        };
+        let example_name = solution.level().name();
+        let detached = solution.detached;
+        let example_active = self.showing_solution();
+        let label = if detached {
+            trf!(
+                "Örnek: {example_name} (ayrı pencere)",
+                "Example: {example_name} (separate window)"
+            )
+        } else {
+            trf!("Örnek: {example_name}", "Example: {example_name}")
+        };
+        let (response, close) = super::workspace_ui::document_tab(
+            ui,
+            "example-document",
+            &label,
+            example_active,
+            Some(Some(tr!("Örnek sekmesini kapat", "Close example tab"))),
+        );
+        if reveal_active && example_active {
+            ui.scroll_to_rect(
+                response.rect.expand2(egui::vec2(32., 0.)),
+                Some(egui::Align::Center),
+            );
+        }
+        if response.clicked() {
+            self.activate_solution(ui.ctx());
+        }
+        if !detached
+            && response.drag_stopped()
+            && response
+                .interact_pointer_pos()
+                .is_some_and(|p| p.y > response.rect.bottom() + 24.)
+        {
+            self.detach_solution(super::workspace_ui::drag_window_position(
+                ui.ctx(),
+                response.interact_pointer_pos(),
+            ));
+            ui.ctx().request_repaint();
+        }
+        if close || response.clicked_by(egui::PointerButton::Middle) {
+            self.solution = None;
+        }
+    }
+
+    /// Immediate viewports share UI-thread state safely but have independent
+    /// native frames, input and DPI, so the OS can move them between monitors.
+    pub(super) fn solution_window(&mut self, ctx: &egui::Context) {
+        let custom_frame = self.progress.custom_frame;
+        let Some(solution) = self.solution.as_mut().filter(|s| s.detached) else {
+            return;
+        };
+        let mut builder = solution.window_builder(custom_frame);
+        if let Some(position) = solution.window_position.take() {
+            builder = builder.with_position(position);
+        }
+        let mut dock = false;
+        ctx.show_viewport_immediate(solution.viewport_id(), builder, |ui, class| {
+            if class != egui::ViewportClass::EmbeddedWindow {
+                dock |= super::chrome::child_window_frame(
+                    ui,
+                    &trf!("Örnek: {}", "Example: {}", solution.level().name()),
+                    custom_frame,
+                );
+            }
+            if class != egui::ViewportClass::EmbeddedWindow
+                && ui.ctx().input(|i| i.viewport().close_requested())
+            {
+                dock = true;
+            }
+            egui::Panel::top("example_window_toolbar").show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(trf!("Örnek: {}", "Example: {}", solution.level().name()));
+                    dock |= ui.button(tr!("Sekmeye geri al", "Dock as tab")).clicked();
+                    solution.return_drag |= super::workspace_ui::dock_drag_handle(ui, 0);
+                });
+                ui.label(tr!(
+                    "Geçici örnek çalışma alanı; kendi devren ve ilerlemen değişmez.",
+                    "Temporary example workspace; your own circuit and progress stay unchanged."
+                ));
+            });
+            if ui.available_width() < 760. {
+                egui::Panel::bottom("example_window_details_compact")
+                    .default_size(120.)
+                    .resizable(true)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| solution.controls(ui));
+                    });
+            } else {
+                egui::Panel::right("example_window_details")
+                    .default_size(240.)
+                    .resizable(true)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| solution.controls(ui));
+                    });
+            }
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| solution.show_canvas(ui));
+        });
+        if dock {
+            self.dock_solution();
+            ctx.request_repaint();
+        }
+    }
+
     /// The example solution's side panel: what it shows and its numbers.
     pub(super) fn solution_panel(&mut self, ui: &mut Ui) {
         let Some(s) = &mut self.solution else { return };
-        let level = self.level;
+        s.controls(ui);
+        if ui
+            .button(tr!("Kendi devreme dön", "Back to my circuit"))
+            .clicked()
+        {
+            s.active = false;
+        }
+    }
+
+    pub(super) fn solution_canvas(&mut self, ui: &mut Ui) {
+        if let Some(s) = &mut self.solution {
+            s.show_canvas(ui);
+        }
+    }
+}
+
+impl Solution {
+    fn controls(&mut self, ui: &mut Ui) {
+        let level = self.level();
         ui.heading(trf!(
             "Örnek çözüm: {}",
             "Example solution: {}",
@@ -387,8 +610,20 @@ impl App {
             ui.add_space(4.0);
             ui.label(note);
         }
+        if ui
+            .button(tr!("Örnek devreyi sığdır", "Fit example circuit"))
+            .clicked()
+        {
+            self.fit = true;
+        }
+        if let Err(error) = &self.sim {
+            ui.colored_label(crate::theme::BAD, error);
+        }
+        if let Some(message) = &self.status {
+            ui.label(message);
+        }
         let mut changed = false;
-        for (i, p) in s
+        for (i, p) in self
             .design
             .def
             .inputs
@@ -400,7 +635,7 @@ impl App {
                 let label = ui.label(&p.name).id;
                 changed |= ui
                     .add(
-                        egui::DragValue::new(&mut s.inputs[i])
+                        egui::DragValue::new(&mut self.inputs[i])
                             .hexadecimal(1, false, true)
                             .prefix("0x")
                             .range(0..=makine_sim::mask(p.width)),
@@ -410,47 +645,66 @@ impl App {
             });
         }
         if changed {
-            s.run();
+            self.run();
         }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui
-                .button(tr!("Kendi devreme dön", "Back to my circuit"))
-                .clicked()
-            {
-                self.solution = None;
-            }
-        });
     }
 
     /// The example solution on the canvas.
-    pub(super) fn solution_canvas(&mut self, ui: &mut Ui) {
-        let lib = self.lib.clone();
-        let Some(s) = &mut self.solution else { return };
-        let output_x = (ui.available_width() / s.canvas.zoom.max(0.3) - 110.0).max(400.0);
-        let banner = egui::Rect::from_min_size(ui.max_rect().min, vec2(ui.available_width(), 28.0));
-        let sim = s.sim.as_ref().ok().cloned();
-        let out = s
-            .canvas
-            .show(ui, &mut s.design, &lib, sim.as_ref(), &s.inputs, output_x);
+    fn show_canvas(&mut self, ui: &mut Ui) {
+        let mut bounds = egui::Rect::NOTHING;
+        for (id, part) in self.design.def.parts.iter().enumerate() {
+            let at = self.design.part_pos(id);
+            let size = self.lib.part_pins(part).map_or(vec2(120., 40.), |pins| {
+                geometry(
+                    &part.kind,
+                    &pins,
+                    &crate::canvas::part_label(part),
+                    self.canvas.symbols,
+                )
+                .size
+            });
+            bounds = bounds.union(egui::Rect::from_min_size(at, size));
+        }
+        let output_x = (bounds.max.x + 100.).max(400.);
+        for input in 0..self.design.def.inputs.len() {
+            bounds = bounds.union(
+                self.design
+                    .port_rect(crate::design::Port::Input(input), output_x),
+            );
+        }
+        for output in 0..self.design.def.outputs.len() {
+            bounds = bounds.union(
+                self.design
+                    .port_rect(crate::design::Port::Output(output), output_x),
+            );
+        }
+        if std::mem::take(&mut self.fit) && bounds.is_finite() {
+            let viewport = ui.max_rect().shrink(24.);
+            self.canvas.zoom = (viewport.width() / bounds.width().max(1.))
+                .min(viewport.height() / bounds.height().max(1.))
+                .clamp(0.03, 1.);
+            self.canvas.offset =
+                ui.max_rect().size() / 2. - bounds.center().to_vec2() * self.canvas.zoom;
+        }
+        let sim = self.sim.as_ref().ok().cloned();
+        let out = self.canvas.show(
+            ui,
+            &mut self.design,
+            &self.lib,
+            sim.as_ref(),
+            &self.inputs,
+            output_x,
+        );
         if let Some((pin, v)) = out.toggled_input {
-            s.inputs[pin] = v;
-            s.run();
+            self.inputs[pin] = v;
+            self.run();
         }
         if out.changed {
-            s.sim = Circuit::compile_def(&lib, &s.design.def).map_err(|e| e.to_string());
-            s.run();
+            self.sim = Circuit::compile_def(&self.lib, &self.design.def).map_err(|e| e.to_string());
+            self.run();
         }
-        ui.painter().rect_filled(banner, 0.0, crate::theme::PANEL);
-        ui.painter().text(
-            banner.left_center() + vec2(10.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            tr!(
-                "💡 ÖRNEK ÇÖZÜM · kaydedilmez · sağ panelden kendi devrene dön",
-                "💡 EXAMPLE SOLUTION · not saved · go back to your circuit from the right panel"
-            ),
-            egui::FontId::proportional(13.0),
-            crate::theme::COPPER_BRIGHT,
-        );
+        if let Some(message) = out.status {
+            self.status = Some(message);
+        }
     }
 }

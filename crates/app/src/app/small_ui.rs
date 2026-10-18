@@ -49,6 +49,44 @@ impl MiniExecution {
         }
         self.ticks += 1;
     }
+    pub(super) fn inspector(&self, ui: &mut Ui) {
+        ui.label(if self.reference {
+            tr!(
+                "Motor: örnek MiniCpu devresi",
+                "Engine: example MiniCpu circuit"
+            )
+        } else {
+            tr!(
+                "Motor: kendi MiniCpu devren",
+                "Engine: your MiniCpu circuit"
+            )
+        });
+        ui.monospace(format!(
+            "PC: {}   acc: {}   ticks: {}",
+            self.cpu.pc(),
+            self.cpu.acc(),
+            self.ticks
+        ));
+        if let Some(error) = &self.error {
+            ui.colored_label(theme::WARN, error);
+        }
+        ui.separator();
+        ui.strong(tr!("Canlı RAM", "Live RAM"));
+        egui::Grid::new("mini-inspector-ram")
+            .striped(true)
+            .show(ui, |ui| {
+                ui.label(tr!("Adres", "Address"));
+                ui.label("Hex");
+                ui.label(tr!("Onluk", "Decimal"));
+                ui.end_row();
+                for (addr, value) in self.ram.iter().enumerate() {
+                    ui.monospace(format!("{addr:02x}"));
+                    ui.monospace(format!("{value:02x}"));
+                    ui.monospace(value.to_string());
+                    ui.end_row();
+                }
+            });
+    }
     fn ui(&self, ui: &mut Ui) {
         ui.label(if self.reference {
             tr!(
@@ -98,7 +136,11 @@ impl App {
         let Some(d) = self.progress.notebook.current().cloned() else {
             return;
         };
-        ui.label(tr!("Derle: ROM kelimeleri, adresler ve kaynak satırları. Özel komut seti yalnızca kodlamayı tanımlar; davranışı senin devren sağlamalı.","Build to see ROM words, addresses and source lines. A custom ISA defines only the encoding; your circuit must implement its behaviour."));
+        ui.label(if d.architecture == Architecture::Mini {
+            tr!("Derle ile kaynak satırlarını ROM baytlarına çevir. Devreye yükle programı baştan hazırlar; Adım bir komut yürütür.", "Build translates source lines into ROM bytes. Load into circuit restarts the program; Step executes one instruction.")
+        } else {
+            tr!("Derle: ROM kelimeleri, adresler ve kaynak satırları. Özel komut seti yalnızca kodlamayı tanımlar; davranışı senin devren sağlamalı.", "Build to see ROM words, addresses and source lines. A custom ISA defines only the encoding; your circuit must implement its behaviour.")
+        });
         ui.horizontal_wrapped(|ui| {
             if ui.button(tr!("Derle", "Build")).clicked() {
                 let dialect = match d.architecture {
@@ -190,7 +232,18 @@ impl App {
                     _ => {}
                 }
             }
-            if d.architecture == Architecture::Mini && ui.button(tr!("Adım", "Step")).clicked() {
+            if d.architecture == Architecture::Mini
+                && ui
+                    .add_enabled(
+                        self.debug.mini_execution.is_some(),
+                        egui::Button::new(tr!("Adım", "Step")),
+                    )
+                    .on_hover_text(tr!(
+                        "Önce Derle ve Devreye yükle.",
+                        "Build and load into circuit first."
+                    ))
+                    .clicked()
+            {
                 if let Some(m) = &mut self.debug.mini_execution {
                     m.step();
                 }
@@ -202,19 +255,15 @@ impl App {
         let mut changed = false;
         egui::ScrollArea::vertical().id_salt("small_assembly").show(ui,|ui|{
             if d.architecture==Architecture::Custom{self.isa_material(ui);self.custom_definition(ui);}
-            ui.columns(2,|cols|{
-                if let Some(d)=self.progress.notebook.current_mut(){let l=cols[0].label(tr!("Kaynak kod", "Source code")).id;changed=cols[0].add(egui::TextEdit::multiline(&mut d.source).code_editor().desired_rows(20).desired_width(f32::INFINITY)).labelled_by(l).changed();}
-                if let Some((id,_,p))=&self.debug.small_built{if *id==d.id{
-                    for (a,&v) in p.words.iter().enumerate(){
-                        let desc=if !p.lengths.contains_key(&(a as u32)) {tr!("veri / komutun devamı", "data / instruction continuation").into()}else{match d.architecture{
-                            Architecture::Mini=>makine_levels::mini::disasm(v as u8),
-                            Architecture::Mcs4=>makine_world::projects::mcs4::disassemble(v as u8,p.words.get(a+1).copied().unwrap_or(0) as u8),
-                            _=>self.progress.notebook.custom.disasm(v),
-                        }};
-                        cols[1].monospace(format!("{:>3}  {a:03x}  {v:04x}  {desc}",p.lines.get(&(a as u32)).copied().unwrap_or(0)));
-                    }
-                }}
-            });
+            if ui.available_width() < 560. {
+                if let Some(d) = self.progress.notebook.current_mut() { changed = small_source(ui, d); }
+                self.small_listing(ui, &d);
+            } else {
+                ui.columns(2, |cols| {
+                    if let Some(d) = self.progress.notebook.current_mut() { changed = small_source(&mut cols[0], d); }
+                    self.small_listing(&mut cols[1], &d);
+                });
+            }
             if d.architecture==Architecture::Mini{
                 ui.label(tr!("Komutlar: NOP, LDI n, LD a, ST a, ADD a, SUB a, JMP etiket, JZ etiket, HLT. .ram adres,bayt başlangıç verisini tanımlar. ROM/RAM 16 adres.","Instructions: NOP, LDI n, LD a, ST a, ADD a, SUB a, JMP label, JZ label, HLT. .ram address,byte initializes data. ROM/RAM have 16 addresses."));
                 if let Some(m)=&self.debug.mini_execution{
@@ -230,6 +279,163 @@ impl App {
             self.progress.notebook.sync_custom();
             self.save_soon();
         }
+    }
+
+    fn small_listing(&self, ui: &mut Ui, draft: &crate::programming::Draft) {
+        let Some((_, source, program)) = self
+            .debug
+            .small_built
+            .as_ref()
+            .filter(|(id, _, _)| *id == draft.id)
+        else {
+            return;
+        };
+        if source != &draft.source {
+            ui.colored_label(
+                theme::WARN,
+                tr!(
+                    "Eski derleme baytları; güncel kaynak için yeniden derle.",
+                    "Previous build bytes; rebuild for the current source."
+                ),
+            );
+        }
+        ui.label(tr!(
+            "Adrese göre komut baytları",
+            "Instruction bytes by address"
+        ));
+        for (address, &word) in program.words.iter().enumerate() {
+            let description = if !program.lengths.contains_key(&(address as u32)) {
+                tr!("veri / komutun devamı", "data / instruction continuation").into()
+            } else {
+                match draft.architecture {
+                    Architecture::Mini => makine_levels::mini::disasm(word as u8),
+                    Architecture::Mcs4 => makine_world::projects::mcs4::disassemble(
+                        word as u8,
+                        program.words.get(address + 1).copied().unwrap_or(0) as u8,
+                    ),
+                    _ => self.progress.notebook.custom.disasm(word),
+                }
+            };
+            ui.monospace(format!(
+                "{:>3}  {address:03x}  {word:04x}  {description}",
+                program.lines.get(&(address as u32)).copied().unwrap_or(0)
+            ));
+        }
+    }
+
+    pub(super) fn mini_task_panel(&mut self, ui: &mut Ui, draft: &crate::programming::Draft) {
+        let Some(lesson) = draft
+            .activity
+            .as_deref()
+            .and_then(|key| key.strip_prefix("mini-lesson:"))
+            .and_then(crate::mini_lessons::find)
+            .filter(|_| draft.architecture == Architecture::Mini)
+        else {
+            return;
+        };
+        ui.heading(lesson.title);
+        ui.label(RichText::new(lesson.task).strong());
+        let ready = crate::mini_lessons::unlocked(lesson.id, &self.progress.notebook.solved);
+        if !ready {
+            ui.colored_label(theme::WARN, tr!("Okuyup deneyebilirsin; sınamadan önce önceki Mini kod görevini tamamla.", "You may read and experiment; finish the preceding Mini code task before checking."));
+        }
+        if let Some((_, _, result)) = self
+            .debug
+            .mini_feedback
+            .as_ref()
+            .filter(|(id, source, _)| *id == draft.id && source == &draft.source)
+        {
+            match result {
+                Ok(message) => {
+                    ui.colored_label(theme::GOOD, message);
+                }
+                Err(message) => {
+                    ui.colored_label(theme::BAD, message);
+                }
+            }
+        }
+        egui::CollapsingHeader::new(tr!("Nasıl çalışır?", "How does it work?"))
+            .id_salt(("mini-task-explanation", lesson.id))
+            .show(ui, |ui| {
+                ui.label(lesson.about);
+                ui.label(tr!(
+                    "Görev sınaması örnek MiniCpu devresini kullanır; kendi donanım seviyeni tamamlamaz. Derle → Devreye yükle → Adım ile sonucu ayrıca izle.",
+                    "Task checks use the example MiniCpu circuit; they do not complete your hardware level. Also inspect the result with Build → Load into circuit → Step."
+                ));
+            });
+        egui::CollapsingHeader::new(tr!("Mini görev ipucu", "Mini task hint"))
+            .id_salt(("mini-task-hint", lesson.id))
+            .show(ui, |ui| {
+                ui.label(lesson.hint);
+            });
+        egui::CollapsingHeader::new(tr!("Mini görev örnek çözümü", "Mini task example solution"))
+            .id_salt(("mini-task-solution", lesson.id))
+            .show(ui, |ui| {
+                ui.label(tr!(
+                    "Bu örneği açmak taslağını değiştirmez.",
+                    "Opening this example does not change your draft."
+                ));
+                ui.monospace(lesson.solution);
+            });
+        egui::CollapsingHeader::new(tr!("Deney notları", "Experiment notes"))
+            .id_salt(("mini-task-notes", lesson.id))
+            .show(ui, |ui| {
+                let label = ui
+                    .label(tr!(
+                        "Tahminim ve deney notum",
+                        "My prediction and experiment notes"
+                    ))
+                    .id;
+                let notes = self
+                    .progress
+                    .notebook
+                    .lesson_notes
+                    .entry(format!("mini:{}", lesson.id))
+                    .or_default();
+                if ui
+                    .add(
+                        egui::TextEdit::multiline(notes)
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY),
+                    )
+                    .labelled_by(label)
+                    .changed()
+                {
+                    self.save_soon();
+                }
+            });
+    }
+
+    pub(super) fn check_mini_task(&mut self) {
+        let Some(draft) = self.progress.notebook.current().cloned() else {
+            return;
+        };
+        let Some(id) = draft
+            .activity
+            .as_deref()
+            .and_then(|key| key.strip_prefix("mini-lesson:"))
+            .and_then(crate::mini_lessons::find)
+            .map(|l| l.id)
+        else {
+            return;
+        };
+        if draft.architecture != Architecture::Mini {
+            return;
+        }
+        let result = if crate::mini_lessons::unlocked(id, &self.progress.notebook.solved) {
+            crate::mini_lessons::check(id, &draft.source)
+        } else {
+            Err(tr!(
+                "Önceki Mini kod görevini tamamla.",
+                "Finish the preceding Mini code task."
+            )
+            .into())
+        };
+        if result.is_ok() {
+            self.progress.notebook.solved.insert(id.into());
+            self.save_soon();
+        }
+        self.debug.mini_feedback = Some((draft.id, draft.source, result));
     }
 
     fn custom_definition(&mut self, ui: &mut Ui) {
@@ -451,6 +657,18 @@ impl App {
             collapsed: vec![],
         })
     }
+}
+
+fn small_source(ui: &mut Ui, draft: &mut crate::programming::Draft) -> bool {
+    let label = ui.label(tr!("Kaynak kod", "Source code")).id;
+    ui.add(
+        egui::TextEdit::multiline(&mut draft.source)
+            .code_editor()
+            .desired_rows(20)
+            .desired_width(f32::INFINITY),
+    )
+    .labelled_by(label)
+    .changed()
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ Her seviyenin sağ panelinde **Verimlilik** bölümü var:
   biliniyor (ör. XOR için 4 NAND). Büyük devrelerde böyle kesin bir sınır
   bilinmez; orada örnek çözüm ölçüdür.
 
-Sayın hedefe eşitse ✔ görürsün; örnekten küçükse ★: oyunun bildiğinden
+Sayın hedefe eşitse ✔ görürsün; örnekten küçükse bunu belirten bir mesaj çıkar: oyunun bildiğinden
 iyisini bulmuşsun demektir.
 
 ## Fazla kapılar nereden geliyor?
@@ -61,9 +61,30 @@ kadar dolambaçlı olduğunu iyi gösterir.
 
 ## Örnek çözümü görmek
 
-**💡 Çözümü gör** düğmesi örnek devreyi tuvalde açar. Kendi devren silinmez;
-**Kendi devreme dön** ile geri gelirsin. Örnek devrenin girişlerini
-değiştirip nasıl çalıştığını izleyebilirsin, ama değişiklikler kaydedilmez.
+**💡 Çözümü gör** düğmesi örnek devreyi ayrı bir **Örnek** sekmesinde açar.
+Üstteki devre adı ve **Örnek** sekmeleriyle tek tıkla geçiş yaparsın. Kendi
+devrenin yerleşimi, yakınlaştırması, girişleri ve geri alma geçmişi korunur.
+Örneğin girişlerini değiştirebilir, parçalarını taşıyıp nasıl çalıştığını
+izleyebilirsin; bu geçici değişiklikler profiline kaydedilmez.
+
+Örnek sekmesini aşağı sürüklemek çözümü bağımsız bir pencereye ayırır. Pencereyi işletim sisteminin başlık
+çubuğundan başka monitöre taşıyabilir; kendi devren ile örneği aynı anda
+görebilirsin. Örnek, ana pencerede başka seviyeye veya Wiki'ye geçsen de
+açık kalır ve hangi seviyeye ait olduğu başlığında yazar.
+
+**Sekmeye geri al** ya da ayrı pencerenin kapatma düğmesi örneği sekmeye
+döndürür; ana uygulamayı kapatmaz ve üzerinde çalıştığın devreyi değiştirmez.
+**Örnek sekmesini kapat** ise geçici örnek çalışma alanını kapatır.
+Pencere ayırmayı desteklemeyen ortamlarda örnek uygulama içinde yüzen bir
+pencerede açılır. **Örnek devreyi sığdır**, büyük bir örneği yeniden görünür
+alana yerleştirir; normal yakınlaştırma ve kaydırma da çalışır.
+
+Diğer seviyeler ve serbest çipler de aynı çubukta kendi adlarıyla sekme açar.
+Devre sekmeleri sürüklenerek sıralanabilir ve örnek gibi aşağı sürüklenerek ayrı
+pencerelere ayrılabilir. Sonradan açılan sekmelerdeki **×**, kayıtlı devreyi değil
+yalnızca açık çalışma alanını kapatır; ilk sekme açık kalır.
+Pencere çerçevesi tercihini **Ana sayfa → Ayarlar** altında değiştirebilirsin;
+ana ve ayrılan pencereler aynı tercihi kullanır.
 
 Testi geçmeden önce çözüme bakmak istersen oyun bir kez daha sorar. Önce
 kendin dene: takıldığın yerde [Kapılar](kapilar.md) ve

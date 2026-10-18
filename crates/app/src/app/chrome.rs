@@ -12,6 +12,13 @@ pub const BAR_HEIGHT: f32 = 40.0;
 /// How far in from the window's edge a drag resizes it.
 const GRIP: f32 = 6.0;
 
+pub(super) fn window_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    static ICON: std::sync::OnceLock<Option<std::sync::Arc<egui::IconData>>> =
+        std::sync::OnceLock::new();
+    ICON.get_or_init(|| crate::icon().map(std::sync::Arc::new))
+        .clone()
+}
+
 impl App {
     /// The bar at the top of the window.
     pub(super) fn top_bar(&mut self, ui: &mut Ui) {
@@ -43,10 +50,11 @@ impl App {
                     self.tabs(ui);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if !framed {
-                            window_buttons(ui);
+                            if window_buttons(ui) {
+                                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
                             ui.add_space(6.0);
                         }
-                        self.settings_menu(ui);
                         if let Some(p) = &self.profiles {
                             ui.label(
                                 RichText::new(&p.current().name)
@@ -112,80 +120,81 @@ impl App {
         }
     }
 
-    fn settings_menu(&mut self, ui: &mut Ui) {
-        let r = ui.menu_button(RichText::new("⚙").size(16.0), |ui| {
-            ui.set_min_width(240.0);
-            theme::section(ui, tr!("Dil", "Language"));
-            for lang in Lang::ALL {
-                if ui.radio(makine_lang::get() == lang, lang.name()).clicked() {
-                    self.set_lang(lang);
-                }
+    pub(super) fn settings_view(&mut self, ui: &mut Ui) {
+        ui.heading(tr!("Ayarlar", "Settings"));
+        ui.label(tr!(
+            "Dil, simülasyon ve pencere görünümü.",
+            "Language, simulation and window appearance."
+        ));
+        theme::section(ui, tr!("Dil", "Language"));
+        for lang in Lang::ALL {
+            if ui.radio(makine_lang::get() == lang, lang.name()).clicked() {
+                self.set_lang(lang);
             }
-            theme::section(ui, tr!("Simülasyon", "Simulation"));
-            let fast = ui
-                .checkbox(
-                    &mut self.progress.fast,
-                    tr!("⚡ Hızlı simülasyon", "⚡ Fast simulation"),
-                )
-                .on_hover_text(tr!(
-                    "Geçtiğin çipleri kapı kapı simüle etmek yerine aynı davranışı gösteren \
+        }
+        theme::section(ui, tr!("Simülasyon", "Simulation"));
+        let fast = ui
+            .checkbox(
+                &mut self.progress.fast,
+                tr!("⚡ Hızlı simülasyon", "⚡ Fast simulation"),
+            )
+            .on_hover_text(tr!(
+                "Geçtiğin çipleri kapı kapı simüle etmek yerine aynı davranışı gösteren \
                      hızlı bir modelle çalıştır. Çipin testi geçtiği için sonuç aynıdır, \
                      sadece çok daha hızlıdır. Kapalıyken her şey NAND seviyesinde simüle edilir.",
-                    "Run solved chips with a fast model that behaves the same instead of \
+                "Run solved chips with a fast model that behaves the same instead of \
                      gate by gate. The chip passed its test, so the result is the same, \
                      only much faster. When off, everything is simulated as NAND gates."
-                ));
-            if fast.changed() {
-                self.refresh_library();
-                self.rebuild();
-                self.save();
-            }
-            theme::section(ui, tr!("Görünüm", "Look"));
-            if ui
-                .checkbox(
-                    &mut self.progress.symbols,
-                    tr!("Kapı sembolleri", "Gate symbols"),
-                )
-                .on_hover_text(tr!(
-                    "NOT, AND, OR, XOR, NAND, MUX'u standart mantık sembolleriyle çiz",
-                    "Draw NOT, AND, OR, XOR, NAND and MUX with standard logic symbols"
-                ))
-                .changed()
-            {
-                self.canvas.symbols = self.progress.symbols;
-                self.save();
-            }
-            if ui
-                .checkbox(
-                    &mut self.progress.fullscreen,
-                    tr!("Tam ekran (F11)", "Full screen (F11)"),
-                )
-                .changed()
-            {
-                let on = self.progress.fullscreen;
-                self.set_fullscreen(ui.ctx(), on);
-            }
-            let mut system = !self.progress.custom_frame;
-            if ui
-                .checkbox(
-                    &mut system,
-                    tr!("Sistemin pencere çerçevesi", "System window frame"),
-                )
-                .on_hover_text(tr!(
-                    "Kapalıyken makine kendi başlık çubuğunu çizer. Pencere taşınamıyor ya da \
+            ));
+        if fast.changed() {
+            self.refresh_library();
+            self.rebuild();
+            self.save();
+        }
+        theme::section(ui, tr!("Görünüm", "Look"));
+        if ui
+            .checkbox(
+                &mut self.progress.symbols,
+                tr!("Kapı sembolleri", "Gate symbols"),
+            )
+            .on_hover_text(tr!(
+                "NOT, AND, OR, XOR, NAND, MUX'u standart mantık sembolleriyle çiz",
+                "Draw NOT, AND, OR, XOR, NAND and MUX with standard logic symbols"
+            ))
+            .changed()
+        {
+            self.canvas.symbols = self.progress.symbols;
+            self.save();
+        }
+        if ui
+            .checkbox(
+                &mut self.progress.fullscreen,
+                tr!("Tam ekran (F11)", "Full screen (F11)"),
+            )
+            .changed()
+        {
+            let on = self.progress.fullscreen;
+            self.set_fullscreen(ui.ctx(), on);
+        }
+        let mut system = !self.progress.custom_frame;
+        if ui
+            .checkbox(
+                &mut system,
+                tr!("Sistemin pencere çerçevesi", "System window frame"),
+            )
+            .on_hover_text(tr!(
+                "Kapalıyken makine kendi başlık çubuğunu çizer. Pencere taşınamıyor ya da \
                      boyutlanamıyorsa bunu aç.",
-                    "When off, makine draws its own title bar. Turn this on if the window \
+                "When off, makine draws its own title bar. Turn this on if the window \
                      cannot be moved or resized."
-                ))
-                .changed()
-            {
-                self.progress.custom_frame = !system;
-                ui.ctx()
-                    .send_viewport_cmd(egui::ViewportCommand::Decorations(system));
-                self.save();
-            }
-        });
-        r.response.on_hover_text(tr!("Ayarlar", "Settings"));
+            ))
+            .changed()
+        {
+            self.progress.custom_frame = !system;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Decorations(system));
+            self.save();
+        }
     }
 
     pub(super) fn set_lang(&mut self, lang: Lang) {
@@ -201,71 +210,133 @@ impl App {
 
     /// Without the system's frame, the window's edges resize it.
     pub(super) fn resize_edges(&self, ctx: &egui::Context) {
-        if !self.progress.custom_frame {
-            return;
-        }
-        let (full, max) = ctx.input(|i| {
-            let v = i.viewport();
-            (v.fullscreen.unwrap_or(false), v.maximized.unwrap_or(false))
-        });
-        if full || max {
-            return;
-        }
-        let screen = ctx.content_rect();
-        let Some(p) = ctx.pointer_hover_pos() else {
-            return;
-        };
-        use egui::ResizeDirection as D;
-        let (l, r, t, b) = (
-            p.x - screen.left() < GRIP,
-            screen.right() - p.x < GRIP,
-            p.y - screen.top() < GRIP,
-            screen.bottom() - p.y < GRIP,
-        );
-        let dir = match (l, r, t, b) {
-            (true, _, true, _) => D::NorthWest,
-            (_, true, true, _) => D::NorthEast,
-            (true, _, _, true) => D::SouthWest,
-            (_, true, _, true) => D::SouthEast,
-            (true, ..) => D::West,
-            (_, true, ..) => D::East,
-            (_, _, true, _) => D::North,
-            (.., true) => D::South,
-            _ => return,
-        };
-        ctx.set_cursor_icon(match dir {
-            D::NorthWest | D::SouthEast => CursorIcon::ResizeNwSe,
-            D::NorthEast | D::SouthWest => CursorIcon::ResizeNeSw,
-            D::West | D::East => CursorIcon::ResizeHorizontal,
-            D::North | D::South => CursorIcon::ResizeVertical,
-        });
-        if ctx.input(|i| i.pointer.primary_pressed()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
-        }
+        resize_window_edges(ctx, self.progress.custom_frame);
     }
 
-    /// A thin copper line around a frameless window, so it stands apart
-    /// from what is behind it.
+    /// A thin copper line around a frameless window.
     pub(super) fn window_border(&self, ctx: &egui::Context) {
-        if !self.progress.custom_frame
-            || ctx.input(|i| {
-                i.viewport().fullscreen.unwrap_or(false) || i.viewport().maximized.unwrap_or(false)
-            })
-        {
-            return;
-        }
-        let r = ctx.content_rect();
-        ctx.layer_painter(egui::LayerId::new(
-            egui::Order::Foreground,
-            egui::Id::unique("window_border"),
-        ))
-        .rect_stroke(
-            r,
-            0.0,
-            Stroke::new(1.0, theme::COPPER.gamma_multiply(0.6)),
-            egui::StrokeKind::Inside,
-        );
+        paint_window_border(ctx, self.progress.custom_frame);
     }
+}
+
+pub(super) fn resize_window_edges(ctx: &egui::Context, custom_frame: bool) {
+    if !custom_frame {
+        return;
+    }
+    let (full, max) = ctx.input(|i| {
+        let v = i.viewport();
+        (v.fullscreen.unwrap_or(false), v.maximized.unwrap_or(false))
+    });
+    if full || max {
+        return;
+    }
+    let screen = ctx.content_rect();
+    let Some(p) = ctx.pointer_hover_pos() else {
+        return;
+    };
+    use egui::ResizeDirection as D;
+    let (l, r, t, b) = (
+        p.x - screen.left() < GRIP,
+        screen.right() - p.x < GRIP,
+        p.y - screen.top() < GRIP,
+        screen.bottom() - p.y < GRIP,
+    );
+    let dir = match (l, r, t, b) {
+        (true, _, true, _) => D::NorthWest,
+        (_, true, true, _) => D::NorthEast,
+        (true, _, _, true) => D::SouthWest,
+        (_, true, _, true) => D::SouthEast,
+        (true, ..) => D::West,
+        (_, true, ..) => D::East,
+        (_, _, true, _) => D::North,
+        (.., true) => D::South,
+        _ => return,
+    };
+    ctx.set_cursor_icon(match dir {
+        D::NorthWest | D::SouthEast => CursorIcon::ResizeNwSe,
+        D::NorthEast | D::SouthWest => CursorIcon::ResizeNeSw,
+        D::West | D::East => CursorIcon::ResizeHorizontal,
+        D::North | D::South => CursorIcon::ResizeVertical,
+    });
+    if ctx.input(|i| i.pointer.primary_pressed()) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+    }
+}
+
+pub(super) fn paint_window_border(ctx: &egui::Context, custom_frame: bool) {
+    if !custom_frame
+        || ctx.input(|i| {
+            i.viewport().fullscreen.unwrap_or(false) || i.viewport().maximized.unwrap_or(false)
+        })
+    {
+        return;
+    }
+    let r = ctx.content_rect();
+    ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("window_border"),
+    ))
+    .rect_stroke(
+        r,
+        0.0,
+        Stroke::new(1.0, theme::COPPER.gamma_multiply(0.6)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+/// Shared chrome for detached editors and examples. Close is returned to the
+/// workspace owner, never sent to the root viewport.
+pub(super) fn child_window_frame(ui: &mut Ui, title: &str, custom_frame: bool) -> bool {
+    if !custom_frame {
+        return false;
+    }
+    resize_window_edges(ui.ctx(), true);
+    paint_window_border(ui.ctx(), true);
+    let mut close = false;
+    egui::Panel::top("child-window-chrome")
+        .exact_size(BAR_HEIGHT)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::WELL)
+                .inner_margin(egui::Margin::symmetric(10, 0))
+                .stroke(Stroke::new(1., theme::LINE)),
+        )
+        .show(ui, |ui| {
+            let drag = ui.interact(
+                ui.max_rect(),
+                ui.scope_id().with("window-drag"),
+                Sense::click_and_drag(),
+            );
+            if drag.drag_started() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if drag.double_clicked() {
+                toggle_maximized(ui.ctx());
+            }
+            ui.horizontal_centered(|ui| {
+                ui.add(egui::Image::new(home_ui::logo()).fit_to_exact_size(vec2(24., 24.)));
+                // Painted rather than a label: no text cursor or selection,
+                // and the whole bar behind it stays a window drag handle.
+                let title_width = (ui.available_width() - 130.).max(80.);
+                let mut job = egui::text::LayoutJob::simple_singleline(
+                    title.to_string(),
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    theme::INK,
+                );
+                job.wrap = egui::text::TextWrapping::truncate_at_width(title_width);
+                let galley = ui.painter().layout_job(job);
+                let (rect, _) = ui.allocate_exact_size(vec2(title_width, 28.), Sense::hover());
+                ui.painter().galley(
+                    pos2(rect.left(), rect.center().y - galley.size().y / 2.),
+                    galley,
+                    theme::INK,
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    close = window_buttons(ui);
+                });
+            });
+        });
+    close
 }
 
 /// A tab in the bar: text with a copper line under it when selected.
@@ -322,13 +393,10 @@ fn toggle_maximized(ctx: &egui::Context) {
 }
 
 /// Minimize, maximize and close, right to left.
-fn window_buttons(ui: &mut Ui) {
+fn window_buttons(ui: &mut Ui) -> bool {
     let ctx = ui.ctx().clone();
     let max = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
     let close = window_button(ui, Glyph::Close, tr!("Kapat", "Close"), true);
-    if close.clicked() {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-    }
     let size = window_button(
         ui,
         if max { Glyph::Restore } else { Glyph::Maximize },
@@ -351,6 +419,7 @@ fn window_buttons(ui: &mut Ui) {
     if min.clicked() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
     }
+    close.clicked()
 }
 
 #[derive(Clone, Copy)]
@@ -419,4 +488,82 @@ fn window_button(ui: &mut Ui, glyph: Glyph, name: &str, danger: bool) -> egui::R
     }
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
     r
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::Progress;
+    use egui_kittest::kittest::Queryable;
+    use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn settings_live_on_home_and_change_saved_preferences() {
+        let app = Rc::new(RefCell::new(App::new(Progress::default(), None)));
+        app.borrow_mut().go_home();
+        let state = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1280., 800.))
+            .build_ui(move |ui| state.borrow_mut().ui(ui));
+        h.run_steps(3);
+        assert!(h.query_by_label("⚙").is_none());
+        h.get_by_label("Ayarlar").click();
+        h.run();
+        assert!(h.query_by_label("Kapı sembolleri").is_some());
+        let original = app.borrow().progress.symbols;
+        h.get_by_label("Kapı sembolleri").click();
+        h.run();
+        assert_eq!(app.borrow().progress.symbols, !original);
+        let saved = serde_json::to_string(&app.borrow().progress).unwrap();
+        let restored: Progress = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.symbols, !original);
+        h.get_by_label("Genel bakış").click();
+        h.run();
+        assert!(!app.borrow().home.settings);
+    }
+
+    #[test]
+    fn child_window_title_text_is_a_drag_handle() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(900., 560.))
+            .build_ui(|ui| {
+                child_window_frame(ui, "Test devresi — makine", true);
+            });
+        h.run_steps(3);
+        // On the title text, then on empty title space to its right.
+        for x in [60., 500.] {
+            h.drag_at(pos2(x, BAR_HEIGHT / 2.));
+            h.step();
+            h.hover_at(pos2(x + 30., BAR_HEIGHT / 2. + 10.));
+            h.step();
+            assert!(h.output().viewport_output[&egui::ViewportId::ROOT]
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::StartDrag)));
+            h.drop_at(pos2(x + 30., BAR_HEIGHT / 2. + 10.));
+            h.run();
+        }
+    }
+
+    #[test]
+    fn detached_chrome_close_is_not_a_root_close_command() {
+        let closed = Rc::new(RefCell::new(false));
+        let state = closed.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(900., 560.))
+            .build_ui(move |ui| {
+                *state.borrow_mut() = child_window_frame(ui, "Test devresi — makine", true);
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.label("canvas");
+                });
+            });
+        h.run_steps(3);
+        h.get_by_label("Kapat").click();
+        h.step();
+        assert!(*closed.borrow());
+        assert!(!h.output().viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .iter()
+            .any(|command| matches!(command, egui::ViewportCommand::Close)));
+    }
 }

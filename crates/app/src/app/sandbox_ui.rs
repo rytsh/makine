@@ -33,11 +33,7 @@ impl App {
             );
             for name in self.progress.sandbox.chips.keys() {
                 let selected = editing.as_deref() == Some(name.as_str());
-                if ui
-                    .selectable_label(selected, format!("★  {name}"))
-                    .clicked()
-                    && !selected
-                {
+                if ui.selectable_label(selected, name).clicked() && !selected {
                     open = Some(name.clone());
                 }
             }
@@ -127,7 +123,7 @@ impl App {
         let Target::Free(name) = self.target.clone() else {
             return;
         };
-        ui.heading(format!("★ {name}"));
+        ui.heading(&name);
         ui.label(
             RichText::new(tr!(
                 "Serbest çip: test yok, kural yok.",

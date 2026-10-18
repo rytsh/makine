@@ -1,10 +1,11 @@
 //! One learning path: each programming/design activity belongs to a chip,
 //! and worlds carry local lab context rather than a second progress ledger.
-use crate::{isa_lessons, lessons};
+use crate::{isa_lessons, lessons, mini_lessons};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Activity {
     Program(&'static str),
+    Mini(&'static str),
     Isa(usize),
 }
 
@@ -39,6 +40,12 @@ pub fn activities(chip: &str) -> Vec<Activity> {
         .filter(|l| program_chip(l.id) == Some(chip))
         .map(|l| Activity::Program(l.id))
         .chain(
+            mini_lessons::all()
+                .into_iter()
+                .filter(|l| l.chip == chip)
+                .map(|l| Activity::Mini(l.id)),
+        )
+        .chain(
             isa_lessons::all()
                 .iter()
                 .enumerate()
@@ -56,18 +63,20 @@ impl Activity {
                 .find(|l| l.id == id)
                 .map_or(id, |l| l.title),
             Self::Isa(i) => isa_lessons::all().get(i).map_or("ISA", |l| l.title),
+            Self::Mini(id) => mini_lessons::find(id).map_or(id, |l| l.title),
         }
     }
     pub fn chip(self) -> &'static str {
         match self {
             Self::Program(id) => program_chip(id),
             Self::Isa(i) => isa_chip(i),
+            Self::Mini(id) => mini_lessons::find(id).map(|l| l.chip),
         }
         .unwrap()
     }
     pub fn done(self, n: &crate::programming::Notebook) -> bool {
         match self {
-            Self::Program(id) => n.solved.contains(id),
+            Self::Program(id) | Self::Mini(id) => n.solved.contains(id),
             Self::Isa(i) => isa_lessons::all()
                 .get(i)
                 .is_some_and(|l| n.isa_solved.contains(l.id)),
@@ -83,6 +92,9 @@ pub fn example(chip: &str) -> Option<&'static str> {
         "Latch" | "DLatch" | "DFF" => "sr_latch",
         "Counter32" | "MiniPc4" => "counter",
         "Ram8" => "ram_bench",
+        "Ram4x8" => "byte_ram_bench",
+        "Rom4x8" => "rom_bench",
+        "ProgramRom" | "RomSequencer" => "program_rom",
         _ => return None,
     })
 }
@@ -99,7 +111,10 @@ mod tests {
                 total += 1;
             }
         }
-        assert_eq!(total, lessons::all().len() + isa_lessons::all().len());
+        assert_eq!(
+            total,
+            lessons::all().len() + isa_lessons::all().len() + mini_lessons::all().len()
+        );
         for l in lessons::all() {
             assert!(makine_levels::find(program_chip(l.id).unwrap()).is_some());
         }

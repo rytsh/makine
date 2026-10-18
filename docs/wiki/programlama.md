@@ -3,14 +3,27 @@ seviyeler:
 -->
 # Kendi programını yaz
 
+ROM veya küçük bellek kurmak istiyorsan Hafıza'dan sonra açılan
+[Bellek ve ROM](rom.md) yolunu da dene: adres çözücüden program ROM'una
+ve saatle komut getirmeye kadar beş devre alıştırması vardır.
+Program ROM'u ve komut getirme seviyelerinin altındaki üç Mini kod görevi, bu bölümün RISC-V
+görevlerinden bağımsız açılır: ROM programını değiştir, RAM girdisini işle,
+etiketli geri sayım yaz. [Ayrıntılı görev ve deney rehberi](rom.md).
+
 Kod yazmak ayrı bir sekmede değil, **seviyelerin içindedir**. Seviye listesinde her
 devrenin altında onu kullanan dersler (↳) görünür; örneğin RAM seviyesinin altında adres ve
 bellek dersleri. Bir derse tıklayınca aynı seviye kod görünümünde açılır; **Devreyi kur /
-incele** ile devreye dönersin. Sağ paneldeki **Kur → Kodla → Dünya'da dene** adımları aynı
+incele** ile devreye dönersin. Devre panelinin **Öğren** bölümündeki **Kur → Kodla → Dünya'da dene** adımları aynı
 çalışmanın parçalarıdır ve ilerlemeleri ortaktır.
 
+Kod paneli üç bölüme ayrılır: **Görev** aktif ders, açıklama, ipucu ve notları;
+**Dosyalar** taslakları ve dosya işlemlerini; **İzle** çalışan programın değerlerini
+gösterir. Uzun içerikte yalnızca seçtiğin bölüm kayar; başlık ve görev sınama
+düğmesi görünür kalır. Ayrıntılı anlatımlar gerektiğinde açılır.
+
 **Dünya'da kodlamak:** Dünya'da bir ROM (ya da 4004 için Program ROM) seç, sağ paneldeki
-**Bu dünyada öğren ve kodla** bölümünde **Seçili ROM'u bu taslağa bağla**, sonra kodu derle
+**Bu dünyada öğren ve kodla** bölümünde (kod görünümündeysen **İzle** altında)
+**Seçili ROM'u bu taslağa bağla**, sonra kodu derle
 ve **ROM'a yükle ve baştan başlat**. Program aynı canlı devrede çalışır; yükleme Ctrl+Z ile
 geri alınabilir. Kapasite ya da kelime genişliği uymazsa hiçbir şey değişmez. RV32 kodu
 bilgisayar simülatöründe çalışır, Dünya tellerine bağlanmaz.
@@ -21,7 +34,7 @@ bitene kadar referans işlemci kullanılır; sonra motoru seçebilirsin.
 
 ## İlk programın
 
-**Yeni** ile taslak aç, adını değiştir ve şunu yaz:
+**Dosyalar → Yeni** ile taslak aç, adını değiştir ve şunu yaz:
 
 ```asm
 li a0, 2

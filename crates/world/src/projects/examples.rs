@@ -34,6 +34,12 @@ impl Example {
             "adder4" => tr!("4-bit toplama makinesi", "4-bit adding machine"),
             "traffic" => tr!("Trafik lambası", "Traffic light"),
             "ram_bench" => tr!("RAM tezgâhı", "RAM bench"),
+            "byte_ram_bench" => tr!("Bayt RAM'i: izin ve saat", "Byte RAM: enable and clock"),
+            "rom_bench" => tr!("ROM tablosunu oku", "Read a ROM table"),
+            "program_rom" => tr!(
+                "Program ROM'u: adres, opcode, argüman",
+                "Program ROM: address, opcode, operand"
+            ),
             "screen_line" => tr!("Ekrana çizgi", "A line on the screen"),
             "typewriter" => tr!("Daktilo", "Typewriter"),
             _ => self.id,
@@ -78,6 +84,18 @@ impl Example {
                 "16 kelimelik bir RAM: adresi ve veriyi ayarla, yaz'a bas, sonra geri oku.",
                 "A 16-word RAM: set the address and data, press write, then read it back."
             ),
+            "byte_ram_bench" => tr!(
+                "4×8-bit RAM: we ve clk ayrı. Yazma izni açıkken saat 0→1 olunca tek hücreye yazılır. Adresi değiştirip geri oku.",
+                "4×8-bit RAM with separate we and clk. A 0→1 clock writes one cell only when enabled. Change the address to read back."
+            ),
+            "rom_bench" => tr!(
+                "Hazır ROM aygıtında 0x12,0xA5,0x3C,0x80 tablosunu incele. Adresi değiştir; okuma saat beklemez. Seviyede aynı davranışı kapılardan kurarsın.",
+                "Inspect 0x12,0xA5,0x3C,0x80 in a ROM device. Change addresses; reads need no clock. In the level you build the same behaviour from gates."
+            ),
+            "program_rom" => tr!(
+                "16×8-bit düzenlenebilir ROM: komut baytını opcode ve argümana ayır. Mini taslağını bağlayıp yükleyebilirsin. Bu tezgâh komut gösterir, CPU gibi yürütmez.",
+                "Editable 16×8-bit ROM: split each instruction into opcode and operand. Link and upload a Mini draft. This bench displays instructions; it does not execute them as a CPU."
+            ),
             "screen_line" => tr!(
                 "Bir sayaç ekranın köşegenini çizer: x ve y aynı sayaçtan gelir.",
                 "A counter draws the screen's diagonal: x and y come from the same counter."
@@ -103,6 +121,9 @@ pub fn all() -> Vec<Example> {
         e("adder4", Size::Medium, adder4),
         e("traffic", Size::Medium, traffic),
         e("ram_bench", Size::Large, ram_bench),
+        e("byte_ram_bench", Size::Small, byte_ram_bench),
+        e("rom_bench", Size::Small, rom_bench),
+        e("program_rom", Size::Small, program_rom),
         e("screen_line", Size::Large, screen_line),
         e("typewriter", Size::Large, typewriter),
     ]
@@ -482,6 +503,72 @@ fn ram_bench() -> Project {
     b.named((write, 0), (ram, 3), "clk");
     let shown = b.device(Device::Display { bits: 8 }, 560.0, 120.0);
     b.named((ram, 0), (shown, 0), "q");
+    b.done(vec![])
+}
+
+fn byte_ram_bench() -> Project {
+    let mut b = B::new(tr!(
+        "Bayt RAM'i: izin ve saat",
+        "Byte RAM: enable and clock"
+    ));
+    let addr = b.input("addr", 2, 0, 40.0, 40.0);
+    let data = b.input("d", 8, 0xA5, 40.0, 160.0);
+    let we = b.input("we", 1, 0, 40.0, 280.0);
+    let clk = b.input("clk", 1, 0, 40.0, 400.0);
+    let ram = b.device(Device::Ram { addr: 2, data: 8 }, 320.0, 160.0);
+    for (pin, input) in [addr, data, we, clk].into_iter().enumerate() {
+        b.named((input, 0), (ram, pin), ["addr", "d", "we", "clk"][pin]);
+    }
+    let display = b.device(Device::Display { bits: 8 }, 600.0, 160.0);
+    b.named((ram, 0), (display, 0), "q");
+    b.watch(ram, 0);
+    b.done(vec![])
+}
+
+fn rom_bench() -> Project {
+    let mut b = B::new(tr!("ROM tablosunu oku", "Read a ROM table"));
+    let addr = b.input("addr", 2, 0, 40.0, 80.0);
+    let rom = b.device(
+        Device::Rom {
+            addr: 2,
+            data: 8,
+            words: vec![0x12, 0xA5, 0x3C, 0x80],
+        },
+        280.0,
+        80.0,
+    );
+    let display = b.device(Device::Display { bits: 8 }, 560.0, 80.0);
+    b.named((addr, 0), (rom, 0), "addr");
+    b.named((rom, 0), (display, 0), "q");
+    b.watch(rom, 0);
+    b.done(vec![])
+}
+
+fn program_rom() -> Project {
+    let mut b = B::new(tr!(
+        "Program ROM'u: adres, opcode, argüman",
+        "Program ROM: address, opcode, operand"
+    ));
+    let addr = b.input("addr", 4, 0, 40.0, 80.0);
+    let rom = b.device(
+        Device::Rom {
+            addr: 4,
+            data: 8,
+            words: vec![0x13, 0x30, 0x40, 0x31, 0xF0],
+        },
+        280.0,
+        80.0,
+    );
+    let instr = b.device(Device::Display { bits: 8 }, 560.0, 40.0);
+    let split = b.split(vec![4, 4], 560.0, 200.0);
+    let arg = b.output("arg", 4, 800.0, 200.0);
+    let op = b.output("op", 4, 800.0, 320.0);
+    b.named((addr, 0), (rom, 0), "pc");
+    b.named((rom, 0), (instr, 0), "instr");
+    b.wire((rom, 0), (split, 0));
+    b.named((split, 0), (arg, 0), "arg");
+    b.named((split, 1), (op, 0), "op");
+    b.watch(rom, 0);
     b.done(vec![])
 }
 

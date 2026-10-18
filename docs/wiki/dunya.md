@@ -48,8 +48,23 @@ tel girer.
 - Seçiliyken **Ctrl+C / Ctrl+V** kopyalar, **Ctrl+D** çoğaltır, **Delete**
   siler. Kopyalanan parçaların aralarındaki teller de gelir.
 - **Üstten hizala / Soldan hizala** seçilen parçaları aynı çizgiye getirir.
-- **Küçük harita** büyük bir devrede kaybolmanı önler; haritaya tıklayarak
-  başka bir bölgeye gidersin. **Home / Ortala** bütün devreyi gösterir.
+- Tahtanın sol altındaki **küçük harita** büyük bir devrede kaybolmanı önler;
+  haritaya tıklayarak ya da sürükleyerek başka bir bölgeye gidersin. **Home / Ortala** bütün devreyi gösterir.
+
+Kopyalama ve yapıştırma mesajları **kaç parça** alındığını söyler.
+Aynı noktaya tekrar yapıştırılan gruplar hafifçe kaydırılır; yeni grubun
+tamamı görünüm dışında kalıyorsa kamera grubu gösterecek şekilde ayarlanır.
+**Ctrl+D** panodaki önceki kopyanı değiştirmez. Geçersiz pano metni,
+sessizce eski devreyi yapıştırmak yerine uyarı verir.
+
+Yalnızca **iki ucu da seçilen parçalar içinde olan teller** taşınır.
+Seçim dışındaki bir parçaya giden bağlantıyı yeni yerde yeniden bağlaman
+gerekir. Seviye editörünün sabit giriş/çıkış kutuları seçimdeki kapıların
+bir parçası değildir; Dünya'da ise Giriş/Çıkış aygıtları ayrıca seçilebilir.
+Seviye ve Dünya panoları farklı biçimlerdedir; birinden alınan pano metni
+ötekinde doğrudan yapıştırılmaz. Çip olarak aktarmak için çip dosyası
+özelliğini kullan. Bir metin kutusu odaktaysa Ctrl+C/V devreyi değil o
+kutudaki metni işler; devreye dönmek için tuvale tıkla.
 
 ## Modüller ve sinyal izleme
 
@@ -69,7 +84,7 @@ Ayrıntılar: [Modüller](moduller.md), [Sinyal izleme](sinyaller.md).
 
 ## 4004 atölyesini dene
 
-Sağ panelde **Örnek projeler → 4004 atölyesi aç**. Mevcut dünyan kalır,
+Sağ panelde **Dünyalar** sekmesinden **Örnek projeler → 4004 atölyesi aç**. Mevcut dünyan kalır,
 örnek yeni bir dünyada açılır. Bu, gerçek kapılardan oluşan bir aritmetik
 ve kontrol çekirdeğidir; tam bir MCS-4 sistemi değildir.
 [Nelerin çalıştığını ve örnek programı oku](4004.md).

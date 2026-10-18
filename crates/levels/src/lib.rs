@@ -57,19 +57,19 @@ impl Level {
     /// Chips from earlier levels, which may be used in this one.
     pub fn allowed_chips(&self) -> impl Iterator<Item = &'static Level> {
         let me = self.chip;
-        let optional = self.optional();
+        let section = self.section;
         levels()
             .iter()
             .copied()
             .take_while(move |l| l.chip != me)
             // Chips from an optional section only inside that section.
-            .filter(move |l| !l.optional() || optional)
+            .filter(move |l| !l.optional() || l.section == section)
     }
 
     /// Whether the level is a side path: it unlocks like the others, but
     /// later levels do not wait for it.
     pub fn optional(&self) -> bool {
-        self.section == mini::SECTION
+        self.section == mini::SECTION || self.section == memory::SECTION
     }
 
     /// The title in the interface language.
@@ -78,6 +78,15 @@ impl Level {
             Some((t, _)) if makine_lang::is_en() => t,
             _ => self.title,
         }
+    }
+
+    /// Both localized titles without changing the interface language. Useful
+    /// for finding a chip by either the lesson title or its stable chip id.
+    pub fn names(&self) -> [&'static str; 2] {
+        [
+            self.title,
+            en::level(self.chip).map_or(self.title, |(title, _)| title),
+        ]
     }
 
     /// The description in the interface language.
@@ -159,6 +168,7 @@ pub fn levels() -> &'static [&'static Level] {
     ALL.get_or_init(|| {
         BASIC
             .iter()
+            .chain(memory::LEVELS)
             .chain(mini::LEVELS)
             .chain(cpu::LEVELS)
             .chain(workshop::LEVELS)
@@ -172,6 +182,7 @@ pub mod depth;
 mod en;
 pub mod fast;
 pub mod hints;
+pub mod memory;
 pub mod mini;
 pub mod reference;
 mod reference_cpu;

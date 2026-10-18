@@ -116,13 +116,45 @@ The interface is in Turkish. The basics:
   **Ctrl+Z / Ctrl+Y** undo and redo.
 - **"Test et"** checks your chip. Once it passes, the chip becomes a part you can use
   in later levels.
+- **See the solution** opens an example tab alongside your named circuit tabs.
+  Drag the example tab down to move it to another
+  monitor. Closing that window docks the example as a tab; your circuit and undo
+  history stay intact.
+
+Levels and free chips open as browser-style circuit tabs. Drag tabs to reorder
+them; close tabs opened later with **×** or middle-click (the first tab stays open).
+Closing a tab never deletes its circuit. The tab strip scrolls when it is long; the
+active tab scrolls into view. **Ctrl+Tab / Ctrl+Shift+Tab** switch circuits and **Ctrl+W** closes
+a tab when no text field is focused. Each circuit retains its camera, selection,
+inputs, simulation and undo history across tab switches.
+
+Drag a circuit tab down to edit it in another window.
+**Dock as tab** returns it; **Drag to tab bar** also supports docking by dragging.
+Use the button on systems that restrict cross-window drag. Detached windows follow
+the main window's frame preference.
+
+**Find a part** searches chip ids and Turkish/English titles (`Counter32`,
+`program sayaci`, `program counter`). NAND and bus tools come first; completed
+chips are grouped by section. Search expands matching groups; **Esc** or
+**Clear search** removes the filter. Level permissions and free-chip cycle rules
+still apply; search never unlocks parts.
+
+Language, fast simulation, gate symbols, fullscreen and window frames now live in
+**Home → Settings** rather than a gear menu in the top bar.
+
+The right inspector separates subjects rather than stacking everything:
+- **Circuit / Learn / Compare:** the goal and live inputs; code/World activities,
+  explanations and hints; gate counts and the example solution. **Test**, Undo and
+  Redo stay pinned at the bottom.
+- In code view, **Task / Files / Inspect:** the active task, drafts/files and live
+  register/RAM values. Task checks remain accessible without scrolling.
 
 ## Wiki
 
 The **📖 Wiki** section on the left explains the idea behind every part: from
 the transistor to NAND, De Morgan to adders, flip-flops to the RISC-V CPU. Each
-level has a **"📖 Wiki'de oku"** link to its page, and pages link back to their
-levels. The pages are in Turkish.
+level's **Learn** section has a wiki link to its page, and pages link back to their
+levels. Pages follow the interface language.
 
 The pages are plain Markdown in `docs/wiki/` (readable on GitHub too) and are
 compiled into the executable, so it stays a single file. To add a page:
@@ -142,7 +174,12 @@ levels without a page. Diagrams are drawn by `docs/diagrams/make.py`
 2. **Arithmetic:** half/full adder, 8- and 32-bit adder, subtractor
 3. **Memory:** SR latch, D latch, D flip-flop, 1-bit register, 32-bit register,
    program counter, 8-word RAM
-   - **★ Mini processor (optional):** add/subtract, control and a small processor with an
+   - **Memory and ROM (optional):** address decoder, constant-built 4×8-bit ROM,
+     4×8-bit RAM, encoding a program in ROM and clocked instruction fetching.
+     Three Mini code tasks and three World experiments connect source → bytes →
+     circuits, with step tables for address/data widths, clock edges and byte order.
+     [Exercises and the bridge to programming](docs/wiki/en/rom.md).
+   - **Mini processor (optional):** add/subtract, control and a small processor with an
      8-bit accumulator; once it passes, you step through programs on your own circuit
 4. **ALU:** zero test, comparator, left/right shifter, ALU, register file
 5. **CPU:** instruction decoder, control unit, branch unit, load/store units,
@@ -165,6 +202,9 @@ Use the reference processor or your completed CPU circuit.
 - Twenty hands-on lessons: registers, bits, decisions, loops, arrays, strings,
   functions, console, pixels and memory copying. Behaviour tests use different
   inputs; reopen a failing case in the debugger.
+- Memory and ROM also has three Mini code tasks: edit a program, double different
+  RAM inputs and write a labelled countdown. They unlock in their own order;
+  checks run the example MiniCpu circuit and verify RAM write order and HLT.
 - Label-based Mini CPU and 4004 assemblers, ROM hex export and circuit loading.
 - Custom ISA design: word/opcode/operand definitions, JSON sharing, and ROM/RAM
   wiring to your free CPU chip. An encoding definition does not add an emulator.

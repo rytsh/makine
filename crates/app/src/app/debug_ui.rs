@@ -34,6 +34,7 @@ pub(super) struct Debug {
     pub small_built: Option<(u64, String, makine_rv::smallasm::Program)>,
     pub mini_execution: Option<super::small_ui::MiniExecution>,
     pub mini_source: Option<String>,
+    pub mini_feedback: Option<(u64, String, Result<String, String>)>,
     pub last_case: Option<(u64, String, crate::lessons::Case)>,
     pub help_query: String,
     /// Memory viewer address, as typed.

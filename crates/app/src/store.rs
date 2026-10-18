@@ -184,4 +184,33 @@ mod tests {
         assert!(p.unlocked(1));
         assert!(!p.unlocked(2));
     }
+
+    #[test]
+    fn memory_side_path_unlocks_after_ram_without_blocking_existing_paths() {
+        let mut p = Progress::default();
+        let first = makine_levels::find("AddressDecode2").unwrap();
+        assert!(!p.unlocked(first.index()));
+        for l in levels().iter().take_while(|l| l.chip != first.chip) {
+            p.solutions.insert(l.chip.into(), reference(l.chip));
+        }
+        assert!(p.unlocked(first.index()));
+        assert!(!p.unlocked(makine_levels::find("Rom4x8").unwrap().index()));
+        assert!(p.unlocked(makine_levels::find("AddSub8").unwrap().index()));
+        assert!(p.unlocked(makine_levels::find("Zero32").unwrap().index()));
+        p.solutions.insert(first.chip.into(), reference(first.chip));
+        assert!(p.unlocked(makine_levels::find("Rom4x8").unwrap().index()));
+        // An existing profile with the old path completed stays fully unlocked.
+        for l in levels()
+            .iter()
+            .filter(|l| l.section != makine_levels::memory::SECTION)
+        {
+            p.solutions.insert(l.chip.into(), reference(l.chip));
+        }
+        for l in levels()
+            .iter()
+            .filter(|l| l.section != makine_levels::memory::SECTION)
+        {
+            assert!(p.unlocked(l.index()), "{}", l.chip);
+        }
+    }
 }

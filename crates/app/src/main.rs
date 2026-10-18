@@ -11,6 +11,7 @@ mod instruction_help;
 mod isa_lessons;
 mod lessons;
 mod lessons_extended;
+mod mini_lessons;
 mod profiles;
 mod programming;
 mod sandbox;
