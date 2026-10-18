@@ -440,6 +440,42 @@ pub fn hints(chip: &str) -> Vec<&'static str> {
                 "m1 = MUX(q, q+1, inc); m2 = MUX(m1, d, load); m3 = MUX(m2, 0, reset); the register's d is m3, its load Constant 1. Fit the 32-bit adder to 12 bits with Join and Split.",
             ],
         ),
+        "AddSub8" => (
+            &[
+                "a - b = a + (DEĞİL b) + 1. sub'a göre b'yi ters çevir ve eldeye 1 ver.",
+                "8 bitlik bir XOR (Tekrar 8) ve bir 8-bit toplayıcı.",
+                "b ve sub → XOR×8 → toplayıcının b'si; a → a'sı; sub → c'si.",
+            ],
+            &[
+                "a - b = a + (NOT b) + 1. Invert b depending on sub, and give the carry a 1.",
+                "An 8-bit XOR (Repeat 8) and an 8-bit adder.",
+                "b and sub → XOR×8 → the adder's b; a → its a; sub → its c.",
+            ],
+        ),
+        "MiniControl" => (
+            &[
+                "Önce op'un hangi komut olduğunu bul: her komut için \"op şu sayı mı?\" diye soran bir kapı. Sonra çıkışlar bunların VEYA'sı.",
+                "Bitlere ayırmak için Böl, her bitin tersi için NOT, karşılaştırmalar için AND'ler, birleştirmek için OR'lar.",
+                "op = 5 için: bit0 VE (DEĞİL bit1) VE bit2 VE (DEĞİL bit3). load = LDI VEYA LD VEYA ADD VEYA SUB; jump = JMP VEYA (JZ VE zero).",
+            ],
+            &[
+                "First find which instruction op is: one gate per instruction asking \"is op this number?\". Then the outputs are ORs of those.",
+                "Split for the bits, NOT for each bit's opposite, ANDs for the comparisons, ORs to combine.",
+                "For op = 5: bit0 AND (NOT bit1) AND bit2 AND (NOT bit3). load = LDI OR LD OR ADD OR SUB; jump = JMP OR (JZ AND zero).",
+            ],
+        ),
+        "MiniCpu" => (
+            &[
+                "İki kayıt yeter: 8 bitlik acc ve 4 bitlik pc. Her kaydın önünde \"sıradaki değer ne?\" diye seçen MUX'lar olsun.",
+                "Bit×8 ve Bit×4, Mini Kontrol, Topla/Çıkar, +1 için 8-bit toplayıcı, MUX×8 ve MUX×4'ler, zero için OR'lar ve NOT.",
+                "instr'ı 4,4 olarak böl (alt: arg, üst: op). acc'nin d'si: rdata, Topla/Çıkar(acc, rdata) ya da arg; reset'te 0. pc'nin d'si: pc+1 ya da arg (jump); load'u DEĞİL hold. addr = arg.",
+            ],
+            &[
+                "Two registers are enough: an 8-bit acc and a 4-bit pc. In front of each, MUXes that choose \"what is the next value?\".",
+                "Bit×8 and Bit×4, Mini Control, Add/Subtract, an 8-bit adder for +1, MUX×8 and MUX×4s, ORs and a NOT for zero.",
+                "Split instr as 4,4 (low: arg, high: op). acc's d: rdata, AddSub(acc, rdata) or arg; 0 on reset. pc's d: pc+1 or arg (jump); its load is NOT hold. addr = arg.",
+            ],
+        ),
         _ => (&[], &[]),
     };
     pick(tr, en).to_vec()

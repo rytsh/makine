@@ -136,6 +136,8 @@ fotoğraflar yapay zekâ ile üretilmiştir.
 2. **Aritmetik:** yarım/tam toplayıcı, 8 ve 32-bit toplayıcı, çıkarıcı
 3. **Hafıza:** SR mandal, D mandal, D flip-flop, 1-bit kayıt, 32-bit register,
    program sayacı, 8 kelimelik RAM
+   - **★ Mini işlemci (isteğe bağlı):** topla/çıkar, kontrol ve 8-bit akümülatörlü küçük
+     bir işlemci; geçince programları kendi devrende adım adım çalıştırırsın
 4. **ALU:** sıfır testi, karşılaştırıcı, sola/sağa kaydırıcı, ALU, register dosyası
 5. **İşlemci:** komut çözücü, kontrol birimi, dallanma, yükleme/saklama birimleri,
     çarpma/bölme, ve hepsini birleştiren **RV32IM işlemci**

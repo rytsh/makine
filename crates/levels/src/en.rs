@@ -283,6 +283,31 @@ pub(crate) fn level(chip: &str) -> Option<(&'static str, &'static str)> {
             12 bits select 4096 addresses. A branch loads a different address instead of \
             incrementing the counter. The address after 4095 is 0.",
         ),
+        "AddSub8" => (
+            "Add / Subtract",
+            "Give a + b when sub = 0 and a - b when sub = 1 (8 bits; what overflows is dropped).\n\n\
+             Subtracting needs no separate circuit: a - b = a + (NOT b) + 1. XOR b with sub \
+             and it is inverted while sub = 1; the adder's carry input gives the +1.",
+        ),
+        "MiniControl" => (
+            "Mini Control",
+            "The mini processor's boss: look at the instruction's op (and whether acc is 0) \
+             and tell each part what to do.\n\n\
+             op 1 LDI: load, imm. op 2 LD: load. op 3 ST: we. op 4 ADD: load, alu. \
+             op 5 SUB: load, alu, sub. op 6 JMP: jump. op 7 JZ: jump if zero = 1. \
+             op 15 HLT: hold. Others: all 0.",
+        ),
+        "MiniCpu" => (
+            "Mini Processor",
+            "Put it all together: a small processor with an 8-bit accumulator. One \
+             instruction per clock tick.\n\n\
+             An instruction is one byte: the top 4 bits are op, the low 4 bits arg. addr is \
+             always arg; rdata is the byte in RAM at that address. On the rising edge acc and \
+             pc update; if we = 1, acc is written to RAM. While reset = 1, the edge sets pc \
+             and acc to 0.\n\n\
+             The test runs three programs on your processor (countdown, multiply, Fibonacci) \
+             and compares every step with a reference.",
+        ),
         _ => return None,
     })
 }
@@ -296,6 +321,7 @@ pub(crate) fn section(tr: &str) -> Option<&'static str> {
         "4. ALU" => "4. ALU",
         "5. İşlemci" => "5. Processor",
         "6. İşlemci atölyesi" => "6. Processor workshop",
+        "★ Mini işlemci" => "★ Mini processor",
         _ => return None,
     })
 }

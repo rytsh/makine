@@ -137,6 +137,8 @@ levels without a page. Diagrams are drawn by `docs/diagrams/make.py`
 2. **Arithmetic:** half/full adder, 8- and 32-bit adder, subtractor
 3. **Memory:** SR latch, D latch, D flip-flop, 1-bit register, 32-bit register,
    program counter, 8-word RAM
+   - **★ Mini processor (optional):** add/subtract, control and a small processor with an
+     8-bit accumulator; once it passes, you step through programs on your own circuit
 4. **ALU:** zero test, comparator, left/right shifter, ALU, register file
 5. **CPU:** instruction decoder, control unit, branch unit, load/store units,
    multiply/divide, and the **RV32IM CPU** that ties them together

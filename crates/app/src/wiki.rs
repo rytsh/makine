@@ -94,6 +94,7 @@ pub static PAGES: &[Page] = pages![
     "cikarma",
     "hafiza",
     "register",
+    "mini",
     "alu",
     "verimlilik",
     "riscv",

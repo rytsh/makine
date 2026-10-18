@@ -175,7 +175,8 @@ pub fn reference(chip: &str) -> ChipDef {
             b.output("out", q);
         }
         other => {
-            return crate::reference_cpu::reference(other)
+            return crate::mini::reference(other)
+                .or_else(|| crate::reference_cpu::reference(other))
                 .unwrap_or_else(|| panic!("no reference solution for {other}"))
         }
     }

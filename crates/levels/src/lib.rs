@@ -57,7 +57,19 @@ impl Level {
     /// Chips from earlier levels, which may be used in this one.
     pub fn allowed_chips(&self) -> impl Iterator<Item = &'static Level> {
         let me = self.chip;
-        levels().iter().copied().take_while(move |l| l.chip != me)
+        let optional = self.optional();
+        levels()
+            .iter()
+            .copied()
+            .take_while(move |l| l.chip != me)
+            // Chips from an optional section only inside that section.
+            .filter(move |l| !l.optional() || optional)
+    }
+
+    /// Whether the level is a side path: it unlocks like the others, but
+    /// later levels do not wait for it.
+    pub fn optional(&self) -> bool {
+        self.section == mini::SECTION
     }
 
     /// The title in the interface language.
@@ -147,6 +159,7 @@ pub fn levels() -> &'static [&'static Level] {
     ALL.get_or_init(|| {
         BASIC
             .iter()
+            .chain(mini::LEVELS)
             .chain(cpu::LEVELS)
             .chain(workshop::LEVELS)
             .collect()
@@ -159,6 +172,7 @@ pub mod depth;
 mod en;
 pub mod fast;
 pub mod hints;
+pub mod mini;
 pub mod reference;
 mod reference_cpu;
 pub mod workshop;

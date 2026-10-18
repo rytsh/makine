@@ -18,6 +18,7 @@ mod chrome;
 mod computer_ui;
 mod debug_ui;
 mod home_ui;
+mod mini_ui;
 mod sandbox_ui;
 mod solution_ui;
 #[cfg(test)]
@@ -115,6 +116,8 @@ pub struct App {
     profiles: Option<crate::profiles::Profiles>,
     home: home_ui::Home,
     debug: debug_ui::Debug,
+    /// The mini processor running a program, once solved.
+    mini: Option<mini_ui::MiniRun>,
     /// Undo and redo for the design being edited, and the design as it was
     /// after the last change (what an undo goes back to).
     history: crate::design::History,
@@ -190,6 +193,7 @@ impl App {
             profiles: None,
             home: Default::default(),
             debug: Default::default(),
+            mini: None,
             history: Default::default(),
             snapshot: None,
         };
@@ -217,6 +221,7 @@ impl App {
     fn open_target(&mut self, target: Target) {
         self.target = target;
         self.solution = None;
+        self.mini = None;
         self.reveal = Default::default();
         self.canvas = Canvas::new();
         self.canvas.symbols = self.progress.symbols;
@@ -616,6 +621,7 @@ impl App {
         }
         ui.add_space(6.0);
         self.result_view(ui);
+        self.mini_view(ui);
         if !self.progress.solved(level.chip) {
             self.hints_view(ui);
         }

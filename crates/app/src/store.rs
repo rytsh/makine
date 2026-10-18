@@ -109,9 +109,14 @@ impl Progress {
     }
 
     /// Levels are unlocked one at a time: a level is open once every level
-    /// before it is solved.
+    /// before it is solved. Optional levels do not hold back the ones after
+    /// their section (but do within it).
     pub fn unlocked(&self, index: usize) -> bool {
-        levels()[..index].iter().all(|l| self.solved(l.chip))
+        let me = levels()[index];
+        levels()[..index]
+            .iter()
+            .filter(|l| !l.optional() || l.section == me.section)
+            .all(|l| self.solved(l.chip))
     }
 
     pub fn load(path: &Path) -> io::Result<Self> {
