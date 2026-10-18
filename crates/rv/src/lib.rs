@@ -5,5 +5,7 @@ pub mod asm;
 pub mod disasm;
 pub mod elf;
 pub mod emu;
+pub mod explain;
 pub mod isa;
 pub mod machine;
+pub mod smallasm;

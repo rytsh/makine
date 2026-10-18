@@ -57,6 +57,16 @@ impl Program {
 }
 
 pub fn assemble(src: &str) -> Result<Program, AsmError> {
+    if src.len() > 1024 * 1024 {
+        return Err(err(
+            1,
+            tr!(
+                "Kaynak en çok 1 MB olabilir.",
+                "Source must not exceed 1 MB."
+            )
+            .into(),
+        ));
+    }
     let lines: Vec<Line> = src
         .lines()
         .enumerate()
@@ -89,6 +99,16 @@ pub fn assemble(src: &str) -> Result<Program, AsmError> {
                 continue;
             }
             pc = advance(pc, name, args, l.n, &symbols)?;
+            if pc > 16 * 1024 * 1024 {
+                return Err(err(
+                    l.n,
+                    tr!(
+                        "Program 16 MB belleğe sığmalı.",
+                        "The program must fit in 16 MB of memory."
+                    )
+                    .into(),
+                ));
+            }
         }
     }
 
@@ -111,7 +131,9 @@ pub fn assemble(src: &str) -> Result<Program, AsmError> {
         };
         let bytes = a.emit(name)?;
         if !name.starts_with('.') {
-            out.lines.insert(pc, l.n);
+            for offset in (0..bytes.len()).step_by(4) {
+                out.lines.insert(pc + offset as u32, l.n);
+            }
         }
         let next = advance(pc, name, args, l.n, &symbols)?;
         let start = pc as usize;
@@ -213,6 +235,8 @@ fn advance(
     sym: &HashMap<String, u32>,
 ) -> Result<u32, AsmError> {
     let count = |per: u32| per * args.len() as u32;
+    let overflow = || err(n, tr!("Adres taştı.", "Address overflow.").into());
+    let add = |amount: u32| pc.checked_add(amount).ok_or_else(overflow);
     Ok(match name {
         ".text" | ".data" | ".globl" | ".global" | ".section" | ".type" | ".size" => pc,
         ".org" => {
@@ -226,26 +250,30 @@ fn advance(
             target
         }
         ".align" | ".p2align" => {
-            let a = 1u32 << eval(one(args, n)?, sym, n)?;
-            pc.div_ceil(a) * a
+            let shift = eval(one(args, n)?, sym, n)?;
+            if shift > 24 {
+                return Err(overflow());
+            }
+            let a = 1u32 << shift;
+            pc.div_ceil(a).checked_mul(a).ok_or_else(overflow)?
         }
         ".balign" => {
             let a = eval(one(args, n)?, sym, n)?.max(1);
-            pc.div_ceil(a) * a
+            pc.div_ceil(a).checked_mul(a).ok_or_else(overflow)?
         }
-        ".word" => pc + count(4),
-        ".half" => pc + count(2),
-        ".byte" => pc + count(1),
+        ".word" => add(count(4))?,
+        ".half" => add(count(2))?,
+        ".byte" => add(count(1))?,
         ".ascii" | ".asciz" | ".string" => {
             let s = parse_string(one(args, n)?, n)?;
-            pc + s.len() as u32 + (name != ".ascii") as u32
+            add(s.len() as u32 + (name != ".ascii") as u32)?
         }
-        ".space" | ".zero" => pc + eval(one(args, n)?, sym, n)?,
+        ".space" | ".zero" => add(eval(one(args, n)?, sym, n)?)?,
         "li" => {
             let [_, v] = two(args, n)?;
             match parse_num(v) {
-                Some(v) if fits12(v) => pc + 4,
-                Some(_) => pc + 8,
+                Some(v) if fits12(v) => add(4)?,
+                Some(_) => add(8)?,
                 None => {
                     return Err(err(
                         n,
@@ -258,14 +286,14 @@ fn advance(
                 }
             }
         }
-        "la" | "call" | "tail" => pc + 8,
+        "la" | "call" | "tail" => add(8)?,
         _ if name.starts_with('.') => {
             return Err(err(
                 n,
                 trf!("bilinmeyen direktif {name}", "unknown directive {name}"),
             ))
         }
-        _ => pc + 4,
+        _ => add(4)?,
     })
 }
 
@@ -330,10 +358,14 @@ fn parse_num(s: &str) -> Option<u32> {
 /// A number, a symbol, or `sym+off` / `sym-off`.
 fn eval(s: &str, sym: &HashMap<String, u32>, n: usize) -> Result<u32, AsmError> {
     let s = s.trim();
+    if s.is_empty() {
+        return Err(err(n, tr!("Değer eksik.", "Missing value.").into()));
+    }
     if let Some(v) = parse_num(s) {
         return Ok(v);
     }
-    if let Some(i) = s[1..].find(['+', '-']).map(|i| i + 1) {
+    let first = s.chars().next().map_or(0, char::len_utf8);
+    if let Some(i) = s[first..].find(['+', '-']).map(|i| i + first) {
         let (l, r) = s.split_at(i);
         let lv = eval(l, sym, n)?;
         let rv = eval(&r[1..], sym, n)?;
@@ -530,7 +562,7 @@ impl Asm<'_> {
                     .collect();
             }
             ".ascii" | ".asciz" | ".string" => {
-                let mut s = parse_string(&a[0], self.n)?;
+                let mut s = parse_string(one(a, self.n)?, self.n)?;
                 if name != ".ascii" {
                     s.push(0);
                 }
@@ -855,5 +887,26 @@ mod tests {
         assert!(e.message.contains("nowhere"));
         let e = assemble("x: nop\nx: nop").unwrap_err();
         assert_eq!(e.line, 2);
+    }
+
+    #[test]
+    fn invalid_drafts_cannot_overflow_addresses_or_allocate_unbounded_images() {
+        for s in [
+            ".align 32",
+            ".org 0xffffffff",
+            ".space 0xffffffff",
+            ".ascii",
+            ".asciz",
+            "addi a0,a1,",
+            ".word ,",
+            "li a0,é",
+            ".equ x,",
+        ] {
+            assert!(assemble(s).is_err(), "{s}");
+        }
+        let p = assemble("li a0,0x12345678\nla a1,end\nend: ebreak").unwrap();
+        assert_eq!((p.lines[&0], p.lines[&4]), (1, 1));
+        assert_eq!((p.lines[&8], p.lines[&12]), (2, 2));
+        assert_eq!(p.lines[&16], 3);
     }
 }

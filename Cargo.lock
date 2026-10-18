@@ -2119,6 +2119,7 @@ name = "makine-rv"
 version = "0.1.0"
 dependencies = [
  "makine-lang",
+ "serde",
 ]
 
 [[package]]
