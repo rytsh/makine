@@ -36,6 +36,10 @@ dev: ## Run the app (debug build, faster to compile)
 build: ## Build the app for this computer -> target/release/makine
 	$(CARGO) build --release -p makine
 
+.PHONY: relay
+relay: ## Build the relay server for playing over the internet -> target/release/makine-relay
+	$(CARGO) build --release -p makine-net --bin makine-relay
+
 .PHONY: windows
 windows: ## Build makine.exe for Windows (needs cargo-xwin)
 	@command -v cargo-xwin >/dev/null || { \

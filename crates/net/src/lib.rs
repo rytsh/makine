@@ -22,6 +22,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+pub mod relay;
+
 use makine_pack::Package;
 use makine_world::{Edit, Pos, World};
 use serde::{Deserialize, Serialize};
@@ -178,9 +180,36 @@ struct Conn {
     stream: TcpStream,
 }
 
+/// A new connection: give it an id and start reading it.
+fn admit(tx: &Sender<Incoming>, next: &std::sync::atomic::AtomicU32, stream: TcpStream) -> bool {
+    let id = next.fetch_add(1, Ordering::Relaxed);
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_nodelay(true);
+    let Ok(read) = stream.try_clone() else {
+        return true;
+    };
+    if tx.send(Incoming::Connected(id, stream)).is_err() {
+        return false;
+    }
+    let tx = tx.clone();
+    reader::<ToHost>(read, move |m| {
+        let msg = match m {
+            Some(m) => Incoming::Message(id, m),
+            None => Incoming::Closed(id),
+        };
+        tx.send(msg).is_ok()
+    });
+    true
+}
+
 /// A hosted session.
 pub struct Host {
     port: u16,
+    /// The room code, when also open on a relay.
+    room: Option<String>,
+    relay_control: Option<TcpStream>,
+    tx: Sender<Incoming>,
+    next: Arc<std::sync::atomic::AtomicU32>,
     stop: Arc<AtomicBool>,
     incoming: Receiver<Incoming>,
     /// Connected but not yet said hello.
@@ -197,30 +226,16 @@ impl Host {
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let (tx, incoming) = channel();
+        let next = Arc::new(std::sync::atomic::AtomicU32::new(HOST_ID + 1));
         let s = stop.clone();
+        let (t, n) = (tx.clone(), next.clone());
         thread::spawn(move || {
-            let mut next = HOST_ID + 1;
             while !s.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
-                        let id = next;
-                        next += 1;
-                        let _ = stream.set_nonblocking(false);
-                        let _ = stream.set_nodelay(true);
-                        let Ok(read) = stream.try_clone() else {
-                            continue;
-                        };
-                        if tx.send(Incoming::Connected(id, stream)).is_err() {
+                        if !admit(&t, &n, stream) {
                             break;
                         }
-                        let tx = tx.clone();
-                        reader::<ToHost>(read, move |m| {
-                            let msg = match m {
-                                Some(m) => Incoming::Message(id, m),
-                                None => Incoming::Closed(id),
-                            };
-                            tx.send(msg).is_ok()
-                        });
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(30));
@@ -239,6 +254,10 @@ impl Host {
         );
         Ok(Host {
             port,
+            room: None,
+            relay_control: None,
+            tx,
+            next,
             stop,
             incoming,
             pending: BTreeMap::new(),
@@ -249,6 +268,32 @@ impl Host {
 
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Also take players over the internet, through the relay at `relay`.
+    /// Returns the room code to give them.
+    pub fn open_room(&mut self, relay: &str) -> io::Result<String> {
+        let (code, control) = relay::open_room(relay)?;
+        let (tx, next, stop) = (self.tx.clone(), self.next.clone(), self.stop.clone());
+        let (relay, room) = (relay.to_string(), code.clone());
+        self.relay_control = Some(control.get_ref().try_clone()?);
+        thread::spawn(move || {
+            relay::guests(control, |id| {
+                if stop.load(Ordering::Relaxed) {
+                    return false;
+                }
+                match relay::accept(&relay, &room, id) {
+                    Ok(s) => admit(&tx, &next, s),
+                    Err(_) => true,
+                }
+            });
+        });
+        self.room = Some(code.clone());
+        Ok(code)
+    }
+
+    pub fn room(&self) -> Option<&str> {
+        self.room.as_deref()
     }
 
     pub fn players(&self) -> Vec<Player> {
@@ -376,6 +421,9 @@ impl Host {
 impl Drop for Host {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+        if let Some(c) = &self.relay_control {
+            let _ = c.shutdown(Shutdown::Both);
+        }
         for c in self.pending.values().chain(self.joined.values()) {
             let _ = c.stream.shutdown(Shutdown::Both);
         }
@@ -419,6 +467,16 @@ impl Client {
             )
         })?;
         let stream = TcpStream::connect_timeout(&target, Duration::from_secs(3))?;
+        Self::over(stream, name)
+    }
+
+    /// Join room `code` on the relay at `relay`.
+    pub fn join_room(relay: &str, code: &str, name: &str) -> io::Result<Client> {
+        Self::over(relay::join(relay, code)?, name)
+    }
+
+    /// Say hello over a connected stream.
+    fn over(stream: TcpStream, name: &str) -> io::Result<Client> {
         stream.set_nodelay(true)?;
         let tx = writer(stream.try_clone()?);
         let (mtx, rx) = channel();
@@ -549,5 +607,73 @@ mod tests {
         assert_eq!(clean_name("  ", 3), "oyuncu 3");
         assert_eq!(clean_name("ali\n", 1), "ali");
         assert_eq!(clean_name(&"x".repeat(50), 1).len(), 24);
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+    use makine_world::{Kind, Placed};
+    use std::time::Instant;
+
+    fn wait<T>(mut f: impl FnMut() -> Option<T>) -> T {
+        let start = Instant::now();
+        loop {
+            if let Some(v) = f() {
+                return v;
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "timed out");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// A host opens a room on a relay; a guest joins with the code and the
+    /// two share a world as on a local network.
+    #[test]
+    fn worlds_are_shared_through_a_relay() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let relay = listener.local_addr().unwrap().to_string();
+        thread::spawn(move || relay::run(listener));
+
+        let mut host = Host::start("ev", 0).unwrap();
+        let code = host.open_room(&relay).unwrap();
+        assert_eq!(code.len(), 6);
+        let mut world = World::new("ortak");
+        world.apply(Edit::Part {
+            id: 1,
+            part: Some(Placed {
+                kind: Kind::Lamp,
+                pos: Pos::new(0.0, 0.0),
+            }),
+        });
+
+        let mut guest = Client::join_room(&relay, &code.to_uppercase(), "misafir").unwrap();
+        let got = wait(|| {
+            host.poll(&mut world, |_| vec![]);
+            guest.poll().into_iter().find_map(|e| match e {
+                Event::Welcome { world, .. } => Some(world),
+                _ => None,
+            })
+        });
+        assert_eq!(got.len(), 1);
+        assert_eq!(host.players().len(), 2);
+
+        // An edit from the guest reaches the host's world.
+        guest.send_edit(
+            Edit::Part {
+                id: 2,
+                part: Some(Placed {
+                    kind: Kind::Lamp,
+                    pos: Pos::new(50.0, 0.0),
+                }),
+            },
+            vec![],
+        );
+        wait(|| {
+            host.poll(&mut world, |_| vec![]);
+            (world.len() == 2).then_some(())
+        });
+
+        assert!(Client::join_room(&relay, "yokyok", "x").is_err());
     }
 }

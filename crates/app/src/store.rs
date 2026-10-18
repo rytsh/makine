@@ -46,6 +46,9 @@ pub struct Progress {
     /// The world open last.
     #[serde(default)]
     pub last_world: Option<String>,
+    /// The relay server for playing over the internet.
+    #[serde(default)]
+    pub relay: String,
     /// The first-run guide was closed.
     #[serde(default)]
     pub guide_done: bool,
@@ -88,6 +91,7 @@ impl Default for Progress {
             last_world: None,
             hints: BTreeMap::new(),
             guide_done: false,
+            relay: String::new(),
         }
     }
 }

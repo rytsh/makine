@@ -8,8 +8,11 @@ The **World** is a live circuit workbench with nested, collapsible modules,
 named buses, manual wire waypoints, alignment, a navigable overview map and
 a per-simulation-step logic analyser (16 probes, 256 samples per probe).
 Modules preserve the actual gates, wiring and layout; closing a module does
-not replace it with an emulator. Modules and routes are shared over LAN;
-open/closed views and probes are local to each player.
+not replace it with an emulator. Modules and routes are shared over the local
+network or the internet; open/closed views and probes are local to each player.
+Over the internet you need a relay: run `makine-relay` (built with `make relay`)
+on a machine everyone can reach; the one sharing gets a room code, the other
+joins with it.
 
 **World → Örnek projeler → 4004 atölyesi aç** creates a separate example
 world with a gate-built 4-bit arithmetic/control core and an editable 4 KiB

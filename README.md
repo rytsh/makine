@@ -99,7 +99,10 @@ tıklanabilir küçük harita büyük şemaları düzenlemeyi kolaylaştırır.
 Telde sağ tık → **Sinyali izle**: son 256 simülasyon adımını incele,
 **Değişince dur** ile bir değişimi yakala. **Saat çevrimi** ilk saatin sonraki
 yükselen kenarına ilerler. Bunlar kaydedilen devreyi değiştirmeyen yerel
-inceleme araçlarıdır. LAN üzerinden modüller ve teller birlikte düzenlenebilir.
+inceleme araçlarıdır. Modüller ve teller yerel ağda ya da internette birlikte
+düzenlenebilir. İnternet için bir aracı sunucu gerekir: `make relay` ile derlenen
+`makine-relay`'i herkesin ulaşabildiği bir makinede çalıştır; paylaşan bir oda kodu
+alır, öteki o kodla katılır.
 
 **Örnek projeler → 4004 atölyesi aç** kapılardan kurulmuş bir 4-bit
 aritmetik/kontrol çekirdeği açar. Akümülatör, taşıma, 16 yazmaç, 12-bit PC,

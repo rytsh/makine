@@ -172,9 +172,98 @@ impl App {
                             }
                         }
                     });
+                    ui.separator();
+                    ui.label(
+                        RichText::new(tr!(
+                            "İnternet üzerinden: ikiniz de aynı sunucuyu yazın. Paylaşımı açan bir \
+                             oda kodu alır, öteki o kodla katılır. Sunucu için: makine-relay.",
+                            "Over the internet: both of you enter the same server. The one who \
+                             shares gets a room code, the other joins with it. For a server: \
+                             makine-relay."
+                        ))
+                        .weak()
+                        .small(),
+                    );
+                    ui.horizontal(|ui| {
+                        let l = ui.label(tr!("Sunucu", "Server")).id;
+                        if ui
+                            .add(
+                                egui::TextEdit::singleline(&mut self.progress.relay)
+                                    .hint_text("relay.ornek.com")
+                                    .desired_width(150.0),
+                            )
+                            .labelled_by(l)
+                            .changed()
+                        {
+                            self.save_soon();
+                        }
+                    });
+                    let relay = self.progress.relay.trim().to_string();
+                    ui.horizontal(|ui| {
+                        let l = ui.label(tr!("Oda kodu", "Room code")).id;
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.net_room)
+                                .hint_text("k7qx2m")
+                                .desired_width(80.0),
+                        )
+                        .labelled_by(l);
+                        if ui
+                            .add_enabled(
+                                !relay.is_empty() && !self.net_room.trim().is_empty(),
+                                egui::Button::new(tr!("Katıl", "Join")),
+                            )
+                            .clicked()
+                        {
+                            self.store_world();
+                            match crate::session::Session::join_room(
+                                &relay,
+                                &self.net_room,
+                                &self.net_name,
+                            ) {
+                                Ok(s) => self.session = Some(s),
+                                Err(e) => {
+                                    self.status = Some(trf!(
+                                        "Katılınamadı: {e}",
+                                        "Could not join: {e}"
+                                    ))
+                                }
+                            }
+                        }
+                    });
+                    if ui
+                        .add_enabled(
+                            !relay.is_empty(),
+                            egui::Button::new(tr!(
+                                "🌐 İnternette paylaş",
+                                "🌐 Share on the internet"
+                            )),
+                        )
+                        .clicked()
+                    {
+                        let started = crate::session::Session::host(&self.net_name, 0)
+                            .and_then(|mut s| s.open_room(&relay).map(|_| s));
+                        match started {
+                            Ok(s) => self.session = Some(s),
+                            Err(e) => {
+                                self.status = Some(trf!(
+                                    "Sunucuya bağlanılamadı: {e}",
+                                    "Could not reach the server: {e}"
+                                ))
+                            }
+                        }
+                    }
                     return;
                 };
                 ui.label(RichText::new(&s.status).small());
+                if let Some(code) = s.room() {
+                    let code = code.to_string();
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&code).monospace().size(20.0).strong());
+                        if ui.small_button(tr!("📋 Kopyala", "📋 Copy")).clicked() {
+                            ui.ctx().copy_text(code.clone());
+                        }
+                    });
+                }
                 let me = s.my_id();
                 for p in s.players() {
                     let tag = match (p.id == makine_net::HOST_ID, Some(p.id) == me) {

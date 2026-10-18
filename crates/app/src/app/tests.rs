@@ -995,6 +995,42 @@ mod sandbox_tests {
         );
     }
 
+    /// The same over a relay, as over the internet: a room code instead of
+    /// an address, and the guest's world arrives.
+    #[test]
+    fn build_together_over_a_relay() {
+        use makine_world::Kind;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let relay = listener.local_addr().unwrap().to_string();
+        std::thread::spawn(move || makine_net::relay::run(listener));
+        let host = app_with_levels();
+        let guest = app_with_levels();
+        for a in [&host, &guest] {
+            a.borrow_mut().open_world();
+        }
+        let code = {
+            let mut h = host.borrow_mut();
+            h.world
+                .as_mut()
+                .unwrap()
+                .add(Kind::Lamp, egui::pos2(0.0, 0.0));
+            let mut s = crate::session::Session::host("ev", 0).unwrap();
+            let code = s.open_room(&relay).unwrap();
+            h.session = Some(s);
+            code
+        };
+        guest.borrow_mut().session =
+            Some(crate::session::Session::join_room(&relay, &code, "misafir").unwrap());
+        let t = std::time::Instant::now();
+        while !guest.borrow().session.as_ref().unwrap().ready {
+            host.borrow_mut().net_tick();
+            guest.borrow_mut().net_tick();
+            assert!(t.elapsed() < std::time::Duration::from_secs(5), "timed out");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(guest.borrow().world.as_ref().unwrap().world.len(), 1);
+    }
+
     /// World edits reach the disk a moment later, once for many edits,
     /// and right away when the app closes.
     #[test]

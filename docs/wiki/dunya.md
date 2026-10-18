@@ -92,3 +92,19 @@ başka bir dünyada tek bir parça olarak da kullanabilirsin.
 Herkes aynı tahtada çalışır ve birbirinin fare imlecini görür. Modül adları,
 üyeleri ve tel yolları paylaşılır; bir modülü açık mı kapalı mı gördüğün
 ve hangi sinyalleri izlediğin yalnızca senin görünümüne aittir.
+
+### İnternet üzerinden
+
+Farklı evlerdeyseniz bir **aracı sunucu** gerekir: ikiniz de ona bağlanırsınız,
+böylece kimsenin modeminde port açması gerekmez. Sunucu, makine ile gelen
+küçük `makine-relay` programıdır; herkesin ulaşabildiği bir bilgisayarda
+(örneğin ucuz bir bulut sunucusunda) çalıştır:
+
+```
+makine-relay              # 7879 numaralı portu dinler
+```
+
+Sonra ikiniz de **Birlikte kur → Sunucu** kutusuna aynı adresi yazın. Paylaşan
+**🌐 İnternette paylaş**'a basar ve altı harfli bir **oda kodu** alır; öteki
+o kodu yazıp **Katıl**'a basar. Sunucu yalnızca baytları taşır; dünyaları
+okumaz ve saklamaz.

@@ -93,3 +93,19 @@ the same network. Everyone works on the same board and sees each other's
 mouse pointers. Module names, members, and wire paths are shared; whether you
 see a module open or closed, and which signals you are watching, belong only
 to your own view.
+
+### Over the internet
+
+If you are in different homes, you need a **relay server**: both of you connect
+to it, so nobody has to open a port on their router. The server is the small
+`makine-relay` program that comes with makine; run it on a computer everyone
+can reach (for example a cheap cloud server):
+
+```
+makine-relay              # listens on port 7879
+```
+
+Then both of you type the same address into **Build together → Server**. The
+one sharing presses **🌐 Share on the internet** and gets a six-letter **room
+code**; the other types the code and presses **Join**. The server only passes
+bytes along; it does not read or keep the worlds.

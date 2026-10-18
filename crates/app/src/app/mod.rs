@@ -108,6 +108,8 @@ pub struct App {
     session: Option<crate::session::Session>,
     net_name: String,
     net_addr: String,
+    /// A room code to join over the internet.
+    net_room: String,
     /// How the player's design compares with the example solution.
     cost: Option<makine_levels::cost::Cost>,
     delay: Option<makine_levels::depth::Delay>,
@@ -189,6 +191,7 @@ impl App {
             session: None,
             net_name: crate::session::default_name(),
             net_addr: String::new(),
+            net_room: String::new(),
             cost: None,
             delay: None,
             solution: None,

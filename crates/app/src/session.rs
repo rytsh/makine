@@ -119,6 +119,38 @@ impl Session {
         })
     }
 
+    /// Open the hosted session on an internet relay too.
+    pub fn open_room(&mut self, relay: &str) -> std::io::Result<String> {
+        let Link::Host(h) = &mut self.link else {
+            return Err(std::io::Error::other("not hosting"));
+        };
+        let code = h.open_room(relay)?;
+        self.status = trf!(
+            "İnternette de açık. Oda kodu: {code} (sunucu: {relay})",
+            "Also open on the internet. Room code: {code} (server: {relay})"
+        );
+        Ok(code)
+    }
+
+    pub fn room(&self) -> Option<&str> {
+        match &self.link {
+            Link::Host(h) => h.room(),
+            Link::Client(_) => None,
+        }
+    }
+
+    /// Join room `code` on the relay at `relay`.
+    pub fn join_room(relay: &str, code: &str, name: &str) -> std::io::Result<Session> {
+        let c = Client::join_room(relay, code, name)?;
+        Ok(Session {
+            link: Link::Client(c),
+            status: tr!("Bağlanılıyor…", "Connecting…").into(),
+            last_cursor: None,
+            cursors: BTreeMap::new(),
+            ready: false,
+        })
+    }
+
     pub fn join(addr: &str, name: &str) -> std::io::Result<Session> {
         let c = Client::connect(addr, name)?;
         Ok(Session {

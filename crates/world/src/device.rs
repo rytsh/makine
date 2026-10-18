@@ -455,7 +455,10 @@ mod tests {
     fn clamping() {
         assert_eq!(
             Device::Ram { addr: 20, data: 0 }.clamped(),
-            Device::Ram { addr: MAX_ADDR, data: 1 }
+            Device::Ram {
+                addr: MAX_ADDR,
+                data: 1
+            }
         );
         let rom = Device::Rom {
             addr: 1,
