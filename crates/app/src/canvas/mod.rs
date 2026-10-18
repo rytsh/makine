@@ -8,6 +8,9 @@
 //!   to disconnect it
 //! - click a chip input to toggle its value; drag input and output boxes to
 //!   move them (right-click one to put them all back)
+//! - click parts to select them (Shift adds), Shift+drag a box around
+//!   them; dragging a selected part moves the whole selection; Delete,
+//!   Ctrl+C/X/V/D/A work on the selection; Ctrl+Z/Y undo and redo
 //!
 //! `layout.rs` places everything on screen, `draw.rs` paints it and
 //! `menu.rs` holds the right-click menus.
@@ -42,6 +45,12 @@ pub struct Canvas {
     pub origin: Pos2,
     /// Draw basic gates as logic symbols instead of labelled boxes.
     pub symbols: bool,
+    /// Selected parts.
+    pub selected: Vec<PartId>,
+    /// Where a Shift+drag selection box started (screen).
+    select_from: Option<Pos2>,
+    /// How many times the same text was pasted, to offset the copies.
+    pastes: u32,
 }
 
 /// What the canvas wants the app to do after this frame.
@@ -50,6 +59,11 @@ pub struct CanvasOutput {
     pub changed: bool,
     /// Input pin values the user toggled.
     pub toggled_input: Option<(usize, u64)>,
+    pub undo: bool,
+    pub redo: bool,
+    /// The change came from a menu field, which changes every frame while
+    /// dragged: one undo step for all of it.
+    pub merge: bool,
 }
 
 /// What can be dropped onto the canvas from the parts list.
@@ -115,6 +129,8 @@ impl Canvas {
         }
         self.zoom_at_pointer(ui, &response);
 
+        let n = design.def.parts.len();
+        self.selected.retain(|&i| i < n);
         let layout = Layout::new(
             design,
             lib,
@@ -140,13 +156,15 @@ impl Canvas {
             &mut result,
         );
         self.toggle_input(&response, design, &live, &hover, &mut result);
-        Self::cut_with_key(ui, &response, design, &hover, &mut result);
-        Self::context_menu(ui, &response, design, lib, &hover, &mut result);
+        self.click_select(ui, &response, &hover);
+        self.keys(ui, &response, design, &layout, &hover, &mut result);
+        self.context_menu(ui, &response, design, lib, &hover, &mut result);
 
         // Parts dropped from the side panel.
         if let (Some(kind), Some(p)) = (response.dnd_release_payload::<NewPart>(), pointer) {
             let at = layout.to_world(p) - vec2(40.0, 20.0);
-            design.add_part(makine_sim::Part::new(kind.0.clone()), at);
+            let i = design.add_part(makine_sim::Part::new(kind.0.clone()), at);
+            self.selected = vec![i];
             result.changed = true;
         }
         self.set_cursor(ui, &hover);
@@ -162,19 +180,126 @@ impl Canvas {
         h
     }
 
-    /// The Delete key cuts the wire under the pointer.
-    fn cut_with_key(
+    /// A click on a part selects it (Shift: adds or removes it); a click on
+    /// empty board clears the selection.
+    fn click_select(&mut self, ui: &Ui, response: &egui::Response, hover: &Hover) {
+        if !response.clicked() || hover.input.is_some() {
+            return;
+        }
+        let shift = ui.input(|i| i.modifiers.shift);
+        match hover.part {
+            Some(i) if shift => {
+                if let Some(at) = self.selected.iter().position(|&s| s == i) {
+                    self.selected.remove(at);
+                } else {
+                    self.selected.push(i);
+                }
+            }
+            Some(i) => self.selected = vec![i],
+            None if !shift => self.selected.clear(),
+            None => {}
+        }
+    }
+
+    /// Keyboard: Delete, copy/cut/paste, duplicate, select all, undo/redo.
+    fn keys(
+        &mut self,
         ui: &Ui,
         response: &egui::Response,
         design: &mut Design,
+        layout: &Layout,
         hover: &Hover,
         result: &mut CanvasOutput,
     ) {
-        let Some(wi) = hover.wire else { return };
-        let pressed =
-            ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
-        if pressed && response.hovered() && !ui.ctx().egui_wants_keyboard_input() {
-            design.def.wires.remove(wi);
+        if !response.hovered() || ui.ctx().egui_wants_keyboard_input() {
+            return;
+        }
+        use egui::Key;
+        let (delete, undo, redo, dup, all, esc) = ui.input(|i| {
+            let cmd = i.modifiers.command;
+            (
+                i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
+                cmd && !i.modifiers.shift && i.key_pressed(Key::Z),
+                cmd && (i.key_pressed(Key::Y) || (i.modifiers.shift && i.key_pressed(Key::Z))),
+                cmd && i.key_pressed(Key::D),
+                cmd && i.key_pressed(Key::A),
+                i.key_pressed(Key::Escape),
+            )
+        });
+        result.undo |= undo;
+        result.redo |= redo;
+        if esc {
+            self.selected.clear();
+        }
+        if all {
+            self.selected = (0..design.def.parts.len()).collect();
+        }
+        if delete {
+            // The wire under the pointer first: it is what the player sees
+            // highlighted.
+            if let Some(wi) = hover.wire {
+                design.def.wires.remove(wi);
+                result.changed = true;
+            } else if !self.selected.is_empty() {
+                design.remove_parts(&self.selected);
+                self.selected.clear();
+                result.changed = true;
+            }
+        }
+        let pointer = ui.ctx().pointer_interact_pos().map(|p| layout.to_world(p));
+        if dup {
+            if let Some(text) = design.copy(&self.selected) {
+                self.paste(design, &text, None, result);
+            }
+        }
+        let events = ui.input(|i| i.events.clone());
+        for e in events {
+            match e {
+                egui::Event::Copy => {
+                    if let Some(t) = design.copy(&self.selected) {
+                        ui.ctx().copy_text(t);
+                        self.pastes = 0;
+                    }
+                }
+                egui::Event::Cut => {
+                    if let Some(t) = design.copy(&self.selected) {
+                        ui.ctx().copy_text(t);
+                        self.pastes = 0;
+                        design.remove_parts(&self.selected);
+                        self.selected.clear();
+                        result.changed = true;
+                    }
+                }
+                egui::Event::Paste(t) => self.paste(design, &t, pointer, result),
+                _ => {}
+            }
+        }
+    }
+
+    /// Paste copied parts at `at` (world), or next to where they were.
+    fn paste(
+        &mut self,
+        design: &mut Design,
+        text: &str,
+        at: Option<Pos2>,
+        result: &mut CanvasOutput,
+    ) {
+        self.pastes += 1;
+        let at = at.unwrap_or_else(|| {
+            let min = self
+                .selected
+                .iter()
+                .map(|&i| design.part_pos(i))
+                .fold(pos2(f32::MAX, f32::MAX), |m, p| m.min(p));
+            if min.x == f32::MAX {
+                pos2(200.0, 200.0)
+            } else {
+                min + vec2(30.0, 30.0)
+            }
+        });
+        let new = design.paste(text, at);
+        if !new.is_empty() {
+            self.selected = new;
             result.changed = true;
         }
     }
@@ -283,7 +408,16 @@ impl Canvas {
             return;
         };
         let r = layout.rect(g.rect(*at));
-        let hl = hover.part == Some(i) || self.drag_part == Some(i);
+        let selected = self.selected.contains(&i);
+        let hl = selected || hover.part == Some(i) || self.drag_part == Some(i);
+        if selected {
+            painter.rect_stroke(
+                r.expand(4.0 * z),
+                4.0 * z,
+                Stroke::new(1.5, crate::theme::COPPER_BRIGHT),
+                egui::StrokeKind::Outside,
+            );
+        }
         if g.symbol == Symbol::Box {
             draw_box(painter, r, part, &label, z, hl);
         } else {
@@ -413,7 +547,12 @@ impl Canvas {
                 self.drag_port = Some(port);
                 self.port_moved = false;
             } else if let Some(i) = at.part {
+                if !self.selected.contains(&i) {
+                    self.selected = vec![i];
+                }
                 self.drag_part = Some(i);
+            } else if ui.input(|i| i.modifiers.shift) {
+                self.select_from = press;
             }
         }
         if response.dragged() {
@@ -421,12 +560,34 @@ impl Canvas {
             if let Some(port) = self.drag_port {
                 design.move_port(port, layout.output_x, delta / z);
                 self.port_moved = true;
-            } else if let Some(i) = self.drag_part {
-                let p = &mut design.pos[i];
-                p[0] += delta.x / z;
-                p[1] += delta.y / z;
+            } else if self.drag_part.is_some() {
+                for &i in &self.selected {
+                    let p = &mut design.pos[i];
+                    p[0] += delta.x / z;
+                    p[1] += delta.y / z;
+                }
+            } else if self.select_from.is_some() {
+                // Drawn below.
             } else if self.drag_wire.is_none() {
                 self.offset += delta;
+            }
+        }
+        if let (Some(a), Some(b)) = (self.select_from, ui.ctx().pointer_interact_pos()) {
+            let r = Rect::from_two_pos(a, b);
+            painter.rect_filled(r, 2.0, crate::theme::COPPER.gamma_multiply(0.12));
+            painter.rect_stroke(
+                r,
+                2.0,
+                Stroke::new(1.0, crate::theme::COPPER),
+                egui::StrokeKind::Inside,
+            );
+            if response.drag_stopped() {
+                for (i, p) in layout.parts.iter().enumerate() {
+                    let Some((at, g, _)) = p else { continue };
+                    if r.intersects(layout.rect(g.rect(*at))) && !self.selected.contains(&i) {
+                        self.selected.push(i);
+                    }
+                }
             }
         }
         // The wire being drawn follows the pointer; red if the widths
@@ -457,6 +618,7 @@ impl Canvas {
             self.drag_wire = None;
             self.drag_part = None;
             self.drag_port = None;
+            self.select_from = None;
             self.port_moved = false;
         }
     }
@@ -485,6 +647,7 @@ impl Canvas {
 
     /// Right-click menus: disconnect a pin, configure a part, reset ports.
     fn context_menu(
+        &mut self,
         ui: &Ui,
         response: &egui::Response,
         design: &mut Design,
@@ -525,7 +688,29 @@ impl Canvas {
                     }
                 }
                 MenuTarget::Part(i) if i < design.def.parts.len() => {
-                    result.changed |= part_menu(ui, design, i, lib);
+                    let n = self.selected.len();
+                    if n > 1 && self.selected.contains(&i) {
+                        if ui.button(format!("🗑 Seçili {n} parçayı sil")).clicked() {
+                            design.remove_parts(&self.selected);
+                            self.selected.clear();
+                            result.changed = true;
+                            ui.close();
+                            return;
+                        }
+                        if ui.button("Çoğalt (Ctrl+D)").clicked() {
+                            if let Some(t) = design.copy(&self.selected) {
+                                self.paste(design, &t, None, result);
+                            }
+                            ui.close();
+                            return;
+                        }
+                        ui.separator();
+                    }
+                    if part_menu(ui, design, i, lib) {
+                        result.changed = true;
+                        result.merge = true;
+                        self.selected.retain(|&s| s < design.def.parts.len());
+                    }
                 }
                 MenuTarget::Ports => {
                     if ui.button("Giriş/çıkışları yerine diz").clicked() {
@@ -536,6 +721,15 @@ impl Canvas {
                 }
                 _ => {
                     ui.label("Parça eklemek için soldaki listeden sürükle.");
+                    ui.label(
+                        egui::RichText::new(
+                            "Seçmek için: parçaya tıkla, Shift ile ekle ya da Shift+sürükle \
+                             ile kutu çiz. Ctrl+C / Ctrl+V / Ctrl+D / Delete seçimle çalışır; \
+                             Ctrl+Z geri alır.",
+                        )
+                        .weak()
+                        .small(),
+                    );
                     ui.label(
                         egui::RichText::new(
                             "Kablo kesmek için: kablonun üstüne sağ tıkla, ya da üstüne \

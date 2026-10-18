@@ -32,8 +32,11 @@ Grafik için wgpu kullanılır: Vulkan, DirectX 12, Metal ya da OpenGL'den hangi
 çalışıyorsa onu seçer. Pencere açılmazsa `WGPU_BACKEND=gl` ile OpenGL zorlanabilir
 (Windows'ta: `set WGPU_BACKEND=gl` sonra `makine.exe`).
 
-İlerleme otomatik kaydedilir: Linux'ta `~/.local/share/makine/progress.json`,
-Windows'ta `%APPDATA%\makine\data\progress.json`.
+İlerleme otomatik kaydedilir: Linux'ta `~/.local/share/makine/`, Windows'ta
+`%APPDATA%\makine\data\`. Her profil kendi dosyasındadır (`profile-1.json`,
+`profile-2.json`…), liste `profiles.json`'dadır. Profiller sol üstteki logoya tıklayınca
+açılan ana sayfadan yönetilir; bir profil metin ya da dosya olarak başka bilgisayara
+taşınabilir.
 
 Hazır sürümler: [Releases](https://github.com/rytsh/makine/releases) sayfasında Windows
 ve Linux için zip dosyaları var (Doom dahil).

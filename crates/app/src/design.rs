@@ -102,6 +102,86 @@ impl Design {
         pos2(x, y)
     }
 
+    /// Remove several parts at once.
+    pub fn remove_parts(&mut self, ids: &[PartId]) {
+        let mut ids = ids.to_vec();
+        ids.sort_unstable();
+        ids.dedup();
+        for &id in ids.iter().rev() {
+            if id < self.def.parts.len() {
+                self.remove_part(id);
+            }
+        }
+    }
+
+    /// The parts `ids` with the wires between them, as text for the
+    /// clipboard (`None` if nothing is selected).
+    pub fn copy(&self, ids: &[PartId]) -> Option<String> {
+        let mut ids: Vec<PartId> = ids
+            .iter()
+            .copied()
+            .filter(|&i| i < self.def.parts.len())
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() {
+            return None;
+        }
+        let index = |p: PartId| ids.iter().position(|&i| i == p);
+        let wires = self
+            .def
+            .wires
+            .iter()
+            .filter_map(|w| match (w.from, w.to) {
+                (Source::Part { part: a, pin: pa }, Sink::Part { part: b, pin: pb }) => {
+                    Some(((index(a)?, pa), (index(b)?, pb)))
+                }
+                _ => None,
+            })
+            .collect();
+        let clip = Clip {
+            makine_parts: ids.iter().map(|&i| self.def.parts[i].clone()).collect(),
+            pos: ids.iter().map(|&i| self.pos[i]).collect(),
+            wires,
+        };
+        serde_json::to_string(&clip).ok()
+    }
+
+    /// Paste parts copied with [`Design::copy`], their top-left corner at
+    /// `at`. Returns the new parts (none if `text` is not copied parts).
+    pub fn paste(&mut self, text: &str, at: Pos2) -> Vec<PartId> {
+        let Ok(clip) = serde_json::from_str::<Clip>(text.trim()) else {
+            return Vec::new();
+        };
+        if clip.makine_parts.len() != clip.pos.len() {
+            return Vec::new();
+        }
+        let min = clip
+            .pos
+            .iter()
+            .fold([f32::MAX; 2], |m, p| [m[0].min(p[0]), m[1].min(p[1])]);
+        let first = self.def.parts.len();
+        for (part, p) in clip.makine_parts.into_iter().zip(clip.pos) {
+            self.add_part(part, pos2(at.x + p[0] - min[0], at.y + p[1] - min[1]));
+        }
+        let n = self.def.parts.len() - first;
+        for ((a, pa), (b, pb)) in clip.wires {
+            if a < n && b < n {
+                self.def.connect(
+                    Source::Part {
+                        part: first + a,
+                        pin: pa,
+                    },
+                    Sink::Part {
+                        part: first + b,
+                        pin: pb,
+                    },
+                );
+            }
+        }
+        (first..self.def.parts.len()).collect()
+    }
+
     /// Drop wires to pins that no longer exist or whose widths no longer
     /// fit, e.g. after a part's pins changed.
     pub fn prune(&mut self, lib: &Library) {
@@ -127,6 +207,69 @@ impl Design {
             .collect();
         let mut it = keep.iter();
         self.def.wires.retain(|_| *it.next().unwrap());
+    }
+}
+
+/// Parts on the clipboard. The odd field name keeps other JSON (such as
+/// copied world parts) from being read as parts.
+#[derive(Serialize, Deserialize)]
+struct Clip {
+    makine_parts: Vec<Part>,
+    pos: Vec<[f32; 2]>,
+    /// (part, output pin) → (part, input pin), indexes into `makine_parts`.
+    wires: Vec<((usize, usize), (usize, usize))>,
+}
+
+/// Undo and redo for a design: whole copies, since designs are small.
+#[derive(Default)]
+pub struct History {
+    undo: Vec<Design>,
+    redo: Vec<Design>,
+    /// Whether the last change can take in the next one (dragging a number
+    /// in a menu changes the design every frame; that is one step).
+    merging: bool,
+}
+
+impl History {
+    const MAX: usize = 100;
+
+    /// Remember `before`, the design as it was before a change. `merge`
+    /// changes in a row make one step.
+    pub fn push(&mut self, before: Design, merge: bool) {
+        let merged = merge && std::mem::replace(&mut self.merging, merge);
+        self.merging = merge;
+        if self.undo.last() == Some(&before) || (merged && !self.undo.is_empty()) {
+            self.redo.clear();
+            return;
+        }
+        self.undo.push(before);
+        if self.undo.len() > Self::MAX {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    /// Go back one change from `now`; `None` if there is nothing to undo.
+    pub fn undo(&mut self, now: &Design) -> Option<Design> {
+        self.merging = false;
+        let d = self.undo.pop()?;
+        self.redo.push(now.clone());
+        Some(d)
+    }
+
+    pub fn redo(&mut self, now: &Design) -> Option<Design> {
+        self.merging = false;
+        let d = self.redo.pop()?;
+        self.undo.push(now.clone());
+        Some(d)
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
     }
 }
 
@@ -333,6 +476,42 @@ mod tests {
             d.port_rect(Port::Input(1), 500.0).min,
             default_port_pos(1, PORT_X)
         );
+    }
+
+    #[test]
+    fn copy_paste_keeps_inner_wires() {
+        let mut b = ChipBuilder::new("T", &["a"], &["o"]);
+        let a = b.input("a");
+        let x = b.nand(a, a);
+        let y = b.nand(x, x);
+        b.output("o", y);
+        let mut d = Design::new(b.build());
+        let text = d.copy(&[0, 1]).unwrap();
+        let new = d.paste(&text, pos2(500.0, 500.0));
+        assert_eq!(new, vec![2, 3]);
+        // Only the wires between the copied parts come along (two, from
+        // part 2 into both pins of part 3).
+        assert_eq!(d.def.wires.len(), 5 + 2);
+        assert_eq!(d.part_pos(2), pos2(500.0, 500.0));
+        assert!(d.paste("{\"parts\":[]}", pos2(0.0, 0.0)).is_empty());
+        d.remove_parts(&[3, 0, 2]);
+        assert_eq!(d.def.parts.len(), 1);
+    }
+
+    #[test]
+    fn history_undoes_and_redoes() {
+        let mut h = History::default();
+        let a = Design::new(ChipDef::new("T", &["a"], &["o"]));
+        let mut b = a.clone();
+        b.add_part(Part::new(PartKind::Nand), pos2(0.0, 0.0));
+        h.push(a.clone(), true);
+        h.push(b.clone(), true);
+        assert_eq!(h.undo(&b), Some(a.clone()), "menu changes make one step");
+        assert!(!h.can_undo());
+        assert_eq!(h.redo(&a), Some(b.clone()));
+        assert!(h.undo(&b).is_some());
+        h.push(a.clone(), false);
+        assert!(!h.can_redo(), "a new change drops the redo list");
     }
 
     #[test]

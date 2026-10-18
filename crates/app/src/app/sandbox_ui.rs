@@ -155,10 +155,10 @@ impl App {
             self.refresh_library();
             let lib = self.lib.clone();
             self.design().prune(&lib);
-            self.rebuild();
-            self.save();
+            self.design_changed();
         }
         ui.separator();
+        self.undo_buttons(ui);
 
         // Live simulation.
         match &self.sim {

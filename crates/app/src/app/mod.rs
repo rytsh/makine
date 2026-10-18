@@ -109,6 +109,10 @@ pub struct App {
     /// Players on this computer; saving goes to the current one's file.
     profiles: Option<crate::profiles::Profiles>,
     home: home_ui::Home,
+    /// Undo and redo for the design being edited, and the design as it was
+    /// after the last change (what an undo goes back to).
+    history: crate::design::History,
+    snapshot: Option<Design>,
 }
 
 enum TestResult {
@@ -178,6 +182,8 @@ impl App {
             reveal: Default::default(),
             profiles: None,
             home: Default::default(),
+            history: Default::default(),
+            snapshot: None,
         };
         app.open_level(first_open);
         app
@@ -211,8 +217,55 @@ impl App {
         // Chips used here may have changed; drop wires that no longer fit.
         let lib = self.lib.clone();
         self.design().prune(&lib);
+        self.history = Default::default();
+        self.snapshot = Some(self.design().clone());
         self.rebuild();
         self.update_cost();
+    }
+
+    /// The design changed: remember how it was, for undo, then recompile
+    /// and save.
+    fn design_changed(&mut self) {
+        self.design_changed_merging(false);
+    }
+
+    fn design_changed_merging(&mut self, merge: bool) {
+        let now = self.design().clone();
+        if let Some(before) = self.snapshot.replace(now) {
+            self.history.push(before, merge);
+        }
+        self.after_edit();
+    }
+
+    fn after_edit(&mut self) {
+        // Sandbox chips are part of the library: refresh it so chips that
+        // use this one see the change.
+        if matches!(self.target, Target::Free(_)) {
+            self.refresh_library();
+        }
+        self.rebuild();
+        self.save_soon();
+    }
+
+    fn undo(&mut self) {
+        let now = self.design().clone();
+        if let Some(d) = self.history.undo(&now) {
+            self.restore(d);
+        }
+    }
+
+    fn redo(&mut self) {
+        let now = self.design().clone();
+        if let Some(d) = self.history.redo(&now) {
+            self.restore(d);
+        }
+    }
+
+    fn restore(&mut self, d: Design) {
+        self.snapshot = Some(d.clone());
+        *self.design() = d;
+        self.canvas.selected.clear();
+        self.after_edit();
     }
 
     /// Rebuild the library after sandbox chips changed.
@@ -566,6 +619,7 @@ impl App {
                 .small(),
         );
         self.bus_inputs(ui);
+        self.undo_buttons(ui);
         ui.horizontal(|ui| {
             if ui
                 .button("Durumu sıfırla")
@@ -583,8 +637,7 @@ impl App {
                 .clicked()
             {
                 *self.design() = Design::new(level.blank());
-                self.rebuild();
-                self.save();
+                self.design_changed();
             }
         });
 
@@ -602,6 +655,26 @@ impl App {
         self.result_view(ui);
         ui.add_space(6.0);
         self.cost_view(ui);
+    }
+
+    /// Undo / redo buttons (also Ctrl+Z / Ctrl+Y on the canvas).
+    fn undo_buttons(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(self.history.can_undo(), egui::Button::new("↶ Geri al"))
+                .on_hover_text("Ctrl+Z")
+                .clicked()
+            {
+                self.undo();
+            }
+            if ui
+                .add_enabled(self.history.can_redo(), egui::Button::new("↷ Yinele"))
+                .on_hover_text("Ctrl+Y")
+                .clicked()
+            {
+                self.redo();
+            }
+        });
     }
 
     fn result_view(&mut self, ui: &mut Ui) {
@@ -827,13 +900,13 @@ impl App {
                     self.run();
                 }
                 if out.changed {
-                    // Sandbox chips are part of the library: refresh it so
-                    // chips that use this one see the change.
-                    if matches!(self.target, Target::Free(_)) {
-                        self.refresh_library();
-                    }
-                    self.rebuild();
-                    self.save();
+                    self.design_changed_merging(out.merge);
+                }
+                if out.undo {
+                    self.undo();
+                }
+                if out.redo {
+                    self.redo();
                 }
             });
     }

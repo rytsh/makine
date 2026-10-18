@@ -448,6 +448,37 @@ mod editor {
         assert!(app.borrow().progress.solved("Not"));
         assert!(h.query_by_label_contains("Tebrikler").is_some());
         assert!(Progress::load(&path).unwrap().solved("Not"));
+
+        // Undo takes back the last wire; redo puts it back.
+        h.get_by_label_contains("Geri al").click();
+        h.run();
+        assert_eq!(app.borrow_mut().design().def.wires.len(), 2, "undo");
+        h.hover_at(egui::pos2(700.0, 600.0));
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Y);
+        h.run();
+        assert_eq!(app.borrow_mut().design().def.wires.len(), 3, "redo");
+
+        // Box select the gate, copy and paste it: a second NAND.
+        let gate = screen(at + g.size / 2.0);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::SHIFT));
+        drag(
+            &mut h,
+            gate - egui::vec2(60.0, 50.0),
+            gate + egui::vec2(60.0, 50.0),
+        );
+        h.event(egui::Event::ModifiersChanged(Default::default()));
+        h.run();
+        assert_eq!(app.borrow().canvas.selected, vec![0], "box select");
+        let text = app.borrow_mut().design().copy(&[0]).unwrap();
+        h.hover_at(egui::pos2(700.0, 500.0));
+        h.run();
+        h.event(egui::Event::Paste(text));
+        h.run();
+        assert_eq!(app.borrow_mut().design().def.parts.len(), 2, "paste");
+        assert_eq!(app.borrow().canvas.selected, vec![1]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

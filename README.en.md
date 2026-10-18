@@ -52,8 +52,11 @@ Graphics go through wgpu, which picks whichever of Vulkan, DirectX 12, Metal or
 OpenGL works. If no window appears, `WGPU_BACKEND=gl` forces OpenGL (on Windows:
 `set WGPU_BACKEND=gl`, then `makine.exe`).
 
-Progress is saved automatically: `~/.local/share/makine/progress.json` on Linux,
-`%APPDATA%\makine\data\progress.json` on Windows.
+Progress is saved automatically in `~/.local/share/makine/` on Linux and
+`%APPDATA%\makine\data\` on Windows. Each profile has its own file (`profile-1.json`,
+`profile-2.json`, …), listed in `profiles.json`. Profiles are managed on the home page
+(click the logo at the top left); a profile can be moved to another computer as text or
+as a file.
 
 Prebuilt versions: the [Releases](https://github.com/rytsh/makine/releases) page has
 zip files for Windows and Linux (Doom included).

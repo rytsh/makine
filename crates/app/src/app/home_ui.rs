@@ -17,6 +17,9 @@ pub(super) struct Home {
     /// An action waiting for "yes".
     confirm: Option<Confirm>,
     message: Option<(bool, String)>,
+    /// Summaries of the other profiles, by file: reading them every frame
+    /// would load whole progress files.
+    summaries: std::collections::HashMap<String, String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -94,7 +97,9 @@ impl App {
 
     /// Start over with `progress`, keeping the window and the profiles.
     fn restart(&mut self, progress: Progress, profiles: Option<Profiles>) {
-        let home = std::mem::take(&mut self.home);
+        let mut home = std::mem::take(&mut self.home);
+        // The profile left was just saved; its summary may have changed.
+        home.summaries.clear();
         let mut fresh = App::with_profiles(progress, profiles);
         fresh.wiki_installed = self.wiki_installed;
         fresh.home = home;
@@ -260,10 +265,13 @@ impl App {
                     let summary = if current {
                         profiles::summary(&self.progress)
                     } else {
-                        self.profiles
-                            .as_ref()
-                            .map(|l| profiles::summary(&l.progress(i)))
-                            .unwrap_or_default()
+                        let Some(l) = &self.profiles else { continue };
+                        let file = l.list[i].file.clone();
+                        self.home
+                            .summaries
+                            .entry(file)
+                            .or_insert_with(|| profiles::summary(&l.progress(i)))
+                            .clone()
                     };
                     ui.label(RichText::new(summary).color(theme::INK_DIM).small());
                     ui.horizontal(|ui| {
