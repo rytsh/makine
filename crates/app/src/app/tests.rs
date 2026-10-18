@@ -510,6 +510,7 @@ mod glyph_tests {
             include_str!("../worldview/scope.rs"),
             include_str!("../worldview/routing.rs"),
             include_str!("solution_ui.rs"),
+            include_str!("chrome.rs"),
             include_str!("home_ui.rs"),
             include_str!("../profiles.rs"),
             include_str!("../../../levels/src/cost.rs"),

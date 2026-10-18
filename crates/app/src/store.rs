@@ -33,6 +33,9 @@ pub struct Progress {
     /// Start in full screen.
     #[serde(default)]
     pub fullscreen: bool,
+    /// Draw our own title bar instead of the system's window frame.
+    #[serde(default = "yes")]
+    pub custom_frame: bool,
     /// Free-form chips.
     #[serde(default)]
     pub sandbox: Sandbox,
@@ -73,6 +76,7 @@ impl Default for Progress {
             program: None,
             symbols: true,
             fullscreen: false,
+            custom_frame: true,
             sandbox: Sandbox::default(),
             worlds: BTreeMap::new(),
             last_world: None,

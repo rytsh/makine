@@ -24,6 +24,10 @@ pub struct Profiles {
     pub list: Vec<Profile>,
     /// Index into `list`.
     pub current: usize,
+    /// Language of the interface (`tr`, `en`), for every profile; none: the
+    /// computer's language.
+    #[serde(default)]
+    pub lang: Option<String>,
     #[serde(skip)]
     dir: PathBuf,
 }
@@ -47,6 +51,7 @@ impl Profiles {
         let mut p = Profiles {
             list: Vec::new(),
             current: 0,
+            lang: None,
             dir: dir.to_path_buf(),
         };
         let old = dir.join("progress.json");

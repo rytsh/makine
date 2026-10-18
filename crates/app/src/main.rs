@@ -47,6 +47,12 @@ fn icon() -> Option<egui::IconData> {
 /// one.
 fn main() -> eframe::Result {
     let (progress, profiles) = load_progress();
+    let lang = profiles
+        .as_ref()
+        .and_then(|p| p.lang.as_deref())
+        .and_then(makine_lang::Lang::from_code)
+        .unwrap_or_else(|| makine_lang::from_system(sys_locale::get_locale().as_deref()));
+    makine_lang::set(lang);
     let mut viewport = egui::ViewportBuilder::default();
     if let Some(icon) = icon() {
         viewport = viewport.with_icon(icon);
@@ -56,6 +62,7 @@ fn main() -> eframe::Result {
             .with_title("makine")
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 560.0])
+            .with_decorations(!progress.custom_frame)
             .with_fullscreen(progress.fullscreen),
         ..Default::default()
     };

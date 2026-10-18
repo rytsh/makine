@@ -6,6 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+makine-lang = { path = "../lang" }
+sys-locale = "0.3"
 makine-sim = { path = "../sim", features = ["serde"] }
 makine-levels = { path = "../levels" }
 eframe = "0.37"

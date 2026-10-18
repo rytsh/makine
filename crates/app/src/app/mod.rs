@@ -13,6 +13,7 @@ use crate::sandbox::{self, PinEditor};
 use crate::store::Progress;
 use crate::wiki::{self, Wiki};
 
+mod chrome;
 mod computer_ui;
 mod home_ui;
 mod sandbox_ui;
@@ -359,36 +360,6 @@ impl App {
     }
 
     fn levels_panel(&mut self, ui: &mut Ui) {
-        let home = ui
-            .horizontal(|ui| {
-                ui.add(
-                    egui::Image::new(home_ui::logo())
-                        .fit_to_exact_size(egui::vec2(30.0, 30.0))
-                        .sense(egui::Sense::click()),
-                )
-                .clicked()
-                    | ui.add(
-                        egui::Label::new(RichText::new("makine").heading())
-                            .sense(egui::Sense::click()),
-                    )
-                    .clicked()
-            })
-            .inner;
-        let profile = self
-            .profiles
-            .as_ref()
-            .map(|p| format!(" · {}", p.current().name))
-            .unwrap_or_default();
-        let sub = ui
-            .add(
-                egui::Label::new(RichText::new(format!("NAND'den bilgisayara{profile}")).weak())
-                    .sense(egui::Sense::click()),
-            )
-            .on_hover_text("Ana sayfa: ilerleme ve profiller");
-        if home || sub.clicked() {
-            self.go_home();
-        }
-        ui.separator();
         let mut open = None;
         let all = levels();
         let mut start = 0;
@@ -442,65 +413,6 @@ impl App {
         ui.add_space(6.0);
         ui.separator();
         self.sandbox_list(ui);
-        ui.separator();
-        if ui
-            .add(egui::Button::selectable(
-                self.view == View::Wiki,
-                "📖  Wiki",
-            ))
-            .on_hover_text("Elektronik ve bilgisayar mimarisi anlatımları")
-            .clicked()
-        {
-            self.view = View::Wiki;
-        }
-        if ui
-            .add(egui::Button::selectable(
-                self.view == View::World,
-                "🌍  Dünya",
-            ))
-            .on_hover_text("Parçaları serbestçe yerleştirip kendi devreni kur; çalışırken izle")
-            .clicked()
-        {
-            self.open_world();
-        }
-        let cpu_done = self.progress.solved("Cpu");
-        let r = ui
-            .add_enabled(
-                cpu_done,
-                egui::Button::selectable(self.view == View::Computer, "🖥  Bilgisayar"),
-            )
-            .on_disabled_hover_text("İşlemciyi bitirince açılır");
-        if r.clicked() {
-            self.view = View::Computer;
-        }
-        ui.add_space(4.0);
-        let fast = ui
-            .checkbox(&mut self.progress.fast, "⚡ Hızlı simülasyon")
-            .on_hover_text(
-                "Geçtiğin çipleri kapı kapı simüle etmek yerine aynı davranışı gösteren \
-                 hızlı bir modelle çalıştır. Çipin testi geçtiği için sonuç aynıdır, \
-                 sadece çok daha hızlıdır. Kapalıyken her şey NAND seviyesinde simüle edilir.",
-            );
-        if ui
-            .checkbox(&mut self.progress.symbols, "Kapı sembolleri")
-            .on_hover_text("NOT, AND, OR, XOR, NAND, MUX'u standart mantık sembolleriyle çiz")
-            .changed()
-        {
-            self.canvas.symbols = self.progress.symbols;
-            self.save();
-        }
-        if ui
-            .checkbox(&mut self.progress.fullscreen, "Tam ekran (F11)")
-            .changed()
-        {
-            let on = self.progress.fullscreen;
-            self.set_fullscreen(ui.ctx(), on);
-        }
-        if fast.changed() {
-            self.refresh_library();
-            self.rebuild();
-            self.save();
-        }
     }
 
     fn parts_panel(&mut self, ui: &mut Ui) {
@@ -786,15 +698,18 @@ impl App {
                 return;
             }
         }
-        egui::Panel::left("levels")
-            .default_size(220.0)
-            .resizable(true)
-            .show(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt("levels_scroll")
-                    .show(ui, |ui| self.levels_panel(ui));
-            });
+        self.resize_edges(&ctx);
+        self.window_border(&ctx);
+        self.top_bar(ui);
         if self.view == View::Editor {
+            egui::Panel::left("levels")
+                .default_size(220.0)
+                .resizable(true)
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("levels_scroll")
+                        .show(ui, |ui| self.levels_panel(ui));
+                });
             egui::Panel::left("parts")
                 .default_size(130.0)
                 .resizable(true)

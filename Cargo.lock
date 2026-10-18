@@ -2067,6 +2067,7 @@ dependencies = [
  "egui_kittest",
  "embed-resource",
  "image",
+ "makine-lang",
  "makine-levels",
  "makine-net",
  "makine-pack",
@@ -2076,12 +2077,18 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sys-locale",
 ]
+
+[[package]]
+name = "makine-lang"
+version = "0.1.0"
 
 [[package]]
 name = "makine-levels"
 version = "0.1.0"
 dependencies = [
+ "makine-lang",
  "makine-rv",
  "makine-sim",
 ]
@@ -2090,6 +2097,7 @@ dependencies = [
 name = "makine-net"
 version = "0.1.0"
 dependencies = [
+ "makine-lang",
  "makine-pack",
  "makine-world",
  "serde",
@@ -2100,6 +2108,7 @@ dependencies = [
 name = "makine-pack"
 version = "0.1.0"
 dependencies = [
+ "makine-lang",
  "makine-sim",
  "serde",
  "serde_json",
@@ -2108,11 +2117,15 @@ dependencies = [
 [[package]]
 name = "makine-rv"
 version = "0.1.0"
+dependencies = [
+ "makine-lang",
+]
 
 [[package]]
 name = "makine-sim"
 version = "0.1.0"
 dependencies = [
+ "makine-lang",
  "serde",
 ]
 
@@ -2120,6 +2133,7 @@ dependencies = [
 name = "makine-world"
 version = "0.1.0"
 dependencies = [
+ "makine-lang",
  "makine-sim",
  "serde",
  "serde_json",
