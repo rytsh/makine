@@ -14,9 +14,11 @@ open/closed views and probes are local to each player.
 **World → Örnek projeler → 4004 atölyesi aç** creates a separate example
 world with a gate-built 4-bit arithmetic/control core and an editable 4 KiB
 program ROM. Registers and ROM are storage primitives, not an opcode
-interpreter. This is **not a complete or timing-accurate 4004/MCS-4**: SRC,
-DCL and external memory/I/O instructions are not implemented; unsupported
-opcodes assert a fault and hold PC. See [the scope and example program
+interpreter. SRC, DCL and the `Ex` memory/I/O instructions also run through
+gates; the **4004 + RAM** example uses a 4002-style RAM and ports. This is
+**not a complete or timing-accurate 4004/MCS-4**: the RAM is one flat memory,
+there are no 4001 chips, and WPM is missing (it asserts a fault and holds PC).
+See [the scope and example program
 (Turkish)](docs/wiki/4004.md).
 
 Four new exercises cover a 4-bit multiplexer, carry adder, register and

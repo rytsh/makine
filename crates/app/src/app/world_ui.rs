@@ -433,18 +433,38 @@ impl App {
                         self.open_project(build());
                     }
                     crate::theme::section(ui, tr!("Çok büyük", "Very large"));
-                    if ui
-                        .button(tr!("4004 atölyesi aç", "Open 4004 workshop"))
-                        .clicked()
-                    {
-                        self.open_mcs4_project();
-                    }
+                    ui.horizontal_wrapped(|ui| {
+                        if ui
+                            .button(tr!("4004 atölyesi aç", "Open 4004 workshop"))
+                            .on_hover_text(tr!(
+                                "Sayma programıyla: R0 sayar, A'ya eklenir.",
+                                "With the counting program: R0 counts, added to A."
+                            ))
+                            .clicked()
+                        {
+                            self.open_mcs4_project();
+                        }
+                        if ui
+                            .button(tr!("4004 + RAM", "4004 + RAM"))
+                            .on_hover_text(tr!(
+                                "4002 RAM programıyla: RAM'de sayar, ROM girişini ekler, RAM \
+                                 portuna yazar.",
+                                "With the 4002 RAM program: counts in RAM, adds the ROM input, \
+                                 writes to the RAM port."
+                            ))
+                            .clicked()
+                        {
+                            self.open_project(makine_world::projects::mcs4::project(
+                                makine_world::projects::mcs4::RAM_DEMO,
+                            ));
+                        }
+                    });
                     ui.label(
                         RichText::new(tr!(
-                            "Kapılardan aritmetik ve kontrol çekirdeği; özgün MCS-4 bellek/GÇ \
-                             sistemi henüz yok.",
-                            "An arithmetic and control core made of gates; the original MCS-4 \
-                             memory/I/O system is not there yet."
+                            "Kapılardan kurulmuş 4004 çekirdeği, 4002 RAM'i ve G/Ç portlarıyla. \
+                             Yalnızca WPM (program RAM'i) yok.",
+                            "A 4004 core made of gates, with 4002 RAM and I/O ports. Only WPM \
+                             (program RAM) is missing."
                         ))
                         .weak()
                         .small(),

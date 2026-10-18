@@ -78,6 +78,8 @@ pub struct App {
     inputs: Vec<u64>,
     result: Option<TestResult>,
     status: Option<String>,
+    /// When the message appeared (egui time), and which one.
+    status_since: Option<(f64, String)>,
     /// World x of the chip's output column, from the last frame.
     output_x: f32,
     view: View,
@@ -168,6 +170,7 @@ impl App {
             inputs: Vec::new(),
             result: None,
             status: None,
+            status_since: None,
             output_x: 0.0,
             view: View::Editor,
             computer: None,
@@ -629,6 +632,46 @@ impl App {
         self.cost_view(ui);
     }
 
+    /// The last message, at the bottom of the window over everything, gone
+    /// after a while or when closed.
+    fn toast(&mut self, ctx: &egui::Context) {
+        let Some(text) = self.status.clone() else {
+            self.status_since = None;
+            return;
+        };
+        let now = ctx.input(|i| i.time);
+        if self.status_since.as_ref().is_none_or(|(_, t)| *t != text) {
+            self.status_since = Some((now, text.clone()));
+        }
+        let age = now - self.status_since.as_ref().map_or(now, |s| s.0);
+        const SHOW: f64 = 8.0;
+        if age > SHOW {
+            self.status = None;
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        let screen = ctx.content_rect();
+        egui::Area::new(egui::Id::unique("toast"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -18.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .fill(crate::theme::RAISED)
+                    .stroke(egui::Stroke::new(1.0, crate::theme::WARN))
+                    .inner_margin(egui::Margin::symmetric(14, 8))
+                    .show(ui, |ui| {
+                        ui.set_max_width(screen.width() * 0.7);
+                        ui.horizontal(|ui| {
+                            ui.colored_label(crate::theme::WARN, "●");
+                            ui.label(&text);
+                            if ui.small_button("×").clicked() {
+                                self.status = None;
+                            }
+                        });
+                    });
+            });
+    }
+
     /// Undo / redo buttons (also Ctrl+Z / Ctrl+Y on the canvas).
     fn undo_buttons(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
@@ -832,16 +875,7 @@ impl App {
                     (View::Home, _) => self.home_panel(ui),
                 });
             });
-        if let Some(status) = self.status.clone() {
-            egui::Panel::bottom("status").show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.colored_label(crate::theme::WARN, status);
-                    if ui.small_button("×").clicked() {
-                        self.status = None;
-                    }
-                });
-            });
-        }
+        self.toast(&ctx);
         if self.view == View::Computer {
             egui::CentralPanel::default().show(ui, |ui| self.computer_view(ui));
             return;

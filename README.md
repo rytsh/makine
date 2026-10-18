@@ -104,9 +104,11 @@ inceleme araçlarıdır. LAN üzerinden modüller ve teller birlikte düzenleneb
 **Örnek projeler → 4004 atölyesi aç** kapılardan kurulmuş bir 4-bit
 aritmetik/kontrol çekirdeği açar. Akümülatör, taşıma, 16 yazmaç, 12-bit PC,
 üç dönüş adresi ve 4 KiB program ROM'u vardır. Örnek gerçek 4004 opcode'ları
-ile çalışır; işlem yürütme emülatörde saklı değildir. **Tam 4004/MCS-4
-uyumluluğu değildir:** SRC, DCL ve dış bellek/GÇ komutları henüz yoktur;
-saat ve dış bus sadeleştirilmiştir. [Kapsam ve örnek program](docs/wiki/4004.md).
+ile çalışır; işlem yürütme emülatörde saklı değildir. SRC, DCL ve `Ex`
+bellek/GÇ komutları da kapılardan geçer; **4004 + RAM** örneği 4002 RAM'ini
+ve portlarını kullanır. **Tam 4004/MCS-4 uyumluluğu değildir:** RAM tek düz
+bir bellektir, 4001 yongaları ve WPM yoktur; saat ve dış bus
+sadeleştirilmiştir. [Kapsam ve örnek program](docs/wiki/4004.md).
 
 Yeni eğitim bölümünde 4-bit MUX, taşımalı toplayıcı, yazmaç ve 12-bit program
 sayacı alıştırmaları bulunur. RISC-V / Doom yolu korunmuştur.

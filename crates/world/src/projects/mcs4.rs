@@ -28,10 +28,26 @@ pub const DEMO: &[u64] = &[
     0x40, 0x02, // JUN loop
 ];
 
+/// A program using the 4002 RAM: counts in RAM character 0 of register 0,
+/// adds the ROM input port to it, and shows the result on the RAM output
+/// port. Every step goes through SRC, RDM, ADM/WRM and WMP.
+pub const RAM_DEMO: &[u64] = &[
+    0x20, 0x00, // FIM P0, 00     address 0:0:0
+    0x21, //       loop: SRC P0
+    0xE9, //       RDM            A = M
+    0xF2, //       IAC            A + 1
+    0xE0, //       WRM            M = A
+    0xEA, //       RDR            A = ROM input
+    0xF1, //       CLC
+    0xEB, //       ADM            A = input + M
+    0xE1, //       WMP            RAM port = A
+    0x40, 0x02, // JUN loop
+];
+
 pub fn supported() -> &'static str {
     tr!(
-        "NOP, JCN, FIM, FIN, JIN, JUN, JMS, INC, ISZ, ADD, SUB, LD, XCH, BBL, LDM; CLB–KBP. SRC, Ex bellek/GÇ ve DCL henüz yok; HATA=1 yapıp durur.",
-        "NOP, JCN, FIM, FIN, JIN, JUN, JMS, INC, ISZ, ADD, SUB, LD, XCH, BBL, LDM; CLB–KBP. SRC, Ex memory/I/O and DCL are not there yet; they set FAULT=1 and stop."
+        "Bütün 4004 komutları: NOP, JCN, FIM, SRC, FIN, JIN, JUN, JMS, INC, ISZ, ADD, SUB, LD, XCH, BBL, LDM; WRM, WMP, WRR, WR0–3, SBM, RDM, RDR, ADM, RD0–3; CLB–KBP, DCL. Yalnızca WPM (program RAM'i) yok; HATA=1 yapıp durur.",
+        "Every 4004 instruction: NOP, JCN, FIM, SRC, FIN, JIN, JUN, JMS, INC, ISZ, ADD, SUB, LD, XCH, BBL, LDM; WRM, WMP, WRR, WR0–3, SBM, RDM, RDR, ADM, RD0–3; CLB–KBP, DCL. Only WPM (program RAM) is missing; it sets FAULT=1 and stops."
     )
 }
 
@@ -42,6 +58,7 @@ pub fn disassemble(op: u8, next: u8) -> String {
         0 if n == 0 => "NOP".into(),
         1 => format!("JCN {n:X}, {next:02X}"),
         2 if n & 1 == 0 => format!("FIM P{}, {next:02X}", n / 2),
+        2 => format!("SRC P{}", n / 2),
         3 => format!("{} P{}", if n & 1 == 0 { "FIN" } else { "JIN" }, n / 2),
         4 | 5 => format!(
             "{} {:X}{next:02X}",
@@ -56,9 +73,14 @@ pub fn disassemble(op: u8, next: u8) -> String {
         11 => format!("XCH R{n}"),
         12 => format!("BBL {n:X}"),
         13 => format!("LDM {n:X}"),
-        15 if n <= 12 => [
+        14 if n != 3 => [
+            "WRM", "WMP", "WRR", "WPM", "WR0", "WR1", "WR2", "WR3", "SBM", "RDM", "RDR", "ADM",
+            "RD0", "RD1", "RD2", "RD3",
+        ][n as usize]
+            .into(),
+        15 if n <= 13 => [
             "CLB", "CLC", "IAC", "CMC", "CMA", "RAL", "RAR", "TCC", "DAC", "TCS", "STC", "DAA",
-            "KBP",
+            "KBP", "DCL",
         ][n as usize]
             .into(),
         _ => trf!(
@@ -91,6 +113,11 @@ impl Logic {
                 "pc[12]",
                 "stack[36]",
                 "test",
+                "src[8]",
+                "bank[3]",
+                "ram_q[4]",
+                "status_q[4]",
+                "rom_in[4]",
             ],
             &[
                 "a_next[4]",
@@ -100,6 +127,14 @@ impl Logic {
                 "stack_next[36]",
                 "lookup[12]",
                 "fault",
+                "src_next[8]",
+                "bank_next[3]",
+                "ram_addr[11]",
+                "status_addr[9]",
+                "ram_we",
+                "status_we",
+                "port_we",
+                "rom_port_we",
             ],
         );
         let zero = b.constant(1, 0);
@@ -213,6 +248,11 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     let pc = g.bits("pc", 12);
     let stack = g.bits("stack", 36);
     let test = g.b.input("test");
+    let src = g.bits("src", 8);
+    let bank = g.bits("bank", 3);
+    let mem = g.bits("ram_q", 4);
+    let status = g.bits("status_q", 4);
+    let rom_in = g.bits("rom_in", 4);
     let setup_end = g.count;
     g.ranges.push((
         tr!("Uçlar / bus ayırıcılar", "Pins / bus splitters"),
@@ -228,6 +268,14 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     let fim = g.and(group[2], even);
     let fin = g.and(group[3], even);
     let jin = g.and(group[3], lo[0]);
+    let src_op = g.and(group[2], lo[0]);
+    // E0..EF: RAM and I/O. E3 (WPM, program RAM) has no 4008/4009 here.
+    let e: Vec<_> = regsel.iter().map(|&s| g.and(group[14], s)).collect();
+    let io_ok = {
+        let mut v = e.clone();
+        v.remove(3);
+        g.any(&v)
+    };
     let f: Vec<_> = (0..14)
         .map(|v| {
             let low = g.eq(lo, v);
@@ -236,10 +284,10 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
         .collect();
     // Unassigned 0x01..0x0f and 0xfe/ff are not NOPs.
     let nop = g.eq(&op, 0);
-    let acc_ok = g.any(&f[..13]);
+    let acc_ok = g.any(&f[..14]);
     let supported = g.any(&[
-        nop, group[1], fim, group[3], group[4], group[5], group[6], group[7], group[8], group[9],
-        group[10], group[11], group[12], group[13], acc_ok,
+        nop, group[1], fim, src_op, group[3], group[4], group[5], group[6], group[7], group[8],
+        group[9], group[10], group[11], group[12], group[13], io_ok, acc_ok,
     ]);
     let fault = g.not(supported);
     g.mark(tr!("Komut çözücü", "Instruction decoder"), start);
@@ -266,6 +314,11 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     let neg: Vec<_> = rn.iter().map(|&x| g.not(x)).collect();
     let nc = g.not(c);
     let (sub, subcarry) = g.add(&a, &neg, nc);
+    // ADM and SBM: the same with the RAM character M in place of Rn.
+    let (adm, admc) = g.add(&a, &mem, c);
+    let nmem: Vec<_> = mem.iter().map(|&x| g.not(x)).collect();
+    let (sbm, sbmc) = g.add(&a, &nmem, nc);
+    let rdn = g.any(&e[12..16]);
     let (inc, incc) = g.add(&a, &g.constant(4, 1), g.zero);
     let (dec, decc) = g.add(&a, &g.constant(4, 15), g.zero);
     let inv: Vec<_> = a.iter().map(|&v| g.not(v)).collect();
@@ -317,6 +370,11 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
         (f[9], tcs),
         (f[11], daa),
         (f[12], kbp),
+        (e[8], sbm),
+        (e[9], mem.clone()),
+        (e[10], rom_in),
+        (e[11], adm),
+        (rdn, status),
     ] {
         an = g.select(&an, &value, sel);
     }
@@ -335,6 +393,8 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
         (f[9], g.zero),
         (f[10], g.one),
         (f[11], daac),
+        (e[8], sbmc),
+        (e[11], admc),
     ] {
         cn = g.mux(cn, value, sel);
     }
@@ -374,7 +434,7 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     // use PC after the one-byte opcode fetch (not the same at a boundary).
     let near = [next.clone(), pc2[8..].to_vec()].concat();
     let far = [next.clone(), lo.to_vec()].concat();
-    let regjump = [rp, pc1[8..].to_vec()].concat();
+    let regjump = [rp.clone(), pc1[8..].to_vec()].concat();
     let az = g.eq(&a, 0);
     let nt = g.not(test);
     let zc = g.and(lo[2], az);
@@ -407,6 +467,14 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
         ),
         start,
     );
+    // 4002 RAM: SRC sends a register pair as the address (chip, register,
+    // character), DCL picks the bank from A.
+    let start = g.count;
+    let src_next = g.select(&src, &rp, src_op);
+    let bank_next = g.select(&bank, &a[..3], f[13]);
+    let wr_status = g.any(&e[4..8]);
+    g.mark(tr!("RAM seçimi / GÇ", "RAM select / I/O"), start);
+
     let start = g.count;
     g.output("a_next", &an);
     g.output("c_next", &[cn]);
@@ -415,6 +483,19 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     g.output("stack_next", &sn);
     g.output("lookup", &lookup);
     g.output("fault", &[fault]);
+    g.output("src_next", &src_next);
+    g.output("bank_next", &bank_next);
+    g.output("ram_addr", &[src.clone(), bank.clone()].concat());
+    // Status characters: which of the four from the opcode's low bits,
+    // then the chip and register from SRC.
+    g.output(
+        "status_addr",
+        &[lo[..2].to_vec(), src[4..].to_vec(), bank.clone()].concat(),
+    );
+    g.output("ram_we", &[e[0]]);
+    g.output("status_we", &[wr_status]);
+    g.output("port_we", &[e[1]]);
+    g.output("rom_port_we", &[e[2]]);
     g.mark(tr!("Sonuç bus'ları", "Result buses"), start);
     let ranges = g.ranges;
     (g.b.build(), ranges)
@@ -496,7 +577,8 @@ pub fn project(program: &[u64]) -> Project {
         -280.0,
     );
     let mut stores = Vec::new();
-    for (i, bits) in [4, 1, 64, 12, 36].into_iter().enumerate() {
+    // A, C, R0..R15, PC, return stack, SRC address, RAM bank.
+    for (i, bits) in [4, 1, 64, 12, 36, 8, 3].into_iter().enumerate() {
         let end = put(
             &mut world,
             &mut id,
@@ -509,6 +591,56 @@ pub fn project(program: &[u64]) -> Project {
         }
         stores.push(end);
     }
+    // The 4002 RAM: data characters and status characters, as two
+    // memories; output ports as registers.
+    let ram = put(
+        &mut world,
+        &mut id,
+        Kind::Device(Device::Ram { addr: 11, data: 4 }),
+        0.0,
+        560.0,
+    );
+    let status = put(
+        &mut world,
+        &mut id,
+        Kind::Device(Device::Ram { addr: 9, data: 4 }),
+        175.0,
+        560.0,
+    );
+    let ram_port = put(
+        &mut world,
+        &mut id,
+        Kind::Device(Device::Register { bits: 4 }),
+        350.0,
+        560.0,
+    );
+    let rom_port = put(
+        &mut world,
+        &mut id,
+        Kind::Device(Device::Register { bits: 4 }),
+        525.0,
+        560.0,
+    );
+    let rom_in = put(
+        &mut world,
+        &mut id,
+        Kind::Input {
+            name: tr!("ROM_girişi", "ROM_input").into(),
+            width: 4,
+            value: 5,
+        },
+        -300.0,
+        360.0,
+    );
+    for dev in [ram, status] {
+        link(&mut world, stores[0], End::new(dev.part, 1), "A");
+        link(&mut world, clk, End::new(dev.part, 3), "");
+    }
+    for port in [ram_port, rom_port] {
+        link(&mut world, stores[0], End::new(port.part, 0), "A");
+        link(&mut world, reset, End::new(port.part, 2), "");
+        link(&mut world, clk, End::new(port.part, 3), "");
+    }
     let inputs = [
         rom,
         End::new(rom.part, 1),
@@ -519,6 +651,11 @@ pub fn project(program: &[u64]) -> Project {
         stores[3],
         stores[4],
         test,
+        stores[5],
+        stores[6],
+        ram,
+        status,
+        rom_in,
     ];
     let mut ends = Vec::new();
     let mut collapsed = Vec::new();
@@ -579,6 +716,29 @@ pub fn project(program: &[u64]) -> Project {
             name,
         );
     }
+    for (o, i, name) in [(7, 5, "SRC"), (8, 6, tr!("Banka", "Bank"))] {
+        link(
+            &mut world,
+            outputs[o].unwrap(),
+            End::new(stores[i].part, 0),
+            name,
+        );
+    }
+    let wires: [(usize, End, &str); 6] = [
+        (9, End::new(ram.part, 0), tr!("RAM adresi", "RAM address")),
+        (
+            10,
+            End::new(status.part, 0),
+            tr!("Durum adresi", "Status address"),
+        ),
+        (11, End::new(ram.part, 2), "WRM"),
+        (12, End::new(status.part, 2), "WR0…3"),
+        (13, End::new(ram_port.part, 1), "WMP"),
+        (14, End::new(rom_port.part, 1), "WRR"),
+    ];
+    for (o, to, name) in wires {
+        link(&mut world, outputs[o].unwrap(), to, name);
+    }
     link(&mut world, stores[3], End::new(rom.part, 0), "PC[12]");
     link(
         &mut world,
@@ -598,7 +758,24 @@ pub fn project(program: &[u64]) -> Project {
         }),
     });
     collapsed.push(control_module);
-    let root_members: Vec<_> = ends.iter().chain(&stores).map(|e| e.part).collect();
+    let io_members = vec![ram.part, status.part, ram_port.part, rom_port.part];
+    let io_module = id;
+    id += 1;
+    world.apply(Edit::Module {
+        id: io_module,
+        module: Some(Module {
+            name: tr!("4002 RAM ve portlar", "4002 RAM and ports").into(),
+            pos: world.corner(&io_members),
+            members: io_members.clone(),
+        }),
+    });
+    collapsed.push(io_module);
+    let root_members: Vec<_> = ends
+        .iter()
+        .chain(&stores)
+        .map(|e| e.part)
+        .chain(io_members)
+        .collect();
     let root = id;
     id += 1;
     world.apply(Edit::Module {
@@ -616,6 +793,8 @@ pub fn project(program: &[u64]) -> Project {
         (stores[3], "PC", 12),
         (rom, tr!("Komut", "Instr"), 8),
         (fault, tr!("HATA", "FAULT"), 1),
+        (ram_port, tr!("RAM_portu", "RAM_port"), 4),
+        (rom_port, tr!("ROM_portu", "ROM_port"), 4),
     ]
     .into_iter()
     .enumerate()
@@ -650,8 +829,59 @@ mod tests {
     fn eval(op: u64, next: u64, a: u64, c: u64, regs: u64, pc: u64, stack: u64) -> Vec<u64> {
         let (def, _) = control();
         let mut sim = Circuit::compile_def(&Library::new(), &def).unwrap();
-        sim.eval_values(&[op, next, 0xA5, a, c, regs, pc, stack, 1])
+        sim.eval_values(&[op, next, 0xA5, a, c, regs, pc, stack, 1, 0, 0, 0, 0, 0])
             .unwrap()
+    }
+
+    /// The I/O inputs too: src, bank, RAM character, status, ROM port in.
+    #[allow(clippy::too_many_arguments)]
+    fn eval_io(
+        op: u64,
+        a: u64,
+        c: u64,
+        regs: u64,
+        src: u64,
+        bank: u64,
+        m: u64,
+        st: u64,
+        rin: u64,
+    ) -> Vec<u64> {
+        let (def, _) = control();
+        let mut sim = Circuit::compile_def(&Library::new(), &def).unwrap();
+        sim.eval_values(&[op, 0, 0, a, c, regs, 0x10, 0, 1, src, bank, m, st, rin])
+            .unwrap()
+    }
+
+    #[test]
+    fn ram_and_io_instructions() {
+        // Outputs: 7 src_next, 8 bank_next, 9 ram_addr, 10 status_addr,
+        // 11 ram_we, 12 status_we, 13 port_we, 14 rom_port_we.
+        // SRC P1 sends R2:R3 (R2 high).
+        let e = eval_io(0x23, 0, 0, 0x0000_0000_0000_5A00, 0, 0, 0, 0, 0);
+        assert_eq!(e[7], 0xA5);
+        assert_eq!(e[3], 0x11, "one byte");
+        assert_eq!(e[6], 0, "no fault");
+        // DCL takes the bank from A.
+        assert_eq!(eval_io(0xFD, 6, 0, 0, 0, 0, 0, 0, 0)[8], 6);
+        // WRM writes A at bank:src.
+        let e = eval_io(0xE0, 9, 0, 0, 0x37, 2, 0, 0, 0);
+        assert_eq!((e[9], e[11], e[12]), (0x237, 1, 0));
+        // WR2: status character 2 of chip/register 3 in bank 2.
+        let e = eval_io(0xE6, 9, 0, 0, 0x37, 2, 0, 0, 0);
+        assert_eq!((e[10], e[12], e[11]), ((2 << 6) | (3 << 2) | 2, 1, 0));
+        // WMP and WRR write the ports.
+        assert_eq!(eval_io(0xE1, 0, 0, 0, 0, 0, 0, 0, 0)[13], 1);
+        assert_eq!(eval_io(0xE2, 0, 0, 0, 0, 0, 0, 0, 0)[14], 1);
+        // RDM, RDR, RD1 read into A; ADM and SBM do arithmetic with M.
+        assert_eq!(eval_io(0xE9, 0, 0, 0, 0, 0, 11, 0, 0)[0], 11);
+        assert_eq!(eval_io(0xEA, 0, 0, 0, 0, 0, 0, 0, 7)[0], 7);
+        assert_eq!(eval_io(0xED, 0, 0, 0, 0, 0, 0, 4, 0)[0], 4);
+        let e = eval_io(0xEB, 9, 1, 0, 0, 0, 8, 0, 0);
+        assert_eq!((e[0], e[1]), (2, 1), "9 + 8 + 1 = 18");
+        let e = eval_io(0xE8, 9, 0, 0, 0, 0, 3, 0, 0);
+        assert_eq!((e[0], e[1]), (6, 1), "9 - 3, no borrow");
+        // WPM still faults.
+        assert_eq!(eval_io(0xE3, 0, 0, 0, 0, 0, 0, 0, 0)[6], 1);
     }
 
     #[test]
@@ -689,7 +919,7 @@ mod tests {
         assert_eq!(eval(0x1C, 0x45, 0, 0, 0, 0xFF, 0)[3], 0x101);
         assert_eq!(eval(0x70, 0x34, 0, 0, 14, 0x100, 0)[3], 0x134);
         assert_eq!(eval(0x70, 0x34, 0, 0, 15, 0x100, 0)[3], 0x102);
-        for op in [0x21, 0xE0, 0xFD, 0xFE, 0xFF, 0x01] {
+        for op in [0xE3, 0xFE, 0xFF, 0x01] {
             let e = eval(op, 0, 0, 0, 0, 0x123, 0);
             assert_eq!(e[6], 1, "{op:X}");
             assert_eq!(e[3], 0x123);
@@ -740,6 +970,58 @@ mod tests {
         // JIN P1 takes the pair R2:R3 in the opcode-fetch page.
         let e = eval(0x33, 0, 0, 0, 0xBA00, 0xFF, 0);
         assert_eq!(e[3], 0x1AB);
+    }
+
+    /// RAM_DEMO through the whole wired world: RAM counts, the port shows
+    /// count + ROM input (5).
+    #[test]
+    fn ram_program_runs_in_the_world() {
+        assert_eq!(
+            crate::device::parse_words(include_str!("../../../../examples/4004/ram.hex")).unwrap(),
+            RAM_DEMO
+        );
+        let p = project(RAM_DEMO);
+        let c = crate::compile(&p.world, &Library::new());
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        let mut sim = Circuit::compile_def(&c.library_with(&Library::new()), &c.def).unwrap();
+        let clock = c
+            .inputs
+            .iter()
+            .position(|(_, s)| matches!(s, crate::InputSource::Clock { .. }))
+            .unwrap();
+        for (i, (id, _)) in c.inputs.iter().enumerate() {
+            if let Some(crate::Kind::Input { value, .. }) = p.world.part(*id).map(|x| &x.kind) {
+                sim.set_input(i, *value);
+            }
+        }
+        let port = p
+            .world
+            .parts()
+            .find(|(_, x)| {
+                matches!(&x.kind, crate::Kind::Output { name, .. } if name == tr!("RAM_portu", "RAM_port"))
+            })
+            .map(|(id, _)| id)
+            .unwrap();
+        let read = |sim: &Circuit| {
+            sim.output(
+                c.probe(p.world.wire_into(End::new(port, 0)).unwrap())
+                    .unwrap(),
+            )
+        };
+        // 1 FIM + 9 per loop (JUN counts as one instruction).
+        let mut seen = Vec::new();
+        for n in 0..(1 + 9 * 3) {
+            sim.set_input(clock, 0);
+            sim.eval().unwrap();
+            sim.set_input(clock, 1);
+            sim.eval().unwrap();
+            if n % 9 == 8 {
+                seen.push(read(&sim));
+            }
+        }
+        assert_eq!(seen, vec![6, 7, 8]);
+        let fault = sim.output(c.probe(p.watches[4]).unwrap());
+        assert_eq!(fault, 0);
     }
 
     #[test]

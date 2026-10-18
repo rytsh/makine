@@ -1,0 +1,11 @@
+; 4002 RAM: count in RAM, add the ROM input, show it on the RAM port.
+20 00   ; FIM P0, 00
+21      ; loop: SRC P0
+E9      ; RDM
+F2      ; IAC
+E0      ; WRM
+EA      ; RDR
+F1      ; CLC
+EB      ; ADM
+E1      ; WMP
+40 02   ; JUN loop

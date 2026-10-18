@@ -11,7 +11,7 @@ use makine_lang::{tr, trf};
 use makine_sim::{Behavior, Circuit, Clocked, NativeDef, Pin};
 use serde::{Deserialize, Serialize};
 
-pub const MAX_ADDR: u8 = 8;
+pub const MAX_ADDR: u8 = 12;
 pub const MAX_DATA: u8 = 16;
 pub const MAX_SCREEN_BITS: u8 = 5;
 
@@ -455,7 +455,7 @@ mod tests {
     fn clamping() {
         assert_eq!(
             Device::Ram { addr: 20, data: 0 }.clamped(),
-            Device::Ram { addr: 8, data: 1 }
+            Device::Ram { addr: MAX_ADDR, data: 1 }
         );
         let rom = Device::Rom {
             addr: 1,

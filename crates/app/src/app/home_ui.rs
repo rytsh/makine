@@ -52,17 +52,56 @@ impl App {
                 .iter()
                 .filter(|l| self.progress.solved(l.chip))
                 .count();
-            ui.horizontal(|ui| {
-                ui.label(section_name);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let col = if done == end - start {
+            let total = end - start;
+            let first = all[start..end]
+                .iter()
+                .position(|l| !self.progress.solved(l.chip))
+                .map(|k| start + k);
+            let open = first.or(Some(start)).filter(|&i| self.progress.unlocked(i));
+            let r = ui
+                .scope(|ui| {
+                    ui.horizontal(|ui| {
+                        let name = RichText::new(section_name);
+                        ui.label(if open.is_some() {
+                            name
+                        } else {
+                            name.color(theme::INK_DIM)
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let col = if done == total {
+                                theme::GOOD
+                            } else {
+                                theme::INK_DIM
+                            };
+                            ui.colored_label(col, format!("{done}/{total}"));
+                        });
+                    });
+                    let fill = if done == total {
                         theme::GOOD
                     } else {
-                        theme::INK_DIM
+                        theme::COPPER
                     };
-                    ui.colored_label(col, format!("{done}/{}", end - start));
-                });
-            });
+                    ui.add(
+                        egui::ProgressBar::new(done as f32 / total as f32)
+                            .desired_height(3.0)
+                            .fill(fill),
+                    );
+                })
+                .response
+                .interact(egui::Sense::click());
+            if let Some(i) = open {
+                let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
+                if r.clicked() {
+                    self.view = View::Editor;
+                    self.open_level(all[i]);
+                }
+            } else {
+                r.on_hover_text(tr!(
+                    "Önceki bölümleri bitirince açılır",
+                    "Opens once the earlier sections are done"
+                ));
+            }
+            ui.add_space(4.0);
             start = end;
         }
         ui.add_space(8.0);
