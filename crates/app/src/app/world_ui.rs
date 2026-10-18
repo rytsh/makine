@@ -12,11 +12,17 @@ use crate::sandbox;
 
 impl App {
     pub(super) fn open_mcs4_project(&mut self) {
+        self.open_project(makine_world::projects::mcs4::project(
+            makine_world::projects::mcs4::DEMO,
+        ));
+    }
+
+    /// Open a ready-made project as a new world, keeping the current one.
+    pub(super) fn open_project(&mut self, mut p: makine_world::projects::Project) {
         if self.session.is_some() {
             return;
         }
         self.store_world();
-        let mut p = makine_world::projects::mcs4::project(makine_world::projects::mcs4::DEMO);
         p.world.name = crate::worlds::unique_name(&p.world.name, &self.progress.worlds);
         self.switch_world(p.world);
         if let Some(w) = &mut self.world {
@@ -406,6 +412,27 @@ impl App {
                         .weak()
                         .small(),
                     );
+                    use makine_world::projects::examples::{self, Size};
+                    let mut open = None;
+                    for size in [Size::Small, Size::Medium, Size::Large] {
+                        crate::theme::section(
+                            ui,
+                            match size {
+                                Size::Small => tr!("Küçük", "Small"),
+                                Size::Medium => tr!("Orta", "Medium"),
+                                Size::Large => tr!("Büyük", "Large"),
+                            },
+                        );
+                        for e in examples::all().into_iter().filter(|e| e.size == size) {
+                            if ui.button(e.title()).on_hover_text(e.about()).clicked() {
+                                open = Some(e.build);
+                            }
+                        }
+                    }
+                    if let Some(build) = open {
+                        self.open_project(build());
+                    }
+                    crate::theme::section(ui, tr!("Çok büyük", "Very large"));
                     if ui
                         .button(tr!("4004 atölyesi aç", "Open 4004 workshop"))
                         .clicked()

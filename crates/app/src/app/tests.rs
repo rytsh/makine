@@ -543,6 +543,7 @@ mod glyph_tests {
             include_str!("truth_ui.rs"),
             include_str!("debug_ui.rs"),
             include_str!("mini_ui.rs"),
+            include_str!("../../../world/src/projects/examples.rs"),
             include_str!("../../../levels/src/mini.rs"),
             include_str!("../../../levels/src/hints.rs"),
             include_str!("home_ui.rs"),

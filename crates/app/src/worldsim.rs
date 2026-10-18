@@ -498,3 +498,183 @@ mod tests {
         assert_eq!(sim.value(a), Some(3));
     }
 }
+
+/// The example worlds do what their descriptions say.
+#[cfg(test)]
+mod example_tests {
+    use super::*;
+    use makine_world::projects::examples::all;
+    use makine_world::projects::Project;
+
+    fn open(id: &str) -> (Project, WorldSim) {
+        let e = all().into_iter().find(|e| e.id == id).unwrap();
+        ((e.build)(), WorldSim::default())
+    }
+
+    fn find(p: &Project, f: impl Fn(&Kind) -> bool) -> Vec<Id> {
+        p.world
+            .parts()
+            .filter(|(_, x)| f(&x.kind))
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    fn run(s: &mut WorldSim, w: &World, steps: u32) {
+        s.speed = steps;
+        s.run_frame(w);
+    }
+
+    #[test]
+    fn half_adder_adds() {
+        let (mut p, mut s) = open("half_adder");
+        let sw = find(&p, |k| matches!(k, Kind::Switch { .. }));
+        let outs = find(&p, |k| matches!(k, Kind::Output { .. }));
+        for id in &sw {
+            p.world.apply(makine_world::Edit::Part {
+                id: *id,
+                part: Some(makine_world::Placed {
+                    kind: Kind::Switch { on: true },
+                    pos: p.world.part(*id).unwrap().pos,
+                }),
+            });
+        }
+        run(&mut s, &p.world, 1);
+        let v: Vec<u64> = outs
+            .iter()
+            .map(|o| s.input_value(&p.world, End::new(*o, 0)).unwrap())
+            .collect();
+        assert_eq!(v, vec![0, 1], "1 + 1: sum 0, carry 1");
+    }
+
+    #[test]
+    fn counter_counts_and_adder_adds() {
+        let (p, mut s) = open("counter");
+        let reg = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::Register { .. }))
+        })[0];
+        run(&mut s, &p.world, 15 * 2 * 5 + 1);
+        assert_eq!(s.value(End::new(reg, 0)), Some(5));
+
+        let (p, mut s) = open("adder4");
+        let out = find(&p, |k| matches!(k, Kind::Output { .. }))[0];
+        run(&mut s, &p.world, 1);
+        assert_eq!(s.input_value(&p.world, End::new(out, 0)), Some(14), "5 + 9");
+    }
+
+    #[test]
+    fn traffic_light_cycles() {
+        let (p, mut s) = open("traffic");
+        let outs = find(&p, |k| matches!(k, Kind::Output { .. }));
+        let lights = |s: &WorldSim| -> Vec<u64> {
+            outs.iter()
+                .map(|o| s.input_value(&p.world, End::new(*o, 0)).unwrap())
+                .collect()
+        };
+        // Order of the outputs: red, amber, green.
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            run(&mut s, &p.world, 80);
+            seen.push(lights(&s));
+        }
+        assert_eq!(
+            seen,
+            vec![vec![1, 1, 0], vec![0, 0, 1], vec![0, 1, 0], vec![1, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn screen_line_draws_the_diagonal() {
+        let (p, mut s) = open("screen_line");
+        run(&mut s, &p.world, 4 * 32 + 4);
+        let id = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::Screen { .. }))
+        })[0];
+        let (c, name) = s.device(id).unwrap();
+        let px = makine_world::device::screen(c, &name).unwrap();
+        for i in 0..32 {
+            assert!(px[i * 32 + i], "pixel {i},{i}");
+        }
+        assert!(!px[1]);
+    }
+
+    #[test]
+    fn typewriter_stores_keys() {
+        let (p, mut s) = open("typewriter");
+        let kbd = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::Keyboard))
+        })[0];
+        let cursor = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::Register { .. }))
+        })[0];
+        run(&mut s, &p.world, 1);
+        for k in *b"hi!" {
+            s.press(kbd, k);
+            run(&mut s, &p.world, 1);
+        }
+        run(&mut s, &p.world, 40);
+        assert_eq!(s.value(End::new(cursor, 0)), Some(3));
+    }
+
+    fn set_input(p: &mut Project, name: &str, v: u64) {
+        let (id, kind) = p
+            .world
+            .parts()
+            .find(|(_, x)| matches!(&x.kind, Kind::Input { name: n, .. } if n == name))
+            .map(|(id, x)| (id, x.clone()))
+            .unwrap();
+        let Kind::Input { name, width, .. } = kind.kind else {
+            unreachable!()
+        };
+        p.world.apply(makine_world::Edit::Part {
+            id,
+            part: Some(makine_world::Placed {
+                kind: Kind::Input {
+                    name,
+                    width,
+                    value: v,
+                },
+                pos: kind.pos,
+            }),
+        });
+    }
+
+    #[test]
+    fn sr_latch_remembers() {
+        let (mut p, mut s) = open("sr_latch");
+        let lamp = find(&p, |k| matches!(k, Kind::Lamp))[0];
+        let on = |s: &WorldSim, p: &Project| s.input_value(&p.world, End::new(lamp, 0)).unwrap();
+        run(&mut s, &p.world, 2);
+        set_input(&mut p, "set", 1);
+        run(&mut s, &p.world, 2);
+        assert_eq!(on(&s, &p), 1);
+        set_input(&mut p, "set", 0);
+        run(&mut s, &p.world, 2);
+        assert_eq!(on(&s, &p), 1, "still on");
+        set_input(&mut p, "reset", 1);
+        run(&mut s, &p.world, 2);
+        set_input(&mut p, "reset", 0);
+        run(&mut s, &p.world, 2);
+        assert_eq!(on(&s, &p), 0);
+    }
+
+    #[test]
+    fn ram_bench_writes_and_reads() {
+        let (mut p, mut s) = open("ram_bench");
+        let ram = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::Ram { .. }))
+        })[0];
+        let (a, d, w) = ("adres", "veri", "yaz");
+        set_input(&mut p, a, 3);
+        set_input(&mut p, d, 77);
+        run(&mut s, &p.world, 1);
+        set_input(&mut p, w, 1);
+        run(&mut s, &p.world, 1);
+        set_input(&mut p, w, 0);
+        set_input(&mut p, a, 4);
+        run(&mut s, &p.world, 1);
+        assert_eq!(s.value(End::new(ram, 0)), Some(0));
+        set_input(&mut p, a, 3);
+        run(&mut s, &p.world, 1);
+        assert_eq!(s.value(End::new(ram, 0)), Some(77));
+    }
+}

@@ -1,4 +1,5 @@
 //! Reproducible workshop projects: real circuits, not decorative pictures.
+pub mod examples;
 pub mod mcs4;
 
 use crate::{End, Id, World};
