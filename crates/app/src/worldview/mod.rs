@@ -113,6 +113,8 @@ pub struct WorldView {
     /// The world as it was when a move started, so the whole move is one
     /// edit (one undo, one network message).
     moving: Option<Vec<(Id, Pos)>>,
+    /// Modules moved with them (all their parts are), as they were.
+    moving_modules: Vec<(Id, makine_world::Module)>,
     /// Centre the camera on the world at the next frame.
     fit: bool,
     /// The board's rect and world origin on screen in the last frame.
@@ -202,6 +204,7 @@ impl WorldView {
             scope_binary: false,
             drag: Drag::None,
             moving: None,
+            moving_modules: Vec::new(),
             fit: true,
             origin: Pos2::ZERO,
             board: Rect::NOTHING,
@@ -553,14 +556,16 @@ impl WorldView {
         }
         for (name, members) in &clip.modules {
             let id = scratch.new_id();
+            let members: Vec<Id> = members
+                .iter()
+                .filter_map(|i| ids.get(*i).copied())
+                .collect();
             let e = Edit::Module {
                 id,
                 module: Some(makine_world::Module {
                     name: name.clone(),
-                    members: members
-                        .iter()
-                        .filter_map(|i| ids.get(*i).copied())
-                        .collect(),
+                    pos: scratch.corner(&members),
+                    members,
                 }),
             };
             scratch.apply(e.clone());
@@ -973,24 +978,14 @@ impl WorldView {
                     .module(id)
                     .map(|m| m.members.iter().copied().collect())
                     .unwrap_or_default();
-                self.moving = Some(
-                    self.selected
-                        .iter()
-                        .filter_map(|id| Some((*id, self.world.part(*id)?.pos)))
-                        .collect(),
-                );
+                self.start_move();
                 Drag::Parts
             } else if let Some(id) = at.part.filter(|_| !shift) {
                 self.selected_module = None;
                 if !self.selected.contains(&id) {
                     self.selected = [id].into();
                 }
-                self.moving = Some(
-                    self.selected
-                        .iter()
-                        .filter_map(|id| Some((*id, self.world.part(*id)?.pos)))
-                        .collect(),
-                );
+                self.start_move();
                 Drag::Parts
             } else if shift {
                 Drag::Select(l.to_world(press.unwrap_or_default()))
@@ -1010,6 +1005,15 @@ impl WorldView {
                         if let Some(mut p) = self.world.part(id).cloned() {
                             p.pos = Pos::new(p.pos.x + d.x / z, p.pos.y + d.y / z);
                             self.world.apply(Edit::Part { id, part: Some(p) });
+                        }
+                    }
+                    for (id, _) in self.moving_modules.clone() {
+                        if let Some(mut m) = self.world.module(id).cloned() {
+                            m.pos = m.pos.map(|p| Pos::new(p.x + d.x / z, p.y + d.y / z));
+                            self.world.apply(Edit::Module {
+                                id,
+                                module: Some(m),
+                            });
                         }
                     }
                 }
@@ -1066,6 +1070,25 @@ impl WorldView {
         }
     }
 
+    /// Start moving the selected parts, and the modules all of whose
+    /// parts are selected.
+    fn start_move(&mut self) {
+        self.moving = Some(
+            self.selected
+                .iter()
+                .filter_map(|id| Some((*id, self.world.part(*id)?.pos)))
+                .collect(),
+        );
+        self.moving_modules = self
+            .world
+            .modules()
+            .filter(|(_, m)| {
+                m.pos.is_some() && m.members.iter().all(|id| self.selected.contains(id))
+            })
+            .map(|(id, m)| (id, m.clone()))
+            .collect();
+    }
+
     /// End a move: put the parts back where they were and move them in one
     /// edit, snapped to whole units.
     fn finish_move(&mut self) {
@@ -1081,6 +1104,32 @@ impl WorldView {
             .unwrap_or_default();
         let moved: BTreeSet<_> = start.iter().map(|(id, _)| *id).collect();
         let mut edits = Vec::new();
+        // A module without a place of its own (from an older save) sits at
+        // its parts' corner: pin it where it was, so moving some of its
+        // insides does not move it.
+        let before: std::collections::HashMap<Id, Pos> = start.iter().copied().collect();
+        for (id, m) in self.world.modules() {
+            let inside = m.members.iter().filter(|p| moved.contains(p)).count();
+            if m.pos.is_some() || inside == 0 || inside == m.members.len() {
+                continue;
+            }
+            let corner = m
+                .members
+                .iter()
+                .filter_map(|p| {
+                    before
+                        .get(p)
+                        .copied()
+                        .or(self.world.part(*p).map(|p| p.pos))
+                })
+                .reduce(|a, b| Pos::new(a.x.min(b.x), a.y.min(b.y)));
+            let mut m = m.clone();
+            m.pos = corner;
+            edits.push(Edit::Module {
+                id,
+                module: Some(m),
+            });
+        }
         for (id, from) in start {
             let Some(mut p) = self.world.part(id).cloned() else {
                 continue;
@@ -1094,6 +1143,23 @@ impl WorldView {
             if to != from {
                 p.pos = to;
                 edits.push(Edit::Part { id, part: Some(p) });
+            }
+        }
+        for (id, from) in std::mem::take(&mut self.moving_modules) {
+            let Some(mut m) = self.world.module(id).cloned() else {
+                continue;
+            };
+            let to = m.pos.map(|p| Pos::new(p.x.round(), p.y.round()));
+            self.world.apply(Edit::Module {
+                id,
+                module: Some(from.clone()),
+            });
+            if to != from.pos {
+                m.pos = to;
+                edits.push(Edit::Module {
+                    id,
+                    module: Some(m),
+                });
             }
         }
         // Routes entirely inside the moved group move with their parts.

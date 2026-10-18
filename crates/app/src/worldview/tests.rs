@@ -491,6 +491,54 @@ fn entering_a_module_shows_only_its_insides_and_ports() {
 }
 
 #[test]
+fn moving_parts_inside_does_not_move_the_closed_module() {
+    let mut v = view(World::new("still"));
+    let a = v.add(Kind::Gate(Gate::Not), pos2(100.0, 100.0));
+    let b = v.add(Kind::Gate(Gate::Not), pos2(300.0, 100.0));
+    v.selected = [a, b].into();
+    let m = v.group_selected("Blok").unwrap();
+    let rect = |v: &WorldView| {
+        let l = v.layout(Pos2::ZERO);
+        l.modules.iter().find(|s| s.id == m).unwrap().rect
+    };
+    let before = rect(&v);
+
+    // Rearranging inside, as when looking into the module.
+    v.enter_module(m);
+    v.selected = [a].into();
+    v.start_move();
+    v.world.apply(Edit::Part {
+        id: a,
+        part: Some(Placed {
+            kind: Kind::Gate(Gate::Not),
+            pos: Pos::new(-400.0, -300.0),
+        }),
+    });
+    v.finish_move();
+    v.leave_to(0);
+    assert_eq!(rect(&v), before);
+
+    // Moving the whole module moves it.
+    v.selected = [a, b].into();
+    v.start_move();
+    for id in [a, b] {
+        let mut p = v.world.part(id).unwrap().clone();
+        p.pos = Pos::new(p.pos.x + 50.0, p.pos.y);
+        v.world.apply(Edit::Part { id, part: Some(p) });
+    }
+    let mut module = v.world.module(m).unwrap().clone();
+    module.pos = module.pos.map(|p| Pos::new(p.x + 50.0, p.y));
+    v.world.apply(Edit::Module {
+        id: m,
+        module: Some(module),
+    });
+    v.finish_move();
+    assert_eq!(rect(&v).min.x, before.min.x + 50.0);
+    v.undo();
+    assert_eq!(rect(&v), before);
+}
+
+#[test]
 fn collapsed_fanout_is_one_pin_and_reconnects_all_members() {
     let mut v = view(World::new("fanout"));
     let a = v.add(Kind::Switch { on: false }, pos2(20.0, 100.0));

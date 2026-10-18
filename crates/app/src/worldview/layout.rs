@@ -296,7 +296,8 @@ impl Layout {
                 .collect();
             let rect = if closed {
                 let rows = inputs.len().max(outputs.len()).max(1);
-                Rect::from_min_size(bounds.min, vec2(280.0, 38.0 + rows as f32 * 24.0))
+                let at = m.pos.map_or(bounds.min, |p| pos2(p.x, p.y));
+                Rect::from_min_size(at, vec2(280.0, 38.0 + rows as f32 * 24.0))
             } else {
                 let mut r = bounds.expand(26.0);
                 r.min.y -= 30.0;

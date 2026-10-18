@@ -39,6 +39,7 @@ impl WorldView {
             id,
             module: Some(Module {
                 name: name.trim().into(),
+                pos: self.world.corner(&members),
                 members,
             }),
         });

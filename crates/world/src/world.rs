@@ -60,6 +60,10 @@ pub struct End {
 pub struct Module {
     pub name: String,
     pub members: Vec<Id>,
+    /// Where the module is drawn when closed. It stays put while its
+    /// insides are rearranged (none: at its members' top-left corner).
+    #[serde(default)]
+    pub pos: Option<Pos>,
 }
 
 /// Presentation of a wire, independent of its electrical connection.
@@ -199,6 +203,13 @@ impl World {
 
     pub fn module(&self, id: Id) -> Option<&Module> {
         self.modules.get(&id)
+    }
+
+    /// Top-left corner of parts `ids` (where a new module over them goes).
+    pub fn corner(&self, ids: &[Id]) -> Option<Pos> {
+        ids.iter()
+            .filter_map(|id| self.part(*id).map(|p| p.pos))
+            .reduce(|a, b| Pos::new(a.x.min(b.x), a.y.min(b.y)))
     }
 
     pub fn wire_style(&self, to: End) -> Option<&WireStyle> {
@@ -412,10 +423,11 @@ impl World {
             m.members.dedup();
             m
         });
-        if module
-            .as_ref()
-            .is_some_and(|m| m.name.trim().is_empty() || m.members.len() > 100_000)
-        {
+        if module.as_ref().is_some_and(|m| {
+            m.name.trim().is_empty()
+                || m.members.len() > 100_000
+                || m.pos.is_some_and(|p| !p.in_bounds())
+        }) {
             return;
         }
         let old = match &module {
@@ -646,6 +658,7 @@ mod tests {
                 module: Some(Module {
                     name: "ALU".into(),
                     members: vec![a],
+                    pos: None,
                 }),
             },
             Edit::Style {

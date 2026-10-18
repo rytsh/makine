@@ -512,6 +512,7 @@ pub fn project(program: &[u64]) -> Project {
             id: module,
             module: Some(Module {
                 name: (*name).into(),
+                pos: world.corner(&members),
                 members,
             }),
         });
@@ -556,6 +557,7 @@ pub fn project(program: &[u64]) -> Project {
         id: control_module,
         module: Some(Module {
             name: "Denetim ve veri yolu".into(),
+            pos: world.corner(&ends.iter().map(|e| e.part).collect::<Vec<_>>()),
             members: ends.iter().map(|e| e.part).collect(),
         }),
     });
@@ -567,6 +569,7 @@ pub fn project(program: &[u64]) -> Project {
         id: root,
         module: Some(Module {
             name: "4004 aritmetik / kontrol".into(),
+            pos: world.corner(&root_members),
             members: root_members,
         }),
     });

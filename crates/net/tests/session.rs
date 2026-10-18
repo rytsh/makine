@@ -134,6 +134,7 @@ fn players_converge() {
         module: Some(makine_world::Module {
             name: "ALU".into(),
             members: vec![1],
+            pos: None,
         }),
     });
     b.edit(Edit::Style {
