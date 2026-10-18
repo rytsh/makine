@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo.png" width="128" alt="makine logosu"></p>
+
 # makine
 
 *[English](README.en.md)*

@@ -22,5 +22,8 @@ makine-pack = { path = "../pack" }
 makine-world = { path = "../world" }
 makine-net = { path = "../net" }
 
+[build-dependencies]
+embed-resource = "3"
+
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot"] }

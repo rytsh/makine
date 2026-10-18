@@ -90,6 +90,21 @@ mod editor {
                     .unwrap()
                     .save(format!("{dir}/makine-solution.png"))
                     .unwrap();
+                app.borrow_mut().solution = None;
+                {
+                    let d = std::env::temp_dir().join("makine-shot-profiles");
+                    let _ = std::fs::remove_dir_all(&d);
+                    let mut list = crate::profiles::Profiles::load(&d);
+                    list.add("Ayşe", &Progress::default()).unwrap();
+                    app.borrow_mut().profiles = Some(list);
+                }
+                app.borrow_mut().go_home();
+                harness.run_steps(3);
+                harness
+                    .render()
+                    .unwrap()
+                    .save(format!("{dir}/makine-home.png"))
+                    .unwrap();
             }
         }
 
@@ -464,6 +479,8 @@ mod glyph_tests {
             include_str!("../worldview/scope.rs"),
             include_str!("../worldview/routing.rs"),
             include_str!("solution_ui.rs"),
+            include_str!("home_ui.rs"),
+            include_str!("../profiles.rs"),
             include_str!("../../../levels/src/cost.rs"),
             include_str!("../worldsim.rs"),
             include_str!("../session.rs"),
@@ -942,7 +959,41 @@ mod sandbox_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// Changing pins in the panel applies them to the chip.
+    /// Profiles keep their own progress; switching saves the one left.
+    #[test]
+    fn profiles_switch_reset_and_paste() {
+        let dir = std::env::temp_dir().join(format!("makine-profiles-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let list = crate::profiles::Profiles::load(&dir);
+        let mut app = App::with_profiles(Progress::default(), Some(list));
+        app.progress
+            .solutions
+            .insert("Not".into(), reference("Not"));
+        app.save();
+        app.go_home();
+        assert!(app.view == View::Home);
+
+        app.add_profile("İkinci", Progress::default());
+        assert_eq!(app.profiles.as_ref().unwrap().current().name, "İkinci");
+        assert!(!app.progress.solved("Not"));
+        assert!(app.view == View::Home);
+
+        // Paste the first profile's progress over this one.
+        app.home.paste = crate::profiles::export(&app.profiles.as_ref().unwrap().progress(0));
+        app.confirmed(home_ui::Confirm::Replace);
+        assert!(app.progress.solved("Not"));
+        app.progress.symbols = false;
+        app.confirmed(home_ui::Confirm::Reset);
+        assert!(!app.progress.solved("Not"));
+        assert!(!app.progress.symbols, "settings survive a reset");
+
+        app.switch_profile(0);
+        assert!(app.progress.solved("Not"));
+        let reopened = crate::profiles::Profiles::load(&dir);
+        assert_eq!(reopened.current, 0);
+        assert!(!reopened.progress(1).solved("Not"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
     #[test]
     fn edit_pins() {
         let app = app_with_levels();

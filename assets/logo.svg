@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- makine: a NAND gate on a chip. Board green, copper pins, amber signal. -->
+  <g stroke="#d68c4a" stroke-width="10" stroke-linecap="round">
+    <line x1="76" y1="28" x2="76" y2="8"/><line x1="128" y1="28" x2="128" y2="8"/><line x1="180" y1="28" x2="180" y2="8"/>
+    <line x1="76" y1="228" x2="76" y2="248"/><line x1="128" y1="228" x2="128" y2="248"/><line x1="180" y1="228" x2="180" y2="248"/>
+  </g>
+  <rect x="20" y="28" width="216" height="200" rx="26" fill="#0e1e18" stroke="#d68c4a" stroke-width="8"/>
+  <circle cx="46" cy="54" r="7" fill="#d68c4a"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="34" y1="104" x2="78" y2="104" stroke="#ffbe54" stroke-width="10"/>
+    <line x1="34" y1="152" x2="78" y2="152" stroke="#ffbe54" stroke-width="10"/>
+    <path d="M78 76 H118 A52 52 0 0 1 118 180 H78 Z" fill="#1e2824" stroke="#e6e8de" stroke-width="10"/>
+    <circle cx="183" cy="128" r="11" stroke="#e6e8de" stroke-width="9"/>
+    <line x1="194" y1="128" x2="224" y2="128" stroke="#6eb6e6" stroke-width="10"/>
+  </g>
+</svg>

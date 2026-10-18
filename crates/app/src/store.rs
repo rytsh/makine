@@ -119,8 +119,9 @@ impl Progress {
     }
 }
 
-pub fn default_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "makine").map(|d| d.data_dir().join("progress.json"))
+/// Where progress and profiles are saved.
+pub fn data_dir() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "makine").map(|d| d.data_dir().to_path_buf())
 }
 
 #[cfg(test)]

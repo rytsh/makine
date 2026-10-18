@@ -14,6 +14,7 @@ use crate::store::Progress;
 use crate::wiki::{self, Wiki};
 
 mod computer_ui;
+mod home_ui;
 mod sandbox_ui;
 mod solution_ui;
 #[cfg(test)]
@@ -52,6 +53,8 @@ enum View {
     Wiki,
     /// The block world, seen from above layer by layer.
     World,
+    /// The home page: progress and profiles.
+    Home,
 }
 
 pub struct App {
@@ -103,6 +106,9 @@ pub struct App {
     /// The example solution, when open instead of the player's design.
     solution: Option<solution_ui::Solution>,
     reveal: solution_ui::Reveal,
+    /// Players on this computer; saving goes to the current one's file.
+    profiles: Option<crate::profiles::Profiles>,
+    home: home_ui::Home,
 }
 
 enum TestResult {
@@ -121,6 +127,14 @@ enum TestResult {
 }
 
 impl App {
+    /// The app for the current profile in `profiles`, saving to its file.
+    pub fn with_profiles(progress: Progress, profiles: Option<crate::profiles::Profiles>) -> Self {
+        let path = profiles.as_ref().map(|p| p.current_path());
+        let mut app = Self::new(progress, path);
+        app.profiles = profiles;
+        app
+    }
+
     pub fn new(progress: Progress, save_path: Option<PathBuf>) -> Self {
         let first_open = levels()
             .iter()
@@ -162,6 +176,8 @@ impl App {
             cost: None,
             solution: None,
             reveal: Default::default(),
+            profiles: None,
+            home: Default::default(),
         };
         app.open_level(first_open);
         app
@@ -237,6 +253,9 @@ impl App {
 
     fn save(&mut self) {
         self.unsaved_since = None;
+        if let Some(p) = &self.profiles {
+            self.save_path = Some(p.current_path());
+        }
         let Some(path) = &self.save_path else { return };
         if let Err(e) = self.progress.save(path) {
             self.status = Some(format!("Kaydedilemedi: {e}"));
@@ -287,8 +306,35 @@ impl App {
     }
 
     fn levels_panel(&mut self, ui: &mut Ui) {
-        ui.heading("makine");
-        ui.label(RichText::new("NAND'den bilgisayara").weak());
+        let home = ui
+            .horizontal(|ui| {
+                ui.add(
+                    egui::Image::new(home_ui::logo())
+                        .fit_to_exact_size(egui::vec2(30.0, 30.0))
+                        .sense(egui::Sense::click()),
+                )
+                .clicked()
+                    | ui.add(
+                        egui::Label::new(RichText::new("makine").heading())
+                            .sense(egui::Sense::click()),
+                    )
+                    .clicked()
+            })
+            .inner;
+        let profile = self
+            .profiles
+            .as_ref()
+            .map(|p| format!(" · {}", p.current().name))
+            .unwrap_or_default();
+        let sub = ui
+            .add(
+                egui::Label::new(RichText::new(format!("NAND'den bilgisayara{profile}")).weak())
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_text("Ana sayfa: ilerleme ve profiller");
+        if home || sub.clicked() {
+            self.go_home();
+        }
         ui.separator();
         let mut open = None;
         let all = levels();
@@ -698,6 +744,7 @@ impl App {
                     (View::Computer | View::Play, _) => self.computer_controls(ui),
                     (View::Wiki, _) => self.wiki.contents(ui),
                     (View::World, _) => self.world_panel(ui),
+                    (View::Home, _) => self.home_panel(ui),
                 });
             });
         if let Some(status) = self.status.clone() {
@@ -712,6 +759,10 @@ impl App {
         }
         if self.view == View::Computer {
             egui::CentralPanel::default().show(ui, |ui| self.computer_view(ui));
+            return;
+        }
+        if self.view == View::Home {
+            egui::CentralPanel::default().show(ui, |ui| self.home_view(ui));
             return;
         }
         if self.view == View::World {
