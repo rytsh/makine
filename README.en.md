@@ -106,6 +106,9 @@ The interface is in Turkish. The basics:
   **"Kapı sembolleri"** checkbox switches back to labelled boxes.
 - **F11** toggles full screen (as does the **"Tam ekran"** checkbox; the setting is
   remembered).
+- Click parts to select them (Shift adds, Shift+drag draws a box); selected parts move
+  together. **Delete** removes, **Ctrl+C / Ctrl+V / Ctrl+D** copy, paste and duplicate;
+  **Ctrl+Z / Ctrl+Y** undo and redo.
 - **"Test et"** checks your chip. Once it passes, the chip becomes a part you can use
   in later levels.
 

@@ -83,6 +83,9 @@ Redistributable kurulu olmayan makinelerde de çalışır.
   **Kapı sembolleri** kutusuyla kutu görünümüne dönülebilir.
 - **F11** pencereyi tam ekran yapar (soldaki **Tam ekran** kutusu da aynı işi görür ve
   ayar hatırlanır).
+- Parçaya tıklayarak seç (Shift ile ekle, Shift+sürükle ile kutu çiz); seçili parçalar
+  birlikte taşınır. **Delete** siler, **Ctrl+C / Ctrl+V / Ctrl+D** kopyalar, yapıştırır,
+  çoğaltır; **Ctrl+Z / Ctrl+Y** geri alır ve yineler.
 - **Test et** çipini kontrol eder. Geçersen çip sonraki seviyelerde parça olarak açılır.
 
 ## Dünya ve işlemci atölyesi
