@@ -19,9 +19,11 @@ jobs:
         include:
           - os: windows-latest
             exe: makine.exe
+            relay: makine-relay.exe
             archive: makine-windows-x64.zip
           - os: ubuntu-latest
             exe: makine
+            relay: makine-relay
             archive: makine-linux-x64.zip
     runs-on: ${{ matrix.os }}
     steps:
@@ -37,7 +39,9 @@ jobs:
         run: cargo test --release
 
       - name: Build
-        run: cargo build --release -p makine
+        run: |
+          cargo build --release -p makine
+          cargo build --release -p makine-net --bin makine-relay
 
       # Doom ships as a separate file next to the executable; the app finds
       # it there. LLVM (clang, ld.lld) is preinstalled on both runners.
@@ -53,7 +57,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory dist | Out-Null
-          Copy-Item target/release/${{ matrix.exe }}, examples/doom/build/doom.elf, README.md, README.en.md, LICENSE, crates/app/fonts/LICENSE-DejaVu.txt dist/
+          Copy-Item target/release/${{ matrix.exe }}, target/release/${{ matrix.relay }}, examples/doom/build/doom.elf, README.md, README.en.md, LICENSE, crates/app/fonts/LICENSE-DejaVu.txt dist/
           Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive }}
 
       - uses: actions/upload-artifact@v4

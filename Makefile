@@ -45,6 +45,7 @@ windows: ## Build makine.exe for Windows (needs cargo-xwin)
 	@command -v cargo-xwin >/dev/null || { \
 		echo "cargo-xwin bulunamadı: cargo install cargo-xwin"; exit 1; }
 	$(CARGO) xwin build --release -p makine --target $(WIN_TARGET)
+	$(CARGO) xwin build --release -p makine-net --bin makine-relay --target $(WIN_TARGET)
 	@echo "-> $(WIN_EXE)"
 
 .PHONY: doom
@@ -66,11 +67,11 @@ diagrams: ## Redraw the wiki's diagrams (docs/diagrams/make.py; needs resvg)
 
 .PHONY: dist-windows
 dist-windows: windows doom ## Zip makine.exe + Doom -> dist/makine-windows-x64.zip
-	$(call package,makine-windows-x64,$(WIN_EXE))
+	$(call package,makine-windows-x64,$(WIN_EXE) $(dir $(WIN_EXE))makine-relay.exe)
 
 .PHONY: dist-linux
-dist-linux: build doom ## Zip makine + Doom -> dist/makine-linux-x64.zip
-	$(call package,makine-linux-x64,target/release/makine)
+dist-linux: build relay doom ## Zip makine + Doom -> dist/makine-linux-x64.zip
+	$(call package,makine-linux-x64,target/release/makine target/release/makine-relay)
 
 .PHONY: dist
 dist: dist-linux dist-windows ## Both zips
