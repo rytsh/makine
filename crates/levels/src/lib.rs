@@ -101,8 +101,14 @@ pub enum CheckError {
 impl std::fmt::Display for CheckError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CheckError::WrongPins => write!(f, "çipin giriş/çıkışları seviyeyle uyuşmuyor"),
-            CheckError::ForbiddenPart(p) => write!(f, "{p} bu seviyede henüz kullanılamaz"),
+            CheckError::WrongPins => f.write_str(makine_lang::tr!(
+                "çipin giriş/çıkışları seviyeyle uyuşmuyor",
+                "the chip's inputs/outputs do not match the level"
+            )),
+            CheckError::ForbiddenPart(p) => f.write_str(&makine_lang::trf!(
+                "{p} bu seviyede henüz kullanılamaz",
+                "{p} cannot be used in this level yet"
+            )),
             CheckError::Compile(e) => write!(f, "{e}"),
         }
     }
@@ -148,9 +154,11 @@ pub fn levels() -> &'static [&'static Level] {
 }
 
 pub mod cost;
-mod en;
 pub mod cpu;
+pub mod depth;
+mod en;
 pub mod fast;
+pub mod hints;
 pub mod reference;
 mod reference_cpu;
 pub mod workshop;

@@ -2,6 +2,7 @@
 //! chip files.
 
 use egui::{RichText, Ui};
+use makine_lang::{tr, trf};
 
 use super::{App, Target, View};
 use crate::sandbox::{self, PinEditor};
@@ -16,58 +17,64 @@ impl App {
             _ => None,
         };
         let mut open = None;
-        egui::CollapsingHeader::new(RichText::new(format!("🔧 Serbest çipler  ({n})")).strong())
-            .id_salt("sandbox")
-            .default_open(editing.is_some())
-            .show(ui, |ui| {
-                ui.label(
-                    RichText::new(
-                        "Seviye olmadan kendi çiplerini tasarla, paylaş, birbirinde kullan.",
-                    )
-                    .weak()
-                    .small(),
-                );
-                for name in self.progress.sandbox.chips.keys() {
-                    let selected = editing.as_deref() == Some(name.as_str());
-                    if ui
-                        .selectable_label(selected, format!("★  {name}"))
-                        .clicked()
-                        && !selected
-                    {
-                        open = Some(name.clone());
-                    }
+        egui::CollapsingHeader::new(
+            RichText::new(trf!("🔧 Serbest çipler  ({n})", "🔧 Free chips  ({n})")).strong(),
+        )
+        .id_salt("sandbox")
+        .default_open(editing.is_some())
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(tr!(
+                    "Seviye olmadan kendi çiplerini tasarla, paylaş, birbirinde kullan.",
+                    "Design your own chips without levels, share them, use them in each other."
+                ))
+                .weak()
+                .small(),
+            );
+            for name in self.progress.sandbox.chips.keys() {
+                let selected = editing.as_deref() == Some(name.as_str());
+                if ui
+                    .selectable_label(selected, format!("★  {name}"))
+                    .clicked()
+                    && !selected
+                {
+                    open = Some(name.clone());
                 }
-                ui.horizontal(|ui| {
-                    let l = ui.label("Yeni:").id;
-                    let r = ui
-                        .add(
-                            egui::TextEdit::singleline(&mut self.new_chip_name)
-                                .hint_text("çip adı")
-                                .desired_width(100.0),
-                        )
-                        .labelled_by(l);
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.button("+ Oluştur").clicked() || enter {
-                        let name = self.new_chip_name.trim().to_string();
-                        match sandbox::check_name(&name, &self.lib, &self.progress.sandbox, None) {
-                            Ok(()) => {
-                                self.progress
-                                    .sandbox
-                                    .chips
-                                    .insert(name.clone(), sandbox::new_chip(&name));
-                                self.new_chip_name.clear();
-                                self.refresh_library();
-                                self.save();
-                                open = Some(name);
-                            }
-                            Err(e) => self.status = Some(e),
+            }
+            ui.horizontal(|ui| {
+                let l = ui.label(tr!("Yeni:", "New:")).id;
+                let r = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.new_chip_name)
+                            .hint_text(tr!("çip adı", "chip name"))
+                            .desired_width(100.0),
+                    )
+                    .labelled_by(l);
+                let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button(tr!("+ Oluştur", "+ Create")).clicked() || enter {
+                    let name = self.new_chip_name.trim().to_string();
+                    match sandbox::check_name(&name, &self.lib, &self.progress.sandbox, None) {
+                        Ok(()) => {
+                            self.progress
+                                .sandbox
+                                .chips
+                                .insert(name.clone(), sandbox::new_chip(&name));
+                            self.new_chip_name.clear();
+                            self.refresh_library();
+                            self.save();
+                            open = Some(name);
                         }
+                        Err(e) => self.status = Some(e),
                     }
-                });
-                if ui.button("📥  Çip dosyası aç…").clicked() {
-                    self.import_package();
                 }
             });
+            if ui
+                .button(tr!("📥  Çip dosyası aç…", "📥  Open chip file…"))
+                .clicked()
+            {
+                self.import_package();
+            }
+        });
         if let Some(name) = open {
             self.open_free(name);
         }
@@ -75,7 +82,7 @@ impl App {
 
     pub(super) fn import_package(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("makine çipi", &[sandbox::EXT])
+            .add_filter(tr!("makine çipi", "makine chip"), &[sandbox::EXT])
             .pick_file()
         else {
             return;
@@ -87,7 +94,7 @@ impl App {
             Ok(name) => {
                 self.refresh_library();
                 self.save();
-                self.status = Some(format!("'{name}' eklendi."));
+                self.status = Some(trf!("'{name}' eklendi.", "'{name}' added."));
                 self.open_free(name);
             }
             Err(e) => self.status = Some(e),
@@ -103,14 +110,14 @@ impl App {
             }
         };
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("makine çipi", &[sandbox::EXT])
+            .add_filter(tr!("makine çipi", "makine chip"), &[sandbox::EXT])
             .set_file_name(format!("{name}.{}", sandbox::EXT))
             .save_file()
         else {
             return;
         };
         self.status = Some(match std::fs::write(&path, package.to_json()) {
-            Ok(()) => format!("Kaydedildi: {}", path.display()),
+            Ok(()) => trf!("Kaydedildi: {}", "Saved: {}", path.display()),
             Err(e) => format!("{}: {e}", path.display()),
         });
     }
@@ -121,15 +128,21 @@ impl App {
             return;
         };
         ui.heading(format!("★ {name}"));
-        ui.label(RichText::new("Serbest çip: test yok, kural yok.").weak());
+        ui.label(
+            RichText::new(tr!(
+                "Serbest çip: test yok, kural yok.",
+                "Free chip: no test, no rules."
+            ))
+            .weak(),
+        );
         ui.add_space(6.0);
 
         // Rename.
         ui.horizontal(|ui| {
-            let l = ui.label("Ad").id;
+            let l = ui.label(tr!("Ad", "Name")).id;
             ui.add(egui::TextEdit::singleline(&mut self.rename_to).desired_width(140.0))
                 .labelled_by(l);
-            if ui.button("Değiştir").clicked() && self.rename_to.trim() != name {
+            if ui.button(tr!("Değiştir", "Rename")).clicked() && self.rename_to.trim() != name {
                 let to = self.rename_to.trim().to_string();
                 match sandbox::check_name(&to, &self.lib, &self.progress.sandbox, None) {
                     Ok(()) => {
@@ -146,7 +159,7 @@ impl App {
 
         // Pins.
         ui.add_space(6.0);
-        ui.label(RichText::new("Uçlar").strong());
+        ui.label(RichText::new(tr!("Uçlar", "Pins")).strong());
         let def = self.design().def.clone();
         let editor = self.pin_editor.get_or_insert_with(|| PinEditor::new(&def));
         if let Some((ins, outs)) = editor.show(ui) {
@@ -167,22 +180,26 @@ impl App {
             }
             Ok(sim) => {
                 ui.label(
-                    RichText::new(format!(
+                    RichText::new(trf!(
                         "{} NAND kapısı + {} hızlı model",
+                        "{} NAND gates + {} fast models",
                         sim.gate_count(),
                         sim.native_count()
                     ))
                     .weak(),
                 );
                 if self.oscillating {
-                    ui.colored_label(crate::theme::BAD, "Devre salınıyor.");
+                    ui.colored_label(
+                        crate::theme::BAD,
+                        tr!("Devre salınıyor.", "The circuit oscillates."),
+                    );
                 }
             }
             _ => {}
         }
         self.bus_inputs(ui);
         ui.horizontal(|ui| {
-            if ui.button("Durumu sıfırla").clicked() {
+            if ui.button(tr!("Durumu sıfırla", "Reset state")).clicked() {
                 if let Ok(sim) = &mut self.sim {
                     sim.reset();
                 }
@@ -192,26 +209,41 @@ impl App {
 
         // Sharing and deleting.
         ui.separator();
-        ui.label(RichText::new("Paylaş").strong());
+        ui.label(RichText::new(tr!("Paylaş", "Share")).strong());
         ui.label(
-            RichText::new(
+            RichText::new(tr!(
                 "Çipi, kullandığı diğer serbest çiplerle birlikte tek bir .makine dosyası \
                  olarak kaydet. Başkası 'Çip dosyası aç' ile ekleyebilir.",
-            )
+                "Save the chip, with the other free chips it uses, as one .makine file. \
+                 Someone else can add it with 'Open chip file'."
+            ))
             .weak()
             .small(),
         );
-        if ui.button("📤  Çip dosyası olarak kaydet…").clicked() {
+        if ui
+            .button(tr!(
+                "📤  Çip dosyası olarak kaydet…",
+                "📤  Save as chip file…"
+            ))
+            .clicked()
+        {
             self.export_package(&name);
         }
         ui.add_space(10.0);
         let users = self.progress.sandbox.users_of(&name);
         let can_delete = users.is_empty();
-        let r = ui.add_enabled(can_delete, egui::Button::new("🗑  Çipi sil"));
+        let r = ui.add_enabled(
+            can_delete,
+            egui::Button::new(tr!("🗑  Çipi sil", "🗑  Delete chip")),
+        );
         let r = if can_delete {
             r
         } else {
-            r.on_disabled_hover_text(format!("Önce şu çiplerden çıkar: {}", users.join(", ")))
+            r.on_disabled_hover_text(trf!(
+                "Önce şu çiplerden çıkar: {}",
+                "Remove it from these chips first: {}",
+                users.join(", ")
+            ))
         };
         if r.clicked() {
             self.progress.sandbox.chips.remove(&name);

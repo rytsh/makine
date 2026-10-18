@@ -674,14 +674,20 @@ impl Canvas {
                 .unwrap_or(MenuTarget::None);
             match target {
                 MenuTarget::Wire(wi) if wi < design.def.wires.len() => {
-                    if ui.button("✂ Kabloyu kes").clicked() {
+                    if ui
+                        .button(makine_lang::tr!("✂ Kabloyu kes", "✂ Cut wire"))
+                        .clicked()
+                    {
                         design.def.wires.remove(wi);
                         result.changed = true;
                         ui.close();
                     }
                 }
                 MenuTarget::Sink(sink) => {
-                    if ui.button("✂ Kabloyu kes").clicked() {
+                    if ui
+                        .button(makine_lang::tr!("✂ Kabloyu kes", "✂ Cut wire"))
+                        .clicked()
+                    {
                         design.def.wires.retain(|w| w.to != sink);
                         result.changed = true;
                         ui.close();
@@ -690,14 +696,23 @@ impl Canvas {
                 MenuTarget::Part(i) if i < design.def.parts.len() => {
                     let n = self.selected.len();
                     if n > 1 && self.selected.contains(&i) {
-                        if ui.button(format!("🗑 Seçili {n} parçayı sil")).clicked() {
+                        if ui
+                            .button(makine_lang::trf!(
+                                "🗑 Seçili {n} parçayı sil",
+                                "🗑 Delete the {n} selected parts"
+                            ))
+                            .clicked()
+                        {
                             design.remove_parts(&self.selected);
                             self.selected.clear();
                             result.changed = true;
                             ui.close();
                             return;
                         }
-                        if ui.button("Çoğalt (Ctrl+D)").clicked() {
+                        if ui
+                            .button(makine_lang::tr!("Çoğalt (Ctrl+D)", "Duplicate (Ctrl+D)"))
+                            .clicked()
+                        {
                             if let Some(t) = design.copy(&self.selected) {
                                 self.paste(design, &t, None, result);
                             }
@@ -713,28 +728,42 @@ impl Canvas {
                     }
                 }
                 MenuTarget::Ports => {
-                    if ui.button("Giriş/çıkışları yerine diz").clicked() {
+                    if ui
+                        .button(makine_lang::tr!(
+                            "Giriş/çıkışları yerine diz",
+                            "Put inputs/outputs back in place"
+                        ))
+                        .clicked()
+                    {
                         design.reset_ports();
                         result.changed = true;
                         ui.close();
                     }
                 }
                 _ => {
-                    ui.label("Parça eklemek için soldaki listeden sürükle.");
+                    ui.label(makine_lang::tr!(
+                        "Parça eklemek için soldaki listeden sürükle.",
+                        "To add a part, drag it from the list on the left."
+                    ));
                     ui.label(
-                        egui::RichText::new(
+                        egui::RichText::new(makine_lang::tr!(
                             "Seçmek için: parçaya tıkla, Shift ile ekle ya da Shift+sürükle \
                              ile kutu çiz. Ctrl+C / Ctrl+V / Ctrl+D / Delete seçimle çalışır; \
                              Ctrl+Z geri alır.",
-                        )
+                            "To select: click a part, add with Shift, or Shift+drag a box. \
+                             Ctrl+C / Ctrl+V / Ctrl+D / Delete work on the selection; \
+                             Ctrl+Z undoes."
+                        ))
                         .weak()
                         .small(),
                     );
                     ui.label(
-                        egui::RichText::new(
+                        egui::RichText::new(makine_lang::tr!(
                             "Kablo kesmek için: kablonun üstüne sağ tıkla, ya da üstüne \
                              gelip Delete'e bas, ya da girişteki ucunu tutup boşluğa çek.",
-                        )
+                            "To cut a wire: right-click it, or hover it and press Delete, \
+                             or pull its end off the input into empty space."
+                        ))
                         .weak()
                         .small(),
                     );

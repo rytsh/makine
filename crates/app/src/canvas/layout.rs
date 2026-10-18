@@ -200,9 +200,17 @@ pub fn part_label(p: &makine_sim::Part) -> String {
     let name = match &p.kind {
         PartKind::Nand => "NAND".to_string(),
         PartKind::Chip(n) => n.clone(),
-        PartKind::Split(w) => format!("Böl {}", join_widths(w)),
-        PartKind::Join(w) => format!("Birleştir {}", join_widths(w)),
-        PartKind::Const { width, value } => format!("Sabit {}", format_value(*width, *value)),
+        PartKind::Split(w) => format!("{} {}", makine_lang::tr!("Böl", "Split"), join_widths(w)),
+        PartKind::Join(w) => format!(
+            "{} {}",
+            makine_lang::tr!("Birleştir", "Join"),
+            join_widths(w)
+        ),
+        PartKind::Const { width, value } => format!(
+            "{} {}",
+            makine_lang::tr!("Sabit", "Constant"),
+            format_value(*width, *value)
+        ),
     };
     if p.repeat > 1 {
         format!("{name} ×{}", p.repeat)

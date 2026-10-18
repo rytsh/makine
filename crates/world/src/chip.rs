@@ -7,6 +7,7 @@
 
 use std::collections::BTreeSet;
 
+use makine_lang::{tr, trf};
 use makine_sim::{ChipDef, Library, Part, PartKind, Pin, Sink, Source, Wire};
 
 use crate::compile::{Builder, Mode};
@@ -27,9 +28,17 @@ pub fn to_chip(world: &World, ids: &[Id], name: &str, lib: &Library) -> Result<C
     });
     for (_, p) in &parts {
         match &p.kind {
-            Kind::Clock { .. } => return Err("saat çipin içine giremez".into()),
+            Kind::Clock { .. } => {
+                return Err(
+                    tr!("saat çipin içine giremez", "a clock can't go inside a chip").into(),
+                )
+            }
             Kind::Device(d) if !matches!(d, Device::Display { .. }) => {
-                return Err(format!("{} henüz çipin içine giremez", d.name()));
+                return Err(trf!(
+                    "{} henüz çipin içine giremez",
+                    "{} can't go inside a chip yet",
+                    d.name()
+                ));
             }
             _ => {}
         }
@@ -38,7 +47,7 @@ pub fn to_chip(world: &World, ids: &[Id], name: &str, lib: &Library) -> Result<C
     for (_, p) in &parts {
         if let Some(n) = p.kind.port_name() {
             if !names.insert(n.to_string()) {
-                return Err(format!("'{n}' adında iki uç var"));
+                return Err(trf!("'{n}' adında iki uç var", "two pins are named '{n}'"));
             }
         }
     }
@@ -46,7 +55,11 @@ pub fn to_chip(world: &World, ids: &[Id], name: &str, lib: &Library) -> Result<C
         .iter()
         .any(|(_, p)| matches!(p.kind, Kind::Output { .. }))
     {
-        return Err("seçimde hiç çıkış yok: çipin ne üreteceğini bir Çıkış ile göster".into());
+        return Err(tr!(
+            "seçimde hiç çıkış yok: çipin ne üreteceğini bir Çıkış ile göster",
+            "the selection has no output: use an Output to show what the chip makes"
+        )
+        .into());
     }
 
     // The selection alone, wires to the outside cut.
@@ -80,9 +93,15 @@ pub fn to_chip(world: &World, ids: &[Id], name: &str, lib: &Library) -> Result<C
         if let Kind::Output { name, width } = &p.kind {
             let src = match inside.wire_into(End::new(*id, 0)) {
                 Some(from) => {
-                    let (src, w) = b.source(from).ok_or("bir çıkışın teli kopuk")?;
+                    let (src, w) = b.source(from).ok_or(tr!(
+                        "bir çıkışın teli kopuk",
+                        "an output's wire is not connected"
+                    ))?;
                     if w != *width && w != 1 {
-                        return Err(format!("'{name}' {width} bit, ona bağlı tel {w} bit"));
+                        return Err(trf!(
+                            "'{name}' {width} bit, ona bağlı tel {w} bit",
+                            "'{name}' is {width} bits, its wire is {w} bits"
+                        ));
                     }
                     Some(src)
                 }

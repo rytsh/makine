@@ -72,6 +72,23 @@ mod editor {
             let dir = std::env::var("MAKINE_SHOT_DIR").unwrap_or("/tmp/opencode".into());
             std::fs::create_dir_all(&dir).unwrap();
             img.save(format!("{dir}/makine-{chip}.png")).unwrap();
+            if chip == "FullAdder" {
+                makine_lang::set_for_thread(Some(makine_lang::Lang::En));
+                app.borrow_mut()
+                    .progress
+                    .hints
+                    .insert("FullAdder".into(), 2);
+                app.borrow_mut().update_cost();
+                harness.set_size(egui::vec2(1280.0, 1100.0));
+                harness.run_steps(3);
+                harness
+                    .render()
+                    .unwrap()
+                    .save(format!("{dir}/makine-level-en.png"))
+                    .unwrap();
+                harness.set_size(egui::vec2(1280.0, 720.0));
+                makine_lang::set_for_thread(None);
+            }
             if chip == "Mux" {
                 // The clear but big MUX, then the example solution.
                 app.borrow_mut().run_test();
@@ -143,6 +160,18 @@ mod editor {
         let dir = std::env::var("MAKINE_SHOT_DIR").unwrap_or("/tmp/opencode".into());
         let img = harness.render().unwrap();
         img.save(format!("{dir}/makine-computer.png")).unwrap();
+        // Scrolled to the debugger, in English.
+        makine_lang::set_for_thread(Some(makine_lang::Lang::En));
+        app.borrow_mut().debug.source = Some(String::new());
+        harness.set_size(egui::vec2(1280.0, 1400.0));
+        harness.run_steps(3);
+        harness
+            .render()
+            .unwrap()
+            .save(format!("{dir}/makine-debug-en.png"))
+            .unwrap();
+        harness.set_size(egui::vec2(1280.0, 800.0));
+        makine_lang::set_for_thread(None);
 
         // Play mode: just the screen.
         app.borrow_mut().view = View::Play;
@@ -443,7 +472,7 @@ mod editor {
         drag(&mut h, gate_out, chip_out);
         assert_eq!(app.borrow_mut().design().def.wires.len(), 3);
 
-        h.get_by_label_contains("Test et").click();
+        h.get_by_label("▶  Test et").click();
         h.run();
         assert!(app.borrow().progress.solved("Not"));
         assert!(h.query_by_label_contains("Tebrikler").is_some());
@@ -511,6 +540,8 @@ mod glyph_tests {
             include_str!("../worldview/routing.rs"),
             include_str!("solution_ui.rs"),
             include_str!("chrome.rs"),
+            include_str!("truth_ui.rs"),
+            include_str!("debug_ui.rs"),
             include_str!("home_ui.rs"),
             include_str!("../profiles.rs"),
             include_str!("../../../levels/src/cost.rs"),

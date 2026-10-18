@@ -33,31 +33,67 @@ pub fn known_minimum(chip: &str) -> Option<usize> {
 /// from the circuit.
 pub fn note(chip: &str) -> Option<&'static str> {
     Some(match chip {
-        "Not" => "NAND'ın iki girişi aynı sinyali alınca 1 NAND 1 = 0, 0 NAND 0 = 1: tersleyici.",
-        "And" => "NAND'ın çıkışını tersle. NOT da bir NAND olduğu için toplam 2 kapı.",
-        "Or" => "De Morgan: a VEYA b = NAND(DEĞİL a, DEĞİL b). İki NOT ve bir NAND, 3 kapı.",
+        "Not" => makine_lang::tr!(
+"NAND'ın iki girişi aynı sinyali alınca 1 NAND 1 = 0, 0 NAND 0 = 1: tersleyici.",
+"When both inputs of a NAND get the same signal, 1 NAND 1 = 0 and 0 NAND 0 = 1: an inverter."
+),
+        "And" => makine_lang::tr!(
+"NAND'ın çıkışını tersle. NOT da bir NAND olduğu için toplam 2 kapı.",
+"Invert the NAND's output. Since NOT is also one NAND, that is 2 gates in total."
+),
+        "Or" => makine_lang::tr!(
+"De Morgan: a VEYA b = NAND(DEĞİL a, DEĞİL b). İki NOT ve bir NAND, 3 kapı.",
+"De Morgan: a OR b = NAND(NOT a, NOT b). Two NOTs and one NAND, 3 gates."
+),
         "Xor" => {
-            "Ortadaki NAND(a, b) iki kez kullanılıyor. XOR'u AND/OR/NOT ile yaparsan daha fazla kapı gerekir; ara sonucu paylaşmak işin sırrı."
+            makine_lang::tr!(
+"Ortadaki NAND(a, b) iki kez kullanılıyor. XOR'u AND/OR/NOT ile yaparsan daha fazla kapı gerekir; ara sonucu paylaşmak işin sırrı.",
+"The middle NAND(a, b) is used twice. Building XOR from AND/OR/NOT takes more gates; sharing the intermediate result is the secret."
+)
         }
         "Mux" => {
-            "AND ve OR çipleriyle yazılan MUX 8 kapı tutar. Hepsi NAND olunca AND'lerin sonundaki NOT'lar OR'un başındaki NOT'larla birbirini götürür: NOT sel, NAND(a, NOT sel), NAND(b, sel) ve bunların NAND'ı. 4 kapı."
+            makine_lang::tr!(
+"AND ve OR çipleriyle yazılan MUX 8 kapı tutar. Hepsi NAND olunca AND'lerin sonundaki NOT'lar OR'un başındaki NOT'larla birbirini götürür: NOT sel, NAND(a, NOT sel), NAND(b, sel) ve bunların NAND'ı. 4 kapı.",
+"A MUX written with AND and OR chips takes 8 gates. Once everything is NAND, the NOTs at the end of the ANDs cancel the NOTs at the start of the OR: NOT sel, NAND(a, NOT sel), NAND(b, sel) and the NAND of those. 4 gates."
+)
         }
         "Demux" => {
-            "NAND(in, sel) iki işe yarar: tersi b çıkışıdır, ve in VE (DEĞİL sel) = in VE NAND(in, sel) olduğu için a çıkışını da ondan üretiriz. 4 kapı."
+            makine_lang::tr!(
+"NAND(in, sel) iki işe yarar: tersi b çıkışıdır, ve in VE (DEĞİL sel) = in VE NAND(in, sel) olduğu için a çıkışını da ondan üretiriz. 4 kapı.",
+"NAND(in, sel) does two jobs: its inverse is output b, and since in AND (NOT sel) = in AND NAND(in, sel), output a comes from it too. 4 gates."
+)
         }
         "HalfAdder" => {
-            "XOR'un ilk NAND'ı zaten NAND(a, b). Onu terslemek eldeyi (a VE b) verir: ayrı bir AND koymaya gerek yok. 4 + 1 = 5 kapı."
+            makine_lang::tr!(
+"XOR'un ilk NAND'ı zaten NAND(a, b). Onu terslemek eldeyi (a VE b) verir: ayrı bir AND koymaya gerek yok. 4 + 1 = 5 kapı.",
+"XOR's first NAND is already NAND(a, b). Inverting it gives the carry (a AND b): no need for a separate AND. 4 + 1 = 5 gates."
+)
         }
         "FullAdder" => {
-            "İki XOR (8 kapı) ve eldede tek NAND: carry = NAND(NAND(a,b), NAND(a⊕b, c)). Her iki NAND da XOR'ların içinden zaten geliyor. İki yarım toplayıcı ve bir VEYA ile 15 kapı tutar; bu 9."
+            makine_lang::tr!(
+"İki XOR (8 kapı) ve eldede tek NAND: carry = NAND(NAND(a,b), NAND(a⊕b, c)). Her iki NAND da XOR'ların içinden zaten geliyor. İki yarım toplayıcı ve bir VEYA ile 15 kapı tutar; bu 9.",
+"Two XORs (8 gates) and a single NAND for the carry: carry = NAND(NAND(a,b), NAND(a⊕b, c)). Both NANDs already come from inside the XORs. Two half adders and an OR take 15 gates; this is 9."
+)
         }
-        "Latch" => "Çapraz bağlı iki NAND belleğin kendisi; girişlerdeki iki NOT ise set/reset'i 1'de etkin yapıyor.",
+        "Latch" => makine_lang::tr!(
+"Çapraz bağlı iki NAND belleğin kendisi; girişlerdeki iki NOT ise set/reset'i 1'de etkin yapıyor.",
+"The two cross-coupled NANDs are the memory itself; the two NOTs on the inputs make set/reset active at 1."
+),
         "DLatch" => {
-            "s' = NAND(d, en), r' = NAND(s', en): d'nin tersi için ayrı bir NOT gerekmiyor, çünkü en = 1 iken s' zaten DEĞİL d. Ardından çapraz bağlı iki NAND. 4 kapı."
+            makine_lang::tr!(
+"s' = NAND(d, en), r' = NAND(s', en): d'nin tersi için ayrı bir NOT gerekmiyor, çünkü en = 1 iken s' zaten DEĞİL d. Ardından çapraz bağlı iki NAND. 4 kapı.",
+"s' = NAND(d, en), r' = NAND(s', en): no separate NOT is needed for the inverse of d, because while en = 1, s' is already NOT d. Then two cross-coupled NANDs. 4 gates."
+)
         }
-        "DFF" => "İki D mandalı (4+4) ve saatin tersi için bir NOT: 9 kapı.",
+        "DFF" => makine_lang::tr!(
+"İki D mandalı (4+4) ve saatin tersi için bir NOT: 9 kapı.",
+"Two D latches (4+4) and one NOT for the inverted clock: 9 gates."
+),
         "Adder8" | "Adder32" | "Adder4" => {
-            "Tam toplayıcıları zincirle. Kapı sayısı tam toplayıcının sayısıyla çarpılır: tam toplayıcıdan kazandığın her kapı burada katlanır."
+            makine_lang::tr!(
+"Tam toplayıcıları zincirle. Kapı sayısı tam toplayıcının sayısıyla çarpılır: tam toplayıcıdan kazandığın her kapı burada katlanır.",
+"Chain full adders. The gate count is multiplied by the number of full adders: every gate you save in the full adder is multiplied here."
+)
         }
         _ => return None,
     })

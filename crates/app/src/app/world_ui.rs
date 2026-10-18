@@ -2,6 +2,7 @@
 //! building together on the network, and the world panel.
 
 use egui::{RichText, Ui};
+use makine_lang::{tr, trf};
 use makine_levels::levels;
 use makine_sim::PartKind;
 
@@ -82,13 +83,16 @@ impl App {
             w.sharing = false;
             w.outbox.clear();
         }
-        let msg = reason.unwrap_or_else(|| "Paylaşım bitti.".into());
+        let msg = reason.unwrap_or_else(|| tr!("Paylaşım bitti.", "Sharing ended.").into());
         if s.is_host() {
             self.status = Some(msg);
             return;
         }
         // A guest goes back to their own last world.
-        self.status = Some(format!("{msg} Kendi dünyana döndün."));
+        self.status = Some(trf!(
+            "{msg} Kendi dünyana döndün.",
+            "{msg} You are back in your own world."
+        ));
         self.world = None;
         self.open_world();
     }
@@ -96,8 +100,12 @@ impl App {
     /// Hosting and joining.
     pub(super) fn network_section(&mut self, ui: &mut Ui) {
         let title = match &self.session {
-            Some(s) => format!("🔗 Birlikte kur ({} kişi)", s.players().len().max(1)),
-            None => "🔗 Birlikte kur".into(),
+            Some(s) => trf!(
+                "🔗 Birlikte kur ({} kişi)",
+                "🔗 Build together ({} people)",
+                s.players().len().max(1)
+            ),
+            None => tr!("🔗 Birlikte kur", "🔗 Build together").into(),
         };
         egui::CollapsingHeader::new(RichText::new(title).strong())
             .id_salt("network")
@@ -105,46 +113,54 @@ impl App {
                 let Some(s) = &self.session else {
                     ui.label(
                         RichText::new(
-                            "Aynı ağdaki (aynı Wi-Fi) arkadaşlarınla aynı dünyada birlikte kur.",
+                            tr!(
+                                "Aynı ağdaki (aynı Wi-Fi) arkadaşlarınla aynı dünyada birlikte kur.",
+                                "Build in the same world with friends on the same network (same Wi-Fi)."
+                            ),
                         )
                         .weak()
                         .small(),
                     );
                     ui.horizontal(|ui| {
-                        let l = ui.label("Adın").id;
+                        let l = ui.label(tr!("Adın", "Your name")).id;
                         ui.add(egui::TextEdit::singleline(&mut self.net_name).desired_width(120.0))
                             .labelled_by(l);
                     });
                     if ui
-                        .button("📡 Bu dünyayı paylaşıma aç")
-                        .on_hover_text("Arkadaşların bu dünyaya bağlanabilir")
+                        .button(tr!("📡 Bu dünyayı paylaşıma aç", "📡 Share this world"))
+                        .on_hover_text(tr!(
+                            "Arkadaşların bu dünyaya bağlanabilir",
+                            "Your friends can connect to this world"
+                        ))
                         .clicked()
                     {
                         match crate::session::Session::host(&self.net_name, makine_net::PORT) {
                             Ok(s) => self.session = Some(s),
                             Err(e) => {
-                                self.status = Some(format!(
-                                    "Paylaşım açılamadı ({e}). Başka bir makine zaten açık olabilir."
+                                self.status = Some(trf!(
+                                    "Paylaşım açılamadı ({e}). Başka bir makine zaten açık olabilir.",
+                                    "Could not start sharing ({e}). Another makine may already be open."
                                 ))
                             }
                         }
                     }
                     ui.horizontal(|ui| {
-                        let l = ui.label("Adres").id;
+                        let l = ui.label(tr!("Adres", "Address")).id;
                         ui.add(
                             egui::TextEdit::singleline(&mut self.net_addr)
                                 .hint_text("192.168.1.20")
                                 .desired_width(120.0),
                         )
                         .labelled_by(l);
-                        if ui.button("Bağlan").clicked() {
+                        if ui.button(tr!("Bağlan", "Connect")).clicked() {
                             // Save our own world before showing theirs.
                             self.store_world();
                             match crate::session::Session::join(&self.net_addr, &self.net_name) {
                                 Ok(s) => self.session = Some(s),
                                 Err(e) => {
-                                    self.status = Some(format!(
-                                        "Bağlanılamadı: {e}. Adresi ve aynı ağda olduğunuzu kontrol et."
+                                    self.status = Some(trf!(
+                                        "Bağlanılamadı: {e}. Adresi ve aynı ağda olduğunuzu kontrol et.",
+                                        "Could not connect: {e}. Check the address and that you are on the same network."
                                     ))
                                 }
                             }
@@ -156,14 +172,18 @@ impl App {
                 let me = s.my_id();
                 for p in s.players() {
                     let tag = match (p.id == makine_net::HOST_ID, Some(p.id) == me) {
-                        (true, true) => " (sen, ev sahibi)",
-                        (true, false) => " (ev sahibi)",
-                        (false, true) => " (sen)",
+                        (true, true) => tr!(" (sen, ev sahibi)", " (you, host)"),
+                        (true, false) => tr!(" (ev sahibi)", " (host)"),
+                        (false, true) => tr!(" (sen)", " (you)"),
                         _ => "",
                     };
                     ui.colored_label(crate::session::color(p.id), format!("● {}{tag}", p.name));
                 }
-                let label = if s.is_host() { "Paylaşımı kapat" } else { "Ayrıl" };
+                let label = if s.is_host() {
+                    tr!("Paylaşımı kapat", "Stop sharing")
+                } else {
+                    tr!("Ayrıl", "Leave")
+                };
                 if ui.button(label).clicked() {
                     self.leave_session(None);
                 }
@@ -174,7 +194,8 @@ impl App {
         let current = self.world.as_ref().map(|w| w.world.name.clone());
         let n = self.progress.worlds.len();
         let mut open = None;
-        egui::CollapsingHeader::new(RichText::new(format!("Dünyalar ({n})")).strong())
+        let title = trf!("Dünyalar ({n})", "Worlds ({n})");
+        egui::CollapsingHeader::new(RichText::new(title).strong())
             .id_salt("worlds")
             .show(ui, |ui| {
                 for name in self.progress.worlds.keys() {
@@ -184,11 +205,11 @@ impl App {
                     }
                 }
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("+ Yeni").clicked() {
+                    if ui.button(tr!("+ Yeni", "+ New")).clicked() {
                         let name = crate::worlds::unique_name("dünya", &self.progress.worlds);
                         self.switch_to_new(makine_world::World::new(name));
                     }
-                    if ui.button("Kopyasını al").clicked() {
+                    if ui.button(tr!("Kopyasını al", "Make a copy")).clicked() {
                         if let Some(w) = &self.world {
                             let mut copy = w.world.clone();
                             copy.name =
@@ -198,38 +219,50 @@ impl App {
                     }
                 });
                 ui.horizontal(|ui| {
-                    let l = ui.label("Ad").id;
+                    let l = ui.label(tr!("Ad", "Name")).id;
                     ui.add(egui::TextEdit::singleline(&mut self.world_rename).desired_width(120.0))
                         .labelled_by(l);
-                    if ui.button("Değiştir").clicked() {
+                    if ui.button(tr!("Değiştir", "Rename")).clicked() {
                         self.rename_world();
                     }
                 });
                 ui.horizontal_wrapped(|ui| {
-                    if ui.button("📤 Dosyaya kaydet…").clicked() {
+                    if ui
+                        .button(tr!("📤 Dosyaya kaydet…", "📤 Save to file…"))
+                        .clicked()
+                    {
                         self.export_world();
                     }
-                    if ui.button("📥 Dosyadan aç…").clicked() {
+                    if ui
+                        .button(tr!("📥 Dosyadan aç…", "📥 Open from file…"))
+                        .clicked()
+                    {
                         self.import_world();
                     }
                 });
                 let can_delete = n > 1;
-                let r = ui.add_enabled(can_delete, egui::Button::new("🗑 Bu dünyayı sil"));
+                let r = ui.add_enabled(
+                    can_delete,
+                    egui::Button::new(tr!("🗑 Bu dünyayı sil", "🗑 Delete this world")),
+                );
                 let r = if can_delete {
                     r
                 } else {
-                    r.on_disabled_hover_text("Son dünya silinemez")
+                    r.on_disabled_hover_text(tr!(
+                        "Son dünya silinemez",
+                        "The last world can't be deleted"
+                    ))
                 };
                 if r.clicked() {
                     self.confirm_delete_world = true;
                 }
                 if self.confirm_delete_world {
                     ui.horizontal(|ui| {
-                        ui.colored_label(crate::theme::BAD, "Emin misin?");
-                        if ui.button("Evet, sil").clicked() {
+                        ui.colored_label(crate::theme::BAD, tr!("Emin misin?", "Are you sure?"));
+                        if ui.button(tr!("Evet, sil", "Yes, delete")).clicked() {
                             self.delete_world();
                         }
-                        if ui.button("Vazgeç").clicked() {
+                        if ui.button(tr!("Vazgeç", "Cancel")).clicked() {
                             self.confirm_delete_world = false;
                         }
                     });
@@ -260,7 +293,7 @@ impl App {
             self.progress
                 .worlds
                 .contains_key(&to)
-                .then(|| format!("'{to}' adında bir dünya var"))
+                .then(|| trf!("'{to}' adında bir dünya var", "a world named '{to}' exists"))
         });
         if let Some(e) = err {
             w.status = Some(e);
@@ -295,21 +328,21 @@ impl App {
             }
         };
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("makine dünyası", &[crate::worlds::EXT])
+            .add_filter(tr!("makine dünyası", "makine world"), &[crate::worlds::EXT])
             .set_file_name(format!("{}.{}", w.world.name, crate::worlds::EXT))
             .save_file()
         else {
             return;
         };
         self.status = Some(match std::fs::write(&path, text) {
-            Ok(()) => format!("Kaydedildi: {}", path.display()),
+            Ok(()) => trf!("Kaydedildi: {}", "Saved: {}", path.display()),
             Err(e) => format!("{}: {e}", path.display()),
         });
     }
 
     pub(super) fn import_world(&mut self) {
         let Some(path) = rfd::FileDialog::new()
-            .add_filter("makine dünyası", &[crate::worlds::EXT])
+            .add_filter(tr!("makine dünyası", "makine world"), &[crate::worlds::EXT])
             .pick_file()
         else {
             return;
@@ -321,7 +354,7 @@ impl App {
             Ok(mut world) => {
                 world.name = crate::worlds::unique_name(&world.name, &self.progress.worlds);
                 self.refresh_library();
-                self.status = Some(format!("'{}' açıldı.", world.name));
+                self.status = Some(trf!("'{}' açıldı.", "'{}' opened.", world.name));
                 self.switch_to_new(world);
             }
             Err(e) => self.status = Some(e),
@@ -362,25 +395,46 @@ impl App {
         }
         self.network_section(ui);
         if self.session.is_none() {
-            egui::CollapsingHeader::new("Örnek projeler")
+            egui::CollapsingHeader::new(tr!("Örnek projeler", "Example projects"))
                 .id_salt("workshop-projects")
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Mevcut dünyan korunur; örnek ayrı bir dünya olarak açılır.").weak().small());
-                    if ui.button("4004 atölyesi aç").clicked() { self.open_mcs4_project(); }
-                    ui.label(RichText::new("Kapılardan aritmetik ve kontrol çekirdeği; özgün MCS-4 bellek/GÇ sistemi henüz yok.").weak().small());
+                    ui.label(
+                        RichText::new(tr!(
+                            "Mevcut dünyan korunur; örnek ayrı bir dünya olarak açılır.",
+                            "Your current world is kept; the example opens as a separate world."
+                        ))
+                        .weak()
+                        .small(),
+                    );
+                    if ui
+                        .button(tr!("4004 atölyesi aç", "Open 4004 workshop"))
+                        .clicked()
+                    {
+                        self.open_mcs4_project();
+                    }
+                    ui.label(
+                        RichText::new(tr!(
+                            "Kapılardan aritmetik ve kontrol çekirdeği; özgün MCS-4 bellek/GÇ \
+                             sistemi henüz yok.",
+                            "An arithmetic and control core made of gates; the original MCS-4 \
+                             memory/I/O system is not there yet."
+                        ))
+                        .weak()
+                        .small(),
+                    );
                 });
         }
         let Some(w) = &mut self.world else { return };
-        egui::CollapsingHeader::new(RichText::new("⌨ Kısayollar").strong())
+        egui::CollapsingHeader::new(RichText::new(tr!("⌨ Kısayollar", "⌨ Shortcuts")).strong())
             .id_salt("world-shortcuts")
             .show(ui, |ui| {
                 egui::Grid::new("world-shortcut-grid")
                     .num_columns(2)
                     .spacing([10.0, 2.0])
                     .show(ui, |ui| {
-                        for (keys, what) in crate::worldview::SHORTCUTS {
-                            ui.label(RichText::new(*keys).monospace().small().strong());
-                            ui.label(RichText::new(*what).small());
+                        for (keys, what) in crate::worldview::shortcuts() {
+                            ui.label(RichText::new(keys).monospace().small().strong());
+                            ui.label(RichText::new(what).small());
                             ui.end_row();
                         }
                     });
@@ -392,13 +446,16 @@ impl App {
         w.module_panel(ui);
         w.selection_panel(ui);
         let watched = w.sim.traces.len();
-        egui::CollapsingHeader::new(format!("Sinyal izleme ({watched})"))
-            .id_salt("world-scope")
-            .show(ui, |ui| w.scope_panel(ui));
+        egui::CollapsingHeader::new(trf!(
+            "Sinyal izleme ({watched})",
+            "Signal watch ({watched})"
+        ))
+        .id_salt("world-scope")
+        .show(ui, |ui| w.scope_panel(ui));
 
-        crate::theme::section(ui, "Parçalar");
+        crate::theme::section(ui, tr!("Parçalar", "Parts"));
         w.palette_ui(ui, crate::worldview::palette());
-        crate::theme::section(ui, "Cihazlar");
+        crate::theme::section(ui, tr!("Cihazlar", "Devices"));
         w.palette_ui(ui, crate::worldview::device_palette());
         // Chips from the library, as parts.
         let mut chips: Vec<(String, String)> = levels()
@@ -411,18 +468,21 @@ impl App {
                 .sandbox
                 .chips
                 .keys()
-                .map(|n| (n.clone(), "Senin çipin".to_string())),
+                .map(|n| (n.clone(), tr!("Senin çipin", "Your chip").to_string())),
         );
         if !chips.is_empty() {
             egui::CollapsingHeader::new(
-                RichText::new(format!("Çiplerin ({})", chips.len())).strong(),
+                RichText::new(trf!("Çiplerin ({})", "Your chips ({})", chips.len())).strong(),
             )
             .id_salt("world-chips")
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new("Çözdüğün seviyeler ve serbest çiplerin. Sürükle ya da tıkla.")
-                        .weak()
-                        .small(),
+                    RichText::new(tr!(
+                        "Çözdüğün seviyeler ve serbest çiplerin. Sürükle ya da tıkla.",
+                        "Levels you solved and your free chips. Drag or click."
+                    ))
+                    .weak()
+                    .small(),
                 );
                 ui.horizontal_wrapped(|ui| {
                     for (name, tip) in &chips {
@@ -444,41 +504,50 @@ impl App {
         }
         if w.placing.is_some() {
             ui.label(
-                RichText::new("Koymak için tahtaya tıkla. Bırakmak için Esc.")
-                    .color(crate::theme::COPPER_BRIGHT)
-                    .small(),
+                RichText::new(tr!(
+                    "Koymak için tahtaya tıkla. Bırakmak için Esc.",
+                    "Click the board to place. Esc to drop."
+                ))
+                .color(crate::theme::COPPER_BRIGHT)
+                .small(),
             );
         }
 
-        crate::theme::section(ui, "Simülasyon");
+        crate::theme::section(ui, tr!("Simülasyon", "Simulation"));
         ui.horizontal(|ui| {
             let label = if w.sim.running {
-                "⏸ Durdur"
+                tr!("⏸ Durdur", "⏸ Pause")
             } else {
-                "▶ Çalıştır"
+                tr!("▶ Çalıştır", "▶ Run")
             };
             if ui
                 .button(label)
-                .on_hover_text("Saatleri durdur/başlat (P)")
+                .on_hover_text(tr!(
+                    "Saatleri durdur/başlat (P)",
+                    "Pause/run the clocks (P)"
+                ))
                 .clicked()
             {
                 w.sim.running = !w.sim.running;
             }
             if ui
-                .add_enabled(w.can_undo(), egui::Button::new("↶ Geri al"))
+                .add_enabled(w.can_undo(), egui::Button::new(tr!("↶ Geri al", "↶ Undo")))
                 .clicked()
             {
                 w.undo();
             }
             if ui
-                .add_enabled(w.can_redo(), egui::Button::new("↷ Yinele"))
+                .add_enabled(w.can_redo(), egui::Button::new(tr!("↷ Yinele", "↷ Redo")))
                 .clicked()
             {
                 w.redo();
             }
             if ui
-                .button("⌖ Ortala")
-                .on_hover_text("Bütün dünyayı göster (Home)")
+                .button(tr!("⌖ Ortala", "⌖ Center"))
+                .on_hover_text(tr!(
+                    "Bütün dünyayı göster (Home)",
+                    "Show the whole world (Home)"
+                ))
                 .clicked()
             {
                 w.refit();
@@ -486,32 +555,44 @@ impl App {
         });
         ui.horizontal(|ui| {
             if ui
-                .button("Saat çevrimi")
-                .on_hover_text("Dur ve ilk saatin bir sonraki yükselen kenarına kadar ilerle")
+                .button(tr!("Saat çevrimi", "Clock cycle"))
+                .on_hover_text(tr!(
+                    "Dur ve ilk saatin bir sonraki yükselen kenarına kadar ilerle",
+                    "Pause and run until the first clock's next rising edge"
+                ))
                 .clicked()
                 && !w.sim.clock_cycle(&w.world)
             {
-                w.status = Some("Önce bir Saat koy.".into());
+                w.status = Some(tr!("Önce bir Saat koy.", "Place a Clock first.").into());
             }
-            if ui.button("Baştan").clicked() {
+            if ui.button(tr!("Baştan", "Restart")).clicked() {
                 w.sim.reset();
             }
         });
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!w.sim.running, egui::Button::new("⏭ Bir adım"))
-                .on_hover_text("Durmuşken saati bir adım ilerlet (N)")
+                .add_enabled(
+                    !w.sim.running,
+                    egui::Button::new(tr!("⏭ Bir adım", "⏭ One step")),
+                )
+                .on_hover_text(tr!(
+                    "Durmuşken saati bir adım ilerlet (N)",
+                    "While paused, move the clock one step (N)"
+                ))
                 .clicked()
             {
                 w.sim.single_step();
             }
             let l = ui
-                .label("Hız")
-                .on_hover_text("Saat her 'periyot' adımda bir değişir; hız, karedeki adım sayısı")
+                .label(tr!("Hız", "Speed"))
+                .on_hover_text(tr!(
+                    "Saat her 'periyot' adımda bir değişir; hız, karedeki adım sayısı",
+                    "A clock changes every 'period' steps; speed is steps per frame"
+                ))
                 .id;
             let name = |v: u32| match v {
-                0 => "En hızlı".to_string(),
-                v => format!("{v} adım/kare"),
+                0 => tr!("En hızlı", "Fastest").to_string(),
+                v => trf!("{v} adım/kare", "{v} steps/frame"),
             };
             egui::ComboBox::from_id_salt("world-speed")
                 .selected_text(name(w.sim.speed))
@@ -524,14 +605,15 @@ impl App {
                 .labelled_by(l);
         });
         ui.label(
-            RichText::new(format!(
+            RichText::new(trf!(
                 "{} parça · adım {} · {}",
+                "{} parts · step {} · {}",
                 w.world.len(),
                 w.sim.tick,
                 if w.sim.running {
-                    format!("{:.0} adım/sn", w.sim.rate)
+                    trf!("{:.0} adım/sn", "{:.0} steps/s", w.sim.rate)
                 } else {
-                    "durdu".into()
+                    tr!("durdu", "paused").into()
                 }
             ))
             .weak(),
@@ -572,9 +654,11 @@ impl App {
                 if let Some(w) = &mut self.world {
                     w.set_library(self.lib.clone());
                     w.chip_name.clear();
-                    w.status = Some(format!(
+                    w.status = Some(trf!(
                         "'{name}' çipi oluşturuldu ({n} parça). Serbest çiplerde ve 'Çiplerin' \
-                         listesinde."
+                         listesinde.",
+                        "Chip '{name}' made ({n} parts). It is in free chips and in the 'Your chips' \
+                         list."
                     ));
                 }
                 self.save();

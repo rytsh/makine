@@ -2,6 +2,7 @@
 use super::WorldView;
 use crate::theme;
 use egui::{pos2, vec2, Align2, FontId, Rect, RichText, Stroke, Ui};
+use makine_lang::{tr, trf};
 use makine_world::End;
 
 impl WorldView {
@@ -15,23 +16,31 @@ impl WorldView {
             if let Some(op) = self.sim.value(End::new(id, 0)) {
                 let next = self.sim.value(End::new(id, 1)).unwrap_or(0);
                 ui.label(
-                    RichText::new(format!(
+                    RichText::new(trf!(
                         "4004 yorumu: {}",
+                        "4004 reading: {}",
                         makine_world::projects::mcs4::disassemble(op as u8, next as u8)
                     ))
                     .monospace(),
                 );
                 ui.label(
-                    RichText::new("Bir sonraki yükselen kenarda yürütülecek komut.")
-                        .weak()
-                        .small(),
+                    RichText::new(tr!(
+                        "Bir sonraki yükselen kenarda yürütülecek komut.",
+                        "The instruction run on the next rising edge."
+                    ))
+                    .weak()
+                    .small(),
                 );
             }
         }
         if let Some((id, p)) = self.single() {
             if let Some(pins) = p.kind.pins(self.sim.library()) {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Çıkışları izle:").weak().small());
+                    ui.label(
+                        RichText::new(tr!("Çıkışları izle:", "Watch outputs:"))
+                            .weak()
+                            .small(),
+                    );
                     for (pin, p) in pins.outputs.iter().enumerate() {
                         if ui.small_button(p.to_string()).clicked() {
                             self.sim.watch(End::new(id, pin));
@@ -43,12 +52,18 @@ impl WorldView {
         if self.sim.traces.is_empty() {
             return;
         }
-        crate::theme::section(ui, "Sinyal geçmişi");
-        ui.checkbox(&mut self.scope_binary, "Değerleri ikilik göster");
+        crate::theme::section(ui, tr!("Sinyal geçmişi", "Signal history"));
+        ui.checkbox(
+            &mut self.scope_binary,
+            tr!("Değerleri ikilik göster", "Show values in binary"),
+        );
         ui.label(
-            RichText::new("Son 256 adım · ? = okunamıyor · telde sağ tık: izle")
-                .weak()
-                .small(),
+            RichText::new(tr!(
+                "Son 256 adım · ? = okunamıyor · telde sağ tık: izle",
+                "Last 256 steps · ? = unreadable · right click a wire: watch"
+            ))
+            .weak()
+            .small(),
         );
         let mut remove = None;
         let mut trigger = self.sim.break_on_change;
@@ -59,7 +74,7 @@ impl WorldView {
                 .and_then(|p| p.outputs.get(end.pin).cloned());
             let name = part
                 .map(|p| p.kind.label())
-                .unwrap_or("Silinmiş parça".into());
+                .unwrap_or(tr!("Silinmiş parça", "Deleted part").into());
             let width = pin.as_ref().map_or(1, |p| p.width);
             let name = format!(
                 "{} / {}",
@@ -81,7 +96,10 @@ impl WorldView {
                 }
             });
             let mut on = trigger == Some(*end);
-            if ui.checkbox(&mut on, "Değişince dur").changed() {
+            if ui
+                .checkbox(&mut on, tr!("Değişince dur", "Stop on change"))
+                .changed()
+            {
                 trigger = on.then_some(*end);
             }
             let (r, _) = ui.allocate_exact_size(
@@ -147,7 +165,11 @@ impl WorldView {
                 }
             }
             if let Some((tick, _)) = trace.back() {
-                ui.label(RichText::new(format!("adım {tick}")).weak().small());
+                ui.label(
+                    RichText::new(trf!("adım {tick}", "step {tick}"))
+                        .weak()
+                        .small(),
+                );
             }
         }
         if let Some(e) = remove {
@@ -158,12 +180,12 @@ impl WorldView {
         }
         self.sim.break_on_change = trigger;
         ui.horizontal(|ui| {
-            if ui.button("Geçmişi temizle").clicked() {
+            if ui.button(tr!("Geçmişi temizle", "Clear history")).clicked() {
                 for t in self.sim.traces.values_mut() {
                     t.clear();
                 }
             }
-            if ui.button("Başlangıca dön").clicked() {
+            if ui.button(tr!("Başlangıca dön", "Back to start")).clicked() {
                 self.sim.reset();
             }
         });

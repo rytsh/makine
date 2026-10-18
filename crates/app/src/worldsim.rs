@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use makine_lang::tr;
 use makine_sim::{Circuit, Library};
 use makine_world::compile::{compile, Compiled, InputSource};
 use makine_world::{device, End, Id, Kind, World};
@@ -24,10 +25,10 @@ impl std::fmt::Display for SimError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SimError::Build(e) => write!(f, "{e}"),
-            SimError::Oscillates => write!(
-                f,
-                "devre salınıyor: bir çıkış kendi girişini ters çeviriyor (ör. kendine bağlı NOT)"
-            ),
+            SimError::Oscillates => f.write_str(tr!(
+                "devre salınıyor: bir çıkış kendi girişini ters çeviriyor (ör. kendine bağlı NOT)",
+                "the circuit oscillates: an output flips its own input (e.g. a NOT wired to itself)"
+            )),
         }
     }
 }

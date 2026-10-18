@@ -7,6 +7,7 @@
 
 use std::collections::VecDeque;
 
+use makine_lang::{tr, trf};
 use makine_sim::{Behavior, Circuit, Clocked, NativeDef, Pin};
 use serde::{Deserialize, Serialize};
 
@@ -47,10 +48,10 @@ impl Device {
         match self {
             Device::Ram { .. } => "RAM".into(),
             Device::Rom { .. } => "ROM".into(),
-            Device::Screen { .. } => "Ekran".into(),
-            Device::Keyboard => "Klavye".into(),
-            Device::Display { .. } => "Gösterge".into(),
-            Device::Register { .. } => "Yazmaç".into(),
+            Device::Screen { .. } => tr!("Ekran", "Screen").into(),
+            Device::Keyboard => tr!("Klavye", "Keyboard").into(),
+            Device::Display { .. } => tr!("Gösterge", "Display").into(),
+            Device::Register { .. } => tr!("Yazmaç", "Register").into(),
             Device::ProgramRom { .. } => "Program ROM".into(),
         }
     }
@@ -58,22 +59,40 @@ impl Device {
     /// What the pins do, for the player.
     pub fn help(&self) -> &'static str {
         match self {
-            Device::Ram { .. } => {
+            Device::Ram { .. } => tr!(
                 "a: adres, d: yazılacak veri. clk 0'dan 1'e geçerken load 1 ise d, a \
-                 adresine yazılır. q: her an a adresindeki veri."
-            }
-            Device::Rom { .. } => "a: adres. q: o adresteki sabit veri. İçeriği aşağıya yaz.",
-            Device::Screen { .. } => {
+                 adresine yazılır. q: her an a adresindeki veri.",
+                "a: address, d: data to write. When clk goes from 0 to 1 and load is 1, d \
+                 is written to address a. q: the data at address a, always."
+            ),
+            Device::Rom { .. } => tr!(
+                "a: adres. q: o adresteki sabit veri. İçeriği aşağıya yaz.",
+                "a: address. q: the fixed data at that address. Write the contents below."
+            ),
+            Device::Screen { .. } => tr!(
                 "x, y: piksel. clk 0'dan 1'e geçerken load 1 ise (x, y) pikseli d olur \
-                 (1: yanık)."
-            }
-            Device::Keyboard => {
+                 (1: yanık).",
+                "x, y: pixel. When clk goes from 0 to 1 and load is 1, pixel (x, y) \
+                 becomes d (1: on)."
+            ),
+            Device::Keyboard => tr!(
                 "Seçip yazınca tuşlar kuyruğa girer. k: en eski tuşun ASCII kodu, ready: \
-                 kuyrukta tuş var. next 0'dan 1'e geçince sıradaki tuşa geçilir."
-            }
-            Device::Display { .. } => "n girişindeki sayıyı onaltılık ve onluk gösterir.",
-            Device::Register { .. } => "clk yükselen kenarında reset 1 ise sıfırlanır; değilse load 1 ise d saklanır. q saklanan değerdir.",
-            Device::ProgramRom { .. } => "4096 bayt program belleği. a: komut adresi, b: dolaylı adres. q: komut, next: sonraki bayt, indirect: b adresindeki bayt. Bu bellek işlemci değildir.",
+                 kuyrukta tuş var. next 0'dan 1'e geçince sıradaki tuşa geçilir.",
+                "Select it and type: keys go into a queue. k: ASCII code of the oldest key, \
+                 ready: the queue has a key. When next goes from 0 to 1, it moves to the next key."
+            ),
+            Device::Display { .. } => tr!(
+                "n girişindeki sayıyı onaltılık ve onluk gösterir.",
+                "Shows the number on input n in hexadecimal and decimal."
+            ),
+            Device::Register { .. } => tr!(
+                "clk yükselen kenarında reset 1 ise sıfırlanır; değilse load 1 ise d saklanır. q saklanan değerdir.",
+                "On a rising clk edge: if reset is 1 it clears; otherwise if load is 1 it stores d. q is the stored value."
+            ),
+            Device::ProgramRom { .. } => tr!(
+                "4096 bayt program belleği. a: komut adresi, b: dolaylı adres. q: komut, next: sonraki bayt, indirect: b adresindeki bayt. Bu bellek işlemci değildir.",
+                "4096 bytes of program memory. a: instruction address, b: indirect address. q: instruction, next: the next byte, indirect: the byte at address b. This memory is not a processor."
+            ),
         }
     }
 
@@ -377,7 +396,7 @@ pub fn parse_words(text: &str) -> Result<Vec<u64>, String> {
                     .unwrap_or(tok);
                 u64::from_str_radix(h, 16).ok()
             };
-            out.push(v.ok_or_else(|| format!("'{tok}' bir sayı değil"))?);
+            out.push(v.ok_or_else(|| trf!("'{tok}' bir sayı değil", "'{tok}' is not a number"))?);
         }
     }
     Ok(out)

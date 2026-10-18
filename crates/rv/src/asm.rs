@@ -11,6 +11,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use makine_lang::{tr, trf};
+
 use crate::isa::*;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,7 +23,12 @@ pub struct AsmError {
 
 impl fmt::Display for AsmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "satır {}: {}", self.line, self.message)
+        f.write_str(&trf!(
+            "satır {}: {}",
+            "line {}: {}",
+            self.line,
+            self.message
+        ))
     }
 }
 
@@ -63,13 +70,19 @@ pub fn assemble(src: &str) -> Result<Program, AsmError> {
     for l in &lines {
         for label in &l.labels {
             if symbols.insert(label.clone(), pc).is_some() {
-                return Err(err(l.n, format!("'{label}' etiketi iki kez tanımlanmış")));
+                return Err(err(
+                    l.n,
+                    trf!(
+                        "'{label}' etiketi iki kez tanımlanmış",
+                        "label '{label}' is defined twice"
+                    ),
+                ));
             }
         }
         if let Some((name, args)) = &l.op {
             if matches!(name.as_str(), ".equ" | ".set") {
                 let [sym, val] = args.as_slice() else {
-                    return Err(err(l.n, ".equ isim, değer".into()));
+                    return Err(err(l.n, tr!(".equ isim, değer", ".equ name, value").into()));
                 };
                 let v = eval(val, &symbols, l.n)?;
                 symbols.insert(sym.clone(), v);
@@ -205,7 +218,10 @@ fn advance(
         ".org" => {
             let target = eval(one(args, n)?, sym, n)?;
             if target < pc {
-                return Err(err(n, ".org geriye gidemez".into()));
+                return Err(err(
+                    n,
+                    tr!(".org geriye gidemez", ".org cannot go backwards").into(),
+                ));
             }
             target
         }
@@ -230,11 +246,25 @@ fn advance(
             match parse_num(v) {
                 Some(v) if fits12(v) => pc + 4,
                 Some(_) => pc + 8,
-                None => return Err(err(n, "li sadece sayı alır; etiket için la kullan".into())),
+                None => {
+                    return Err(err(
+                        n,
+                        tr!(
+                            "li sadece sayı alır; etiket için la kullan",
+                            "li only takes a number; use la for a label"
+                        )
+                        .into(),
+                    ))
+                }
             }
         }
         "la" | "call" | "tail" => pc + 8,
-        _ if name.starts_with('.') => return Err(err(n, format!("bilinmeyen direktif {name}"))),
+        _ if name.starts_with('.') => {
+            return Err(err(
+                n,
+                trf!("bilinmeyen direktif {name}", "unknown directive {name}"),
+            ))
+        }
         _ => pc + 4,
     })
 }
@@ -244,7 +274,11 @@ fn one(args: &[String], n: usize) -> Result<&str, AsmError> {
         [a] => Ok(a),
         _ => Err(err(
             n,
-            format!("1 argüman bekleniyordu, {} verildi", args.len()),
+            trf!(
+                "1 argüman bekleniyordu, {} verildi",
+                "expected 1 argument, got {}",
+                args.len()
+            ),
         )),
     }
 }
@@ -254,7 +288,11 @@ fn two(args: &[String], n: usize) -> Result<[&str; 2], AsmError> {
         [a, b] => Ok([a, b]),
         _ => Err(err(
             n,
-            format!("2 argüman bekleniyordu, {} verildi", args.len()),
+            trf!(
+                "2 argüman bekleniyordu, {} verildi",
+                "expected 2 arguments, got {}",
+                args.len()
+            ),
         )),
     }
 }
@@ -307,14 +345,23 @@ fn eval(s: &str, sym: &HashMap<String, u32>, n: usize) -> Result<u32, AsmError> 
     }
     sym.get(s)
         .copied()
-        .ok_or_else(|| err(n, format!("tanımsız sembol '{s}'")))
+        .ok_or_else(|| err(n, trf!("tanımsız sembol '{s}'", "undefined symbol '{s}'")))
 }
 
 fn parse_string(s: &str, n: usize) -> Result<Vec<u8>, AsmError> {
     let inner = s
         .strip_prefix('"')
         .and_then(|s| s.strip_suffix('"'))
-        .ok_or_else(|| err(n, "tırnak içinde metin bekleniyordu".into()))?;
+        .ok_or_else(|| {
+            err(
+                n,
+                tr!(
+                    "tırnak içinde metin bekleniyordu",
+                    "expected text in quotes"
+                )
+                .into(),
+            )
+        })?;
     let mut out = Vec::new();
     let mut chars = inner.chars();
     while let Some(c) = chars.next() {
@@ -330,7 +377,15 @@ fn parse_string(s: &str, n: usize) -> Result<Vec<u8>, AsmError> {
             Some('0') => 0,
             Some('\\') => b'\\',
             Some('"') => b'"',
-            other => return Err(err(n, format!("bilinmeyen kaçış dizisi \\{other:?}"))),
+            other => {
+                return Err(err(
+                    n,
+                    trf!(
+                        "bilinmeyen kaçış dizisi \\{other:?}",
+                        "unknown escape sequence \\{other:?}"
+                    ),
+                ))
+            }
         });
     }
     Ok(out)
@@ -358,8 +413,9 @@ impl Asm<'_> {
 
     fn want(&self, k: usize) -> Result<(), AsmError> {
         if self.args.len() != k {
-            return Err(self.err(format!(
+            return Err(self.err(trf!(
                 "{k} argüman bekleniyordu, {} verildi",
+                "expected {k} arguments, got {}",
                 self.args.len()
             )));
         }
@@ -368,7 +424,8 @@ impl Asm<'_> {
 
     fn reg(&self, i: usize) -> Result<u32, AsmError> {
         let s = &self.args[i];
-        parse_reg(s).ok_or_else(|| self.err(format!("'{s}' bir register değil")))
+        parse_reg(s)
+            .ok_or_else(|| self.err(trf!("'{s}' bir register değil", "'{s}' is not a register")))
     }
 
     fn imm(&self, i: usize) -> Result<u32, AsmError> {
@@ -385,7 +442,11 @@ impl Asm<'_> {
     fn imm12(&self, i: usize) -> Result<u32, AsmError> {
         let v = self.imm(i)?;
         if !fits12(v) {
-            return Err(self.err(format!("{} 12 bite sığmıyor (-2048..2047)", v as i32)));
+            return Err(self.err(trf!(
+                "{} 12 bite sığmıyor (-2048..2047)",
+                "{} does not fit in 12 bits (-2048..2047)",
+                v as i32
+            )));
         }
         Ok(v)
     }
@@ -393,14 +454,22 @@ impl Asm<'_> {
     /// `off(reg)` operand.
     fn mem(&self, i: usize) -> Result<(u32, u32), AsmError> {
         let s = self.args[i].trim();
-        let (off, rest) = s
-            .split_once('(')
-            .ok_or_else(|| self.err(format!("'{s}' bellek adresi değil; örn. 8(sp)")))?;
+        let (off, rest) = s.split_once('(').ok_or_else(|| {
+            self.err(trf!(
+                "'{s}' bellek adresi değil; örn. 8(sp)",
+                "'{s}' is not a memory address; e.g. 8(sp)"
+            ))
+        })?;
         let reg = rest
             .strip_suffix(')')
-            .ok_or_else(|| self.err("')' eksik"))?
+            .ok_or_else(|| self.err(tr!("')' eksik", "missing ')'")))?
             .trim();
-        let r = parse_reg(reg).ok_or_else(|| self.err(format!("'{reg}' bir register değil")))?;
+        let r = parse_reg(reg).ok_or_else(|| {
+            self.err(trf!(
+                "'{reg}' bir register değil",
+                "'{reg}' is not a register"
+            ))
+        })?;
         let off = if off.trim().is_empty() {
             0
         } else {
@@ -421,7 +490,10 @@ impl Asm<'_> {
         let s = off as i32;
         let lim = 1i32 << (bits - 1);
         if s < -lim || s >= lim || s % 2 != 0 {
-            return Err(self.err(format!("hedef çok uzak ({s} bayt)")));
+            return Err(self.err(trf!(
+                "hedef çok uzak ({s} bayt)",
+                "target too far ({s} bytes)"
+            )));
         }
         Ok(off)
     }
@@ -492,7 +564,10 @@ impl Asm<'_> {
             self.want(3)?;
             let s = self.imm(2)?;
             if s > 31 {
-                return Err(self.err("kaydırma miktarı 0..31 olmalı"));
+                return Err(self.err(tr!(
+                    "kaydırma miktarı 0..31 olmalı",
+                    "the shift amount must be 0..31"
+                )));
             }
             w(enc_i(OP_IMM, self.reg(0)?, f3, self.reg(1)?, s | f7 << 5))
         };
@@ -532,7 +607,10 @@ impl Asm<'_> {
                 self.want(2)?;
                 let v = self.imm(1)?;
                 if v > 0xFFFFF {
-                    return Err(self.err("20 bitlik değer bekleniyordu"));
+                    return Err(self.err(tr!(
+                        "20 bitlik değer bekleniyordu",
+                        "expected a 20-bit value"
+                    )));
                 }
                 let op = if name == "lui" { OP_LUI } else { OP_AUIPC };
                 w(enc_u(op, self.reg(0)?, v << 12))
@@ -668,7 +746,10 @@ impl Asm<'_> {
                 let (link, tmp) = if name == "call" { (1, 1) } else { (0, 6) };
                 Ok(pcrel(tmp, t, enc_i(OP_JALR, link, 0, tmp, 0)))
             }
-            _ => Err(self.err(format!("bilinmeyen komut '{name}'"))),
+            _ => Err(self.err(trf!(
+                "bilinmeyen komut '{name}'",
+                "unknown instruction '{name}'"
+            ))),
         }
     }
 }

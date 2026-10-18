@@ -41,6 +41,14 @@ pub struct Computer {
     entry: u32,
     /// Modifier keys as last reported, to turn changes into key events.
     modifiers: egui::Modifiers,
+    /// Addresses to stop at before running the instruction there.
+    pub breakpoints: std::collections::BTreeSet<u32>,
+    /// With the player's CPU: the reference emulator run beside it, for
+    /// showing registers (the circuit's are inside it). Dropped (and the
+    /// registers hidden) once the two disagree or a device is read.
+    pub shadow: Option<Cpu>,
+    /// Where the shadow first disagreed with the circuit.
+    pub shadow_lost: Option<String>,
 }
 
 impl Computer {
@@ -58,6 +66,17 @@ impl Computer {
             image: Vec::new(),
             entry: 0,
             modifiers: egui::Modifiers::NONE,
+            breakpoints: Default::default(),
+            shadow: None,
+            shadow_lost: None,
+        }
+    }
+
+    /// The registers, if known: the emulator's own, or the shadow's.
+    pub fn registers(&self) -> Option<&[u32; 32]> {
+        match &self.engine {
+            Engine::Reference(c) => Some(&c.x),
+            Engine::Circuit(_) => self.shadow.as_ref().map(|s| &s.x),
         }
     }
 
@@ -76,7 +95,10 @@ impl Computer {
     ) -> Result<(), String> {
         for (addr, bytes) in &segments {
             if *addr as usize + bytes.len() > RAM_BYTES {
-                return Err(format!("program belleğe sığmıyor (0x{addr:08X})"));
+                return Err(makine_lang::trf!(
+                    "program belleğe sığmıyor (0x{addr:08X})",
+                    "the program does not fit in memory (0x{addr:08X})"
+                ));
             }
         }
         self.image = segments;
@@ -95,9 +117,15 @@ impl Computer {
         match &mut self.engine {
             Engine::Circuit(cpu) => {
                 if self.entry != 0 {
-                    return Err("devre işlemcisi 0 adresinden başlar".into());
+                    return Err(makine_lang::tr!(
+                        "devre işlemcisi 0 adresinden başlar",
+                        "the circuit processor starts at address 0"
+                    )
+                    .into());
                 }
                 cpu.reset()?;
+                self.shadow = Some(Cpu::new());
+                self.shadow_lost = None;
             }
             Engine::Reference(cpu) => {
                 *cpu = Cpu::new();
@@ -113,15 +141,25 @@ impl Computer {
             return;
         }
         let start = Instant::now();
-        while start.elapsed() < budget {
+        // The first instruction may be at a breakpoint we just stopped at.
+        let mut first = true;
+        'run: while start.elapsed() < budget {
             let chunk = match self.engine {
                 Engine::Circuit(_) => 64,
-                Engine::Reference(_) => 100_000,
+                Engine::Reference(_) if self.breakpoints.is_empty() => 100_000,
+                Engine::Reference(_) => 10_000,
             };
-            if let Err(e) = self.step_n(chunk) {
-                self.halted = Some(e);
-                self.running = false;
-                break;
+            for _ in 0..chunk {
+                if !first && self.breakpoints.contains(&self.pc()) {
+                    self.running = false;
+                    break 'run;
+                }
+                first = false;
+                if let Err(e) = self.step_n(1) {
+                    self.halted = Some(e);
+                    self.running = false;
+                    break 'run;
+                }
             }
         }
         let (t0, n0) = self.speed_window;
@@ -141,7 +179,25 @@ impl Computer {
                     if instr == makine_rv::isa::EBREAK {
                         Err(Trap::Breakpoint.to_string())
                     } else {
-                        cpu.step(&mut self.machine).map(|_| ())
+                        // The shadow runs on a copy of the memory, so the
+                        // program's reads of devices happen once.
+                        let shadow = self.shadow.take().map(|mut s| {
+                            let mut m = Peek(&self.machine);
+                            let ok = s.step(&mut m).is_ok();
+                            (s, ok)
+                        });
+                        let r = cpu.step(&mut self.machine).map(|_| ());
+                        if let Some((s, ok)) = shadow {
+                            if ok && s.pc == cpu.pc() && r.is_ok() {
+                                self.shadow = Some(s);
+                            } else if self.shadow_lost.is_none() {
+                                self.shadow_lost = Some(makine_lang::trf!(
+                                    "0x{pc:08X}: senin işlemcin referanstan ayrıldı",
+                                    "0x{pc:08X}: your processor went apart from the reference"
+                                ));
+                            }
+                        }
+                        r
                     }
                 }
                 Engine::Reference(cpu) => cpu.step(&mut self.machine).map_err(|t| t.to_string()),
@@ -210,7 +266,7 @@ impl Computer {
             ui.painter().text(
                 full.center_bottom() - egui::vec2(0.0, 20.0),
                 egui::Align2::CENTER_BOTTOM,
-                format!("Durdu: {h}"),
+                makine_lang::trf!("Durdu: {h}", "Stopped: {h}"),
                 egui::FontId::proportional(16.0),
                 crate::theme::BAD,
             );
@@ -234,7 +290,11 @@ impl Computer {
         }
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("pc = 0x{:08X}", self.pc())).monospace());
-            ui.label(format!("{} komut", self.instructions));
+            ui.label(makine_lang::trf!(
+                "{} komut",
+                "{} instructions",
+                self.instructions
+            ));
             if self.running {
                 ui.label(human_speed(self.speed));
             }
@@ -245,9 +305,9 @@ impl Computer {
             } else {
                 crate::theme::BAD
             };
-            ui.colored_label(color, format!("Durdu: {h}"));
+            ui.colored_label(color, makine_lang::trf!("Durdu: {h}", "Stopped: {h}"));
         }
-        ui.label(RichText::new("Konsol").strong());
+        ui.label(RichText::new(makine_lang::tr!("Konsol", "Console")).strong());
         let text = self.machine.console_text();
         egui::ScrollArea::vertical()
             .id_salt("console")
@@ -324,6 +384,23 @@ fn key_code(k: egui::Key) -> Option<u8> {
     })
 }
 
+/// The machine's memory seen without side effects: the shadow emulator
+/// reads through it (device reads give what the circuit will see) and its
+/// writes are dropped, since the circuit does the real ones.
+struct Peek<'a>(&'a Machine);
+
+impl makine_rv::emu::Memory for Peek<'_> {
+    fn fetch(&mut self, addr: u32) -> Option<u32> {
+        Some(self.0.peek_ram(addr))
+    }
+    fn read(&mut self, addr: u32) -> Option<u32> {
+        self.0.peek(addr)
+    }
+    fn write(&mut self, _: u32, _: u32, _: u8) -> Option<()> {
+        Some(())
+    }
+}
+
 pub fn human_speed(ips: f64) -> String {
     if ips >= 1e6 {
         format!("{:.1} MHz", ips / 1e6)
@@ -343,7 +420,12 @@ pub fn parse_program(name: &str, bytes: &[u8]) -> Result<Image, String> {
         let img = makine_rv::elf::load(bytes)?;
         return Ok((img.segments, img.entry));
     }
-    let src = std::str::from_utf8(bytes).map_err(|_| format!("{name}: metin ya da ELF değil"))?;
+    let src = std::str::from_utf8(bytes).map_err(|_| {
+        makine_lang::trf!(
+            "{name}: metin ya da ELF değil",
+            "{name}: not text and not an ELF"
+        )
+    })?;
     let p = makine_rv::asm::assemble(src).map_err(|e| e.to_string())?;
     Ok((vec![(0, p.bytes)], 0))
 }
@@ -432,5 +514,31 @@ mod tests {
             "{}",
             c.machine.console_text()
         );
+    }
+
+    /// With the player's CPU, the registers come from the emulator run
+    /// beside it, and a breakpoint stops the run before its instruction.
+    #[test]
+    fn shadow_registers_and_breakpoints() {
+        use makine_levels::reference::reference;
+        let refs: Vec<_> = makine_levels::levels()
+            .iter()
+            .map(|l| reference(l.chip))
+            .collect();
+        let lib = makine_levels::fast::library(refs.iter(), true);
+        let src = "li a0, 5\nli a1, 7\nadd a2, a0, a1\nhere:\nj here\n";
+        let (segs, entry) = parse_program("t", src.as_bytes()).unwrap();
+        let mut c = Computer::new(Computer::circuit_engine(&lib).unwrap());
+        c.load_program(segs, entry).unwrap();
+        c.breakpoints.insert(8);
+        c.running = true;
+        c.run_for(Duration::from_millis(50));
+        assert!(!c.running, "stopped at the breakpoint");
+        assert_eq!(c.pc(), 8);
+        let x = c.registers().unwrap();
+        assert_eq!((x[10], x[11], x[12]), (5, 7, 0));
+        c.step_n(1).unwrap();
+        assert_eq!(c.registers().unwrap()[12], 12);
+        assert!(c.shadow_lost.is_none());
     }
 }

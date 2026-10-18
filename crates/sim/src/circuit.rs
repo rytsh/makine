@@ -11,6 +11,8 @@
 
 use std::fmt;
 
+use makine_lang::{tr, trf};
+
 use crate::chip::{ChipDef, Library, PartKind, PartPins, Pin, Sink, Source, MAX_WIDTH};
 use crate::native::{Behavior, NativeDef};
 
@@ -54,15 +56,26 @@ pub enum CompileError {
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CompileError::UnknownChip { name } => write!(f, "bilinmeyen çip: {name}"),
+            CompileError::UnknownChip { name } => {
+f.write_str(&trf!("bilinmeyen çip: {name}", "unknown chip: {name}"))
+}
             CompileError::UnknownPart { chip, part } => {
-                write!(f, "{chip}: bilinmeyen parça kullanılmış: {part}")
+                f.write_str(&trf!(
+"{chip}: bilinmeyen parça kullanılmış: {part}",
+"{chip}: uses an unknown part: {part}"
+))
             }
             CompileError::PinOutOfRange { chip, pin } => {
-                write!(f, "{chip}: tel olmayan bir uca bağlı: {pin}")
+                f.write_str(&trf!(
+"{chip}: tel olmayan bir uca bağlı: {pin}",
+"{chip}: connected to a pin that does not exist: {pin}"
+))
             }
             CompileError::MultipleDrivers { chip, sink } => {
-                write!(f, "{chip}: {sink} birden fazla kaynağa bağlı")
+                f.write_str(&trf!(
+"{chip}: {sink} birden fazla kaynağa bağlı",
+"{chip}: {sink} is connected to more than one source"
+))
             }
             CompileError::WidthMismatch {
                 chip,
@@ -70,16 +83,18 @@ impl fmt::Display for CompileError {
                 from,
                 to,
             } => {
-                write!(
-                    f,
-                    "{chip}: {sink} {to} bit genişliğinde ama {from} bitlik bir tele bağlı"
-                )
+                f.write_str(&trf!(
+                    "{chip}: {sink} {to} bit genişliğinde ama {from} bitlik bir tele bağlı",
+                    "{chip}: {sink} is {to} bits wide but connected to a {from}-bit wire"
+                ))
             }
-            CompileError::Recursive { chip } => write!(f, "{chip} kendi kendini içeriyor"),
-            CompileError::TooWide { chip, part } => write!(
-                f,
-                "{chip}: {part} parçasının uçları 64 bitten geniş olamaz; tekrar sayısını azalt"
-            ),
+            CompileError::Recursive { chip } => {
+f.write_str(&trf!("{chip} kendi kendini içeriyor", "{chip} contains itself"))
+}
+            CompileError::TooWide { chip, part } => f.write_str(&trf!(
+                "{chip}: {part} parçasının uçları 64 bitten geniş olamaz; tekrar sayısını azalt",
+                "{chip}: the pins of the {part} part cannot be wider than 64 bits; lower the repeat count"
+            )),
         }
     }
 }
@@ -92,7 +107,10 @@ pub struct Oscillation;
 
 impl fmt::Display for Oscillation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "devre salınıyor, kararlı hale gelmiyor")
+        f.write_str(tr!(
+            "devre salınıyor, kararlı hale gelmiyor",
+            "the circuit oscillates and does not settle"
+        ))
     }
 }
 
@@ -844,34 +862,45 @@ fn check_wires(def: &ChipDef, pins: &[PartPins]) -> Result<(), CompileError> {
             Source::Input(i) => def
                 .inputs
                 .get(i)
-                .ok_or_else(|| bad_pin(format!("giriş #{i}")))?,
+                .ok_or_else(|| bad_pin(trf!("giriş #{i}", "input #{i}")))?,
             Source::Part { part, pin } => pins
                 .get(part)
                 .and_then(|p| p.outputs.get(pin))
-                .ok_or_else(|| bad_pin(format!("parça #{part} çıkış #{pin}")))?,
+                .ok_or_else(|| {
+                    bad_pin(trf!(
+                        "parça #{part} çıkış #{pin}",
+                        "part #{part} output #{pin}"
+                    ))
+                })?,
         };
         let (slot, to, label) = match w.to {
             Sink::Output(i) => {
                 let slot = driven_outputs
                     .get_mut(i)
-                    .ok_or_else(|| bad_pin(format!("çıkış #{i}")))?;
+                    .ok_or_else(|| bad_pin(trf!("çıkış #{i}", "output #{i}")))?;
                 (
                     slot,
                     &def.outputs[i],
-                    format!("çıkış {}", def.outputs[i].name),
+                    trf!("çıkış {}", "output {}", def.outputs[i].name),
                 )
             }
             Sink::Part { part, pin } => {
                 let slot = driven_parts
                     .get_mut(part)
                     .and_then(|p| p.get_mut(pin))
-                    .ok_or_else(|| bad_pin(format!("parça #{part} giriş #{pin}")))?;
+                    .ok_or_else(|| {
+                        bad_pin(trf!(
+                            "parça #{part} giriş #{pin}",
+                            "part #{part} input #{pin}"
+                        ))
+                    })?;
                 let to = &pins[part].inputs[pin];
                 (
                     slot,
                     to,
-                    format!(
+                    trf!(
                         "{} parçasının {} girişi",
+                        "input {1} of the {0} part",
                         def.parts[part].kind.name(),
                         to.name
                     ),
@@ -1235,5 +1264,97 @@ mod tests {
         assert_eq!(c.eval_values(&[0, 0]).unwrap(), vec![1]);
         assert_eq!(c.eval_values(&[0, 1]).unwrap(), vec![0]);
         assert_eq!(c.eval_values(&[0, 0]).unwrap(), vec![0]);
+    }
+}
+
+/// How deep the logic is: the most NAND gates a change at an input (or a
+/// latch's output) passes through before it reaches an output or a latch.
+/// This decides how fast a chip can be clocked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Depth {
+    /// Gates on the longest path.
+    pub gates: usize,
+}
+
+impl Circuit {
+    /// The longest chain of gates in the circuit. Gates in feedback loops
+    /// (latches) start and end paths: a loop is storage, not a path. Native
+    /// parts count as no gates.
+    pub fn depth(&self) -> Depth {
+        // Arrival depth of each net: the most gates before it.
+        let mut at = vec![0usize; self.values.len()];
+        let mut longest = 0;
+        for step in &self.steps {
+            match *step {
+                Step::Gates { start, end } => {
+                    for g in &self.gates[start as usize..end as usize] {
+                        let d = at[g.a as usize].max(at[g.b as usize]) + 1;
+                        at[g.out as usize] = d;
+                        longest = longest.max(d);
+                    }
+                }
+                Step::Loop { start, end, .. } => {
+                    // Paths end at the loop's inputs; its outputs start anew.
+                    for g in &self.gates[start as usize..end as usize] {
+                        longest = longest.max(at[g.a as usize]).max(at[g.b as usize]);
+                    }
+                    for g in &self.gates[start as usize..end as usize] {
+                        at[g.out as usize] = 1;
+                    }
+                }
+                Step::Native(i) => {
+                    let n = &self.natives[i as usize];
+                    let d = n
+                        .inputs
+                        .iter()
+                        .flatten()
+                        .map(|&x| at[x as usize])
+                        .max()
+                        .unwrap_or(0);
+                    for &o in n.outputs.iter().flatten() {
+                        at[o as usize] = d;
+                    }
+                }
+            }
+        }
+        Depth { gates: longest }
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::*;
+    use crate::chip::{ChipBuilder, Library};
+
+    #[test]
+    fn depth_counts_the_longest_chain() {
+        let mut b = ChipBuilder::new("T", &["a", "b"], &["x", "y"]);
+        let (a, bb) = (b.input("a"), b.input("b"));
+        let n1 = b.nand(a, bb);
+        let n2 = b.nand(n1, n1);
+        let n3 = b.nand(n2, a);
+        b.output("x", n3);
+        b.output("y", n1);
+        let c = Circuit::compile_def(&Library::new(), &b.build()).unwrap();
+        assert_eq!(c.depth().gates, 3);
+    }
+
+    #[test]
+    fn latches_cut_paths() {
+        // An SR latch fed by one gate on each side, read through one gate.
+        let mut b = ChipBuilder::new("T", &["s", "r"], &["q"]);
+        let (s, r) = (b.input("s"), b.input("r"));
+        let ns = b.nand(s, s);
+        let nr = b.nand(r, r);
+        let q = b.part(crate::chip::Part::new(crate::chip::PartKind::Nand), &[ns]);
+        let nq = b.part(crate::chip::Part::new(crate::chip::PartKind::Nand), &[nr]);
+        b.wire(crate::chip::out(q, 0), crate::chip::into(nq, 1));
+        b.wire(crate::chip::out(nq, 0), crate::chip::into(q, 1));
+        let o = b.nand(crate::chip::out(q, 0), crate::chip::out(q, 0));
+        b.output("q", o);
+        let c = Circuit::compile_def(&Library::new(), &b.build()).unwrap();
+        assert!(c.has_feedback());
+        // In: NOT then the loop (1); out: loop gate (1) then NOT (2).
+        assert_eq!(c.depth().gates, 2);
     }
 }

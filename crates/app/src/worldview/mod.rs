@@ -18,6 +18,7 @@
 use std::collections::BTreeSet;
 
 use egui::{pos2, vec2, Color32, Id as EguiId, Pos2, Rect, Sense, Ui, Vec2};
+use makine_lang::{tr, trf};
 use makine_sim::{mask, Library};
 use makine_world::{device, Change, Device, Edit, End, Id, Kind, Placed, Pos, World};
 
@@ -37,25 +38,72 @@ pub use panels::{device_palette, draggable, palette, PaletteItem};
 
 /// Every key and gesture of the world view: (keys, what they do), for the
 /// side panel.
-pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("Sürükle (parça)", "taşı"),
-    ("Sürükle (uçtan uca)", "tel çek"),
-    ("Sürükle (boşluk)", "kaydır"),
-    ("Shift+sürükle", "alan seç"),
-    ("Tık", "anahtarı, girişi değiştir; parçayı seç"),
-    ("Sağ tık", "parçanın ya da telin menüsü"),
-    ("Delete", "seçileni ya da üstündeki teli sil"),
-    ("Ctrl+C / X / V", "kopyala / kes / yapıştır"),
-    ("Ctrl+D", "seçileni çoğalt"),
-    ("Ctrl+A", "hepsini seç"),
-    ("Ctrl+Z / Ctrl+Y", "geri al / yinele"),
-    ("1–9", "parça seç (tıklayınca koyulur)"),
-    ("Esc", "elindekini ya da seçimi bırak"),
-    ("Tekerlek", "yakınlaştır"),
-    ("P", "saatleri durdur / başlat"),
-    ("N", "durmuşken bir adım ilerlet"),
-    ("Home", "bütün dünyayı göster"),
-];
+pub fn shortcuts() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (tr!("Sürükle (parça)", "Drag (part)"), tr!("taşı", "move")),
+        (
+            tr!("Sürükle (uçtan uca)", "Drag (pin to pin)"),
+            tr!("tel çek", "draw a wire"),
+        ),
+        (
+            tr!("Sürükle (boşluk)", "Drag (empty)"),
+            tr!("kaydır", "pan"),
+        ),
+        (
+            tr!("Shift+sürükle", "Shift+drag"),
+            tr!("alan seç", "select an area"),
+        ),
+        (
+            tr!("Tık", "Click"),
+            tr!(
+                "anahtarı, girişi değiştir; parçayı seç",
+                "toggle a switch or input; select a part"
+            ),
+        ),
+        (
+            tr!("Sağ tık", "Right click"),
+            tr!("parçanın ya da telin menüsü", "part or wire menu"),
+        ),
+        (
+            "Delete",
+            tr!(
+                "seçileni ya da üstündeki teli sil",
+                "delete the selection or the wire under it"
+            ),
+        ),
+        (
+            "Ctrl+C / X / V",
+            tr!("kopyala / kes / yapıştır", "copy / cut / paste"),
+        ),
+        ("Ctrl+D", tr!("seçileni çoğalt", "duplicate the selection")),
+        ("Ctrl+A", tr!("hepsini seç", "select all")),
+        ("Ctrl+Z / Ctrl+Y", tr!("geri al / yinele", "undo / redo")),
+        (
+            "1–9",
+            tr!(
+                "parça seç (tıklayınca koyulur)",
+                "pick a part (click to place)"
+            ),
+        ),
+        (
+            "Esc",
+            tr!(
+                "elindekini ya da seçimi bırak",
+                "drop what you hold or the selection"
+            ),
+        ),
+        (tr!("Tekerlek", "Wheel"), tr!("yakınlaştır", "zoom")),
+        (
+            "P",
+            tr!("saatleri durdur / başlat", "pause / run the clocks"),
+        ),
+        (
+            "N",
+            tr!("durmuşken bir adım ilerlet", "step once while paused"),
+        ),
+        ("Home", tr!("bütün dünyayı göster", "show the whole world")),
+    ]
+}
 
 /// Parts copied: positions relative to the first part, and the wires
 /// between them by index.
@@ -197,7 +245,7 @@ impl WorldView {
             selected_module: None,
             collapsed,
             scope: Vec::new(),
-            module_name: "Modül".into(),
+            module_name: tr!("Modül", "Module").into(),
             selected_wire: None,
             routing: None,
             minimap: true,
@@ -1059,7 +1107,13 @@ impl WorldView {
                                     .collect(),
                             ));
                         } else {
-                            self.status = Some("Bu iki ucun genişliği uymuyor.".into());
+                            self.status = Some(
+                                tr!(
+                                    "Bu iki ucun genişliği uymuyor.",
+                                    "These two pins have different widths."
+                                )
+                                .into(),
+                            );
                         }
                     }
                 }
@@ -1292,17 +1346,20 @@ impl WorldView {
                 .unwrap_or(Menu::Board);
             match target {
                 Menu::Wire(to) => {
-                    if ui.button("Tel adı / yolunu düzenle").clicked() {
+                    if ui
+                        .button(tr!("Tel adı / yolunu düzenle", "Edit wire name / path"))
+                        .clicked()
+                    {
                         self.selected_wire = Some(to);
                         ui.close();
                     }
-                    if ui.button("Sinyali izle").clicked() {
+                    if ui.button(tr!("Sinyali izle", "Watch signal")).clicked() {
                         if let Some(from) = self.world.wire_into(to) {
                             self.sim.watch(from);
                         }
                         ui.close();
                     }
-                    if ui.button("✂ Kabloyu kes").clicked() {
+                    if ui.button(tr!("✂ Kabloyu kes", "✂ Cut wire")).clicked() {
                         let l = self.layout(self.origin);
                         self.edit(Edit::Batch(
                             l.sink_aliases(to)
@@ -1315,20 +1372,26 @@ impl WorldView {
                 }
                 Menu::Part => {
                     let n = self.selected.len();
-                    if ui.button("Çoğalt (Ctrl+D)").clicked() {
+                    if ui
+                        .button(tr!("Çoğalt (Ctrl+D)", "Duplicate (Ctrl+D)"))
+                        .clicked()
+                    {
                         self.duplicate();
                         ui.close();
                     }
-                    if ui.button("Kopyala (Ctrl+C)").clicked() {
+                    if ui
+                        .button(tr!("Kopyala (Ctrl+C)", "Copy (Ctrl+C)"))
+                        .clicked()
+                    {
                         if let Some(t) = self.copy() {
                             ui.ctx().copy_text(t);
                         }
                         ui.close();
                     }
                     let label = if n > 1 {
-                        format!("{n} parçayı sil")
+                        trf!("{n} parçayı sil", "Delete {n} parts")
                     } else {
-                        "Sil".into()
+                        tr!("Sil", "Delete").into()
                     };
                     if ui.button(label).clicked() {
                         self.delete_selected();
@@ -1337,7 +1400,10 @@ impl WorldView {
                 }
                 Menu::Board => {
                     if ui
-                        .add_enabled(self.clipboard.is_some(), egui::Button::new("Yapıştır"))
+                        .add_enabled(
+                            self.clipboard.is_some(),
+                            egui::Button::new(tr!("Yapıştır", "Paste")),
+                        )
                         .clicked()
                     {
                         let at = self.drop_point();
@@ -1345,9 +1411,10 @@ impl WorldView {
                         ui.close();
                     }
                     ui.label(
-                        egui::RichText::new(
+                        egui::RichText::new(tr!(
                             "Parça eklemek için sağdaki listeden sürükle ya da tıkla.",
-                        )
+                            "To add a part, drag or click it in the list on the right."
+                        ))
                         .weak()
                         .small(),
                     );

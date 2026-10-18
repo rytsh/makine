@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use makine_lang::trf;
 use makine_sim::{ChipDef, Library, PartKind};
 use serde::{Deserialize, Serialize};
 
@@ -47,8 +48,12 @@ pub enum PackError {
 impl fmt::Display for PackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PackError::UnknownChip(c) => write!(f, "bilinmeyen çip: {c}"),
-            PackError::Recursive(c) => write!(f, "{c} kendi kendini içeriyor"),
+            PackError::UnknownChip(c) => {
+                f.write_str(&trf!("bilinmeyen çip: {c}", "unknown chip: {c}"))
+            }
+            PackError::Recursive(c) => {
+                f.write_str(&trf!("{c} kendi kendini içeriyor", "{c} contains itself"))
+            }
         }
     }
 }
@@ -67,15 +72,22 @@ pub enum UnpackError {
 impl fmt::Display for UnpackError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            UnpackError::Format(e) => write!(f, "geçersiz çip dosyası: {e}"),
-            UnpackError::Missing(m) => {
-                write!(f, "bu çip için önce şunlar gerekli: {}", m.join(", "))
+            UnpackError::Format(e) => {
+                f.write_str(&trf!("geçersiz çip dosyası: {e}", "invalid chip file: {e}"))
             }
-            UnpackError::Conflict(c) => write!(
-                f,
-                "'{c}' adında farklı bir çipin zaten var; birini yeniden adlandır"
-            ),
-            UnpackError::Invalid(e) => write!(f, "çip derlenemiyor: {e}"),
+            UnpackError::Missing(m) => f.write_str(&trf!(
+                "bu çip için önce şunlar gerekli: {}",
+                "this chip needs these first: {}",
+                m.join(", ")
+            )),
+            UnpackError::Conflict(c) => f.write_str(&trf!(
+                "'{c}' adında farklı bir çipin zaten var; birini yeniden adlandır",
+                "you already have a different chip named '{c}'; rename one of them"
+            )),
+            UnpackError::Invalid(e) => f.write_str(&trf!(
+                "çip derlenemiyor: {e}",
+                "the chip can't be built: {e}"
+            )),
         }
     }
 }
@@ -145,20 +157,23 @@ impl Package {
         let p: Package =
             serde_json::from_str(text).map_err(|e| UnpackError::Format(e.to_string()))?;
         if p.format != FORMAT {
-            return Err(UnpackError::Format(format!(
+            return Err(UnpackError::Format(trf!(
                 "'{}' bir makine çipi değil",
+                "'{}' is not a makine chip",
                 p.format
             )));
         }
         if p.version > VERSION {
-            return Err(UnpackError::Format(format!(
+            return Err(UnpackError::Format(trf!(
                 "dosya daha yeni bir sürümden (v{}); makine'yi güncelle",
+                "the file is from a newer version (v{}); update makine",
                 p.version
             )));
         }
         if !p.chips.iter().any(|c| c.name == p.chip) {
-            return Err(UnpackError::Format(format!(
+            return Err(UnpackError::Format(trf!(
                 "ana çip '{}' dosyada yok",
+                "the main chip '{}' is not in the file",
                 p.chip
             )));
         }

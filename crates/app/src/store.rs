@@ -46,6 +46,12 @@ pub struct Progress {
     /// The world open last.
     #[serde(default)]
     pub last_world: Option<String>,
+    /// The first-run guide was closed.
+    #[serde(default)]
+    pub guide_done: bool,
+    /// How many hints were opened, per level.
+    #[serde(default)]
+    pub hints: BTreeMap<String, usize>,
 }
 
 fn yes() -> bool {
@@ -80,6 +86,8 @@ impl Default for Progress {
             sandbox: Sandbox::default(),
             worlds: BTreeMap::new(),
             last_world: None,
+            hints: BTreeMap::new(),
+            guide_done: false,
         }
     }
 }

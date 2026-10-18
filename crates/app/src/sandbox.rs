@@ -168,23 +168,39 @@ pub fn check_name(
     let mut chars = name.chars();
     match chars.next() {
         Some(c) if c.is_alphabetic() => {}
-        _ => return Err("ad bir harfle başlamalı".into()),
+        _ => {
+            return Err(makine_lang::tr!(
+                "ad bir harfle başlamalı",
+                "a name must start with a letter"
+            )
+            .into())
+        }
     }
     if !chars.all(|c| c.is_alphanumeric() || c == '_') {
-        return Err("adda sadece harf, rakam ve _ olabilir".into());
+        return Err(makine_lang::tr!(
+            "adda sadece harf, rakam ve _ olabilir",
+            "a name can only have letters, digits and _"
+        )
+        .into());
     }
     if name.len() > 40 {
-        return Err("ad çok uzun".into());
+        return Err(makine_lang::tr!("ad çok uzun", "the name is too long").into());
     }
     if Some(name) == current {
         return Ok(());
     }
     if makine_levels::find(name).is_some() || name == makine_sim::NAND || lib.native(name).is_some()
     {
-        return Err(format!("'{name}' bir seviye çipinin adı"));
+        return Err(makine_lang::trf!(
+            "'{name}' bir seviye çipinin adı",
+            "'{name}' is the name of a level chip"
+        ));
     }
     if sandbox.chips.contains_key(name) {
-        return Err(format!("'{name}' adında bir çipin zaten var"));
+        return Err(makine_lang::trf!(
+            "'{name}' adında bir çipin zaten var",
+            "you already have a chip named '{name}'"
+        ));
     }
     Ok(())
 }
@@ -199,18 +215,32 @@ pub fn parse_pin_list(text: &str) -> Result<Vec<Pin>, String> {
                 let w = rest
                     .strip_suffix(']')
                     .and_then(|w| w.trim().parse::<u32>().ok())
-                    .ok_or_else(|| format!("'{spec}': genişlik [1..64] olmalı"))?;
+                    .ok_or_else(|| {
+                        makine_lang::trf!(
+                            "'{spec}': genişlik [1..64] olmalı",
+                            "'{spec}': the width must be [1..64]"
+                        )
+                    })?;
                 (n.trim(), w)
             }
         };
         if !(1..=MAX_WIDTH as u32).contains(&width) {
-            return Err(format!("'{spec}': genişlik 1 ile 64 arasında olmalı"));
+            return Err(makine_lang::trf!(
+                "'{spec}': genişlik 1 ile 64 arasında olmalı",
+                "'{spec}': the width must be between 1 and 64"
+            ));
         }
         if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Err(format!("'{spec}': geçersiz uç adı"));
+            return Err(makine_lang::trf!(
+                "'{spec}': geçersiz uç adı",
+                "'{spec}': not a valid pin name"
+            ));
         }
         if pins.iter().any(|p| p.name == name) {
-            return Err(format!("'{name}' iki kez yazılmış"));
+            return Err(makine_lang::trf!(
+                "'{name}' iki kez yazılmış",
+                "'{name}' is written twice"
+            ));
         }
         pins.push(Pin::new(name, width as u8));
     }
@@ -284,21 +314,27 @@ impl PinEditor {
     pub fn show(&mut self, ui: &mut Ui) -> Option<(Vec<Pin>, Vec<Pin>)> {
         let mut apply = false;
         egui::Grid::new("pins").num_columns(2).show(ui, |ui| {
-            let l = ui.label("Girişler").id;
+            let l = ui.label(makine_lang::tr!("Girişler", "Inputs")).id;
             ui.add(egui::TextEdit::singleline(&mut self.inputs).hint_text("a, b[8]"))
                 .labelled_by(l);
             ui.end_row();
-            let l = ui.label("Çıkışlar").id;
+            let l = ui.label(makine_lang::tr!("Çıkışlar", "Outputs")).id;
             ui.add(egui::TextEdit::singleline(&mut self.outputs).hint_text("out"))
                 .labelled_by(l);
             ui.end_row();
         });
         ui.label(
-            RichText::new("Virgülle ayır; bus için genişlik: sayi[32]")
-                .weak()
-                .small(),
+            RichText::new(makine_lang::tr!(
+                "Virgülle ayır; bus için genişlik: sayi[32]",
+                "Separate with commas; width for a bus: num[32]"
+            ))
+            .weak()
+            .small(),
         );
-        if ui.button("Uçları uygula").clicked() {
+        if ui
+            .button(makine_lang::tr!("Uçları uygula", "Apply pins"))
+            .clicked()
+        {
             apply = true;
         }
         if let Some(e) = &self.error {

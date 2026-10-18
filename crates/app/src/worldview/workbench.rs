@@ -2,6 +2,7 @@
 use super::WorldView;
 use crate::theme;
 use egui::{vec2, Align2, FontId, Rect, RichText, Sense, Stroke, StrokeKind, Ui};
+use makine_lang::{tr, trf};
 use makine_world::{Edit, Id, Module};
 
 impl WorldView {
@@ -13,10 +14,10 @@ impl WorldView {
             .filter(|id| self.world.part(*id).is_some())
             .collect();
         if members.len() < 2 {
-            return Err("En az iki parça seç.".into());
+            return Err(tr!("En az iki parça seç.", "Select at least two parts.").into());
         }
         if name.trim().is_empty() {
-            return Err("Modüle bir ad ver.".into());
+            return Err(tr!("Modüle bir ad ver.", "Give the module a name.").into());
         }
         for (_, m) in self.world.modules() {
             let n = m
@@ -25,13 +26,18 @@ impl WorldView {
                 .filter(|id| self.selected.contains(id))
                 .count();
             if n == m.members.len() && n == members.len() {
-                return Err("Bu parçalar zaten bir modül.".into());
+                return Err(tr!(
+                    "Bu parçalar zaten bir modül.",
+                    "These parts are already a module."
+                )
+                .into());
             }
             if n != 0 && n != m.members.len() && n != members.len() {
-                return Err(
-                    "Modüller iç içe olabilir ama kısmen örtüşemez. Mevcut modülün tamamını seç."
-                        .into(),
-                );
+                return Err(tr!(
+                    "Modüller iç içe olabilir ama kısmen örtüşemez. Mevcut modülün tamamını seç.",
+                    "Modules can be nested but can't partly overlap. Select the whole existing module."
+                )
+                .into());
             }
         }
         let id = self.world.new_id();
@@ -91,29 +97,38 @@ impl WorldView {
             .and_then(|id| Some((id, self.world.module(id)?.clone())))
         {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("Modül: {}", m.name)).strong());
+                ui.label(RichText::new(trf!("Modül: {}", "Module: {}", m.name)).strong());
                 let label = if self.collapsed.contains(&id) {
-                    "İçini aç"
+                    tr!("İçini aç", "Open")
                 } else {
-                    "Kapat"
+                    tr!("Kapat", "Close")
                 };
                 if ui
-                    .button("İçine gir")
-                    .on_hover_text("Yalnızca bu modülün içini göster (çift tık)")
+                    .button(tr!("İçine gir", "Go inside"))
+                    .on_hover_text(tr!(
+                        "Yalnızca bu modülün içini göster (çift tık)",
+                        "Show only the inside of this module (double click)"
+                    ))
                     .clicked()
                 {
                     self.enter_module(id);
                 }
                 if ui
                     .button(label)
-                    .on_hover_text("Modülü burada, çevresiyle birlikte aç ya da kapat")
+                    .on_hover_text(tr!(
+                        "Modülü burada, çevresiyle birlikte aç ya da kapat",
+                        "Open or close the module here, with its surroundings"
+                    ))
                     .clicked()
                 {
                     self.toggle_module(id);
                 }
                 if ui
-                    .button("Grubu çöz")
-                    .on_hover_text("Parçalar ve teller kalır; yalnızca modül sınırı kaldırılır")
+                    .button(tr!("Grubu çöz", "Ungroup"))
+                    .on_hover_text(tr!(
+                        "Parçalar ve teller kalır; yalnızca modül sınırı kaldırılır",
+                        "Parts and wires stay; only the module border is removed"
+                    ))
                     .clicked()
                 {
                     self.edit(Edit::Module { id, module: None });
@@ -121,7 +136,7 @@ impl WorldView {
                     self.collapsed.remove(&id);
                 }
             });
-            let l = ui.label("Modül adı").id;
+            let l = ui.label(tr!("Modül adı", "Module name")).id;
             if ui
                 .text_edit_singleline(&mut m.name)
                 .labelled_by(l)
@@ -133,16 +148,19 @@ impl WorldView {
                 });
             }
             ui.label(
-                RichText::new("Başlığa çift tıkla: içine gir. Başlığı sürükle: hepsini taşı.")
-                    .weak()
-                    .small(),
+                RichText::new(tr!(
+                    "Başlığa çift tıkla: içine gir. Başlığı sürükle: hepsini taşı.",
+                    "Double click the title: go inside. Drag the title: move it all."
+                ))
+                .weak()
+                .small(),
             );
         } else if self.selected.len() >= 2 {
             ui.horizontal(|ui| {
-                let l = ui.label("Modül adı").id;
+                let l = ui.label(tr!("Modül adı", "Module name")).id;
                 ui.add(egui::TextEdit::singleline(&mut self.module_name).desired_width(110.0))
                     .labelled_by(l);
-                if ui.button("Modül yap").clicked() {
+                if ui.button(tr!("Modül yap", "Make module")).clicked() {
                     let name = self.module_name.clone();
                     if let Err(e) = self.group_selected(&name) {
                         self.status = Some(e);
@@ -152,15 +170,15 @@ impl WorldView {
         }
         if self.selected.len() >= 2 {
             ui.horizontal(|ui| {
-                if ui.button("Üstten hizala").clicked() {
+                if ui.button(tr!("Üstten hizala", "Align top")).clicked() {
                     self.align_selected(true);
                 }
-                if ui.button("Soldan hizala").clicked() {
+                if ui.button(tr!("Soldan hizala", "Align left")).clicked() {
                     self.align_selected(false);
                 }
             });
         }
-        ui.checkbox(&mut self.minimap, "Küçük harita");
+        ui.checkbox(&mut self.minimap, tr!("Küçük harita", "Minimap"));
         if let Some(to) = self.selected_wire {
             if self.world.wire_into(to).is_none() {
                 self.selected_wire = None;
@@ -168,7 +186,7 @@ impl WorldView {
             }
             let mut style = self.world.wire_style(to).cloned().unwrap_or_default();
             ui.separator();
-            let l = ui.label("Tel adı").id;
+            let l = ui.label(tr!("Tel adı", "Wire name")).id;
             if ui
                 .text_edit_singleline(&mut style.name)
                 .labelled_by(l)
@@ -180,10 +198,10 @@ impl WorldView {
                 });
             }
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Dirsek ekle").clicked() {
+                if ui.button(tr!("Dirsek ekle", "Add bend")).clicked() {
                     self.routing = Some(to);
                 }
-                if ui.button("Otomatik yol").clicked() {
+                if ui.button(tr!("Otomatik yol", "Auto route")).clicked() {
                     style.points.clear();
                     self.edit(Edit::Style {
                         to,
@@ -200,7 +218,10 @@ impl WorldView {
         if self.routing.is_some() {
             ui.colored_label(
                 theme::COPPER_BRIGHT,
-                "Tahtaya tıkla: dirsek ekle. Enter / Esc: bitir.",
+                tr!(
+                    "Tahtaya tıkla: dirsek ekle. Enter / Esc: bitir.",
+                    "Click the board: add a bend. Enter / Esc: finish."
+                ),
             );
         }
     }
@@ -214,8 +235,8 @@ impl WorldView {
         let mut go = None;
         ui.horizontal_wrapped(|ui| {
             if ui
-                .button("⬅ Dışarı çık")
-                .on_hover_text("Bir üst seviyeye dön (Esc)")
+                .button(tr!("⬅ Dışarı çık", "⬅ Go out"))
+                .on_hover_text(tr!("Bir üst seviyeye dön (Esc)", "Back up one level (Esc)"))
                 .clicked()
             {
                 go = Some(self.scope.len() - 1);
@@ -297,14 +318,15 @@ impl WorldView {
             p.text(
                 r.right_bottom() - vec2(3.0, 3.0),
                 Align2::RIGHT_BOTTOM,
-                "HARİTA",
+                tr!("HARİTA", "MAP"),
                 FontId::monospace(8.0),
                 theme::INK_DIM,
             );
             ui.vertical(|ui| {
                 ui.label(
-                    RichText::new(format!(
+                    RichText::new(trf!(
                         "{} parça · {} modül",
+                        "{} parts · {} modules",
                         self.world.len(),
                         self.world.modules().count()
                     ))
@@ -312,9 +334,10 @@ impl WorldView {
                     .small(),
                 );
                 ui.label(
-                    RichText::new(
+                    RichText::new(tr!(
                         "Shift+sürükle: seç · Modüle çift tık: içine gir · Esc: dışarı çık",
-                    )
+                        "Shift+drag: select · Double click a module: go inside · Esc: go out"
+                    ))
                     .weak()
                     .small(),
                 );

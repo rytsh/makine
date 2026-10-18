@@ -14,7 +14,7 @@ pub use chip::{
     into, mask, out, parse_pins, ChipBuilder, ChipDef, Library, Part, PartId, PartKind, PartPins,
     Pin, Sink, Source, Wire, MAX_WIDTH, NAND,
 };
-pub use circuit::{Circuit, CompileError, Oscillation};
+pub use circuit::{Circuit, CompileError, Depth, Oscillation};
 pub use native::Level as LevelSensitive;
 pub use native::{Behavior, ClockEdge, Clocked, NativeDef};
 pub use verify::{

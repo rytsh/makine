@@ -2,6 +2,7 @@
 //! what is selected.
 
 use egui::{RichText, Ui};
+use makine_lang::{tr, trf};
 use makine_sim::{mask, Part, PartKind};
 use makine_world::{device, Device, Gate, Id, Kind, Placed};
 
@@ -23,50 +24,91 @@ pub struct Entry {
 pub fn palette() -> Vec<Entry> {
     let e = |name, kind, tip| Entry { name, kind, tip };
     vec![
-        e("Anahtar", Kind::Switch { on: false }, "Tıkla: aç / kapa"),
-        e("Lamba", Kind::Lamp, "Girişi 0 değilse yanar"),
-        e("NOT", Kind::Gate(Gate::Not), "Girişin tersi"),
-        e("AND", Kind::Gate(Gate::And), "İkisi de 1 ise 1"),
-        e("OR", Kind::Gate(Gate::Or), "En az biri 1 ise 1"),
-        e("XOR", Kind::Gate(Gate::Xor), "Farklıysa 1"),
-        e("NAND", Kind::Gate(Gate::Nand), "İkisi de 1 ise 0"),
-        e("NOR", Kind::Gate(Gate::Nor), "İkisi de 0 ise 1"),
         e(
-            "Saat",
-            Kind::Clock { period: 30 },
-            "Kendi kendine yanıp söner. Seçip periyodunu ayarla.",
+            tr!("Anahtar", "Switch"),
+            Kind::Switch { on: false },
+            tr!("Tıkla: aç / kapa", "Click: on / off"),
         ),
         e(
-            "Giriş",
+            tr!("Lamba", "Lamp"),
+            Kind::Lamp,
+            tr!("Girişi 0 değilse yanar", "Lights when its input is not 0"),
+        ),
+        e(
+            "NOT",
+            Kind::Gate(Gate::Not),
+            tr!("Girişin tersi", "The opposite of the input"),
+        ),
+        e(
+            "AND",
+            Kind::Gate(Gate::And),
+            tr!("İkisi de 1 ise 1", "1 if both are 1"),
+        ),
+        e(
+            "OR",
+            Kind::Gate(Gate::Or),
+            tr!("En az biri 1 ise 1", "1 if at least one is 1"),
+        ),
+        e(
+            "XOR",
+            Kind::Gate(Gate::Xor),
+            tr!("Farklıysa 1", "1 if they differ"),
+        ),
+        e(
+            "NAND",
+            Kind::Gate(Gate::Nand),
+            tr!("İkisi de 1 ise 0", "0 if both are 1"),
+        ),
+        e(
+            "NOR",
+            Kind::Gate(Gate::Nor),
+            tr!("İkisi de 0 ise 1", "1 if both are 0"),
+        ),
+        e(
+            tr!("Saat", "Clock"),
+            Kind::Clock { period: 30 },
+            tr!(
+                "Kendi kendine yanıp söner. Seçip periyodunu ayarla.",
+                "Blinks on its own. Select it to set its period."
+            ),
+        ),
+        e(
+            tr!("Giriş", "Input"),
             Kind::Input {
                 name: "a".into(),
                 width: 1,
                 value: 0,
             },
-            "Tıkla: değeri değiştir. Çip yapınca çipin girişi olur.",
+            tr!(
+                "Tıkla: değeri değiştir. Çip yapınca çipin girişi olur.",
+                "Click: change the value. Becomes a chip input when you make a chip."
+            ),
         ),
         e(
-            "Çıkış",
+            tr!("Çıkış", "Output"),
             Kind::Output {
                 name: "q".into(),
                 width: 1,
             },
-            "Bağlı telin değerini gösterir. Çip yapınca çipin çıkışı olur.",
+            tr!(
+                "Bağlı telin değerini gösterir. Çip yapınca çipin çıkışı olur.",
+                "Shows the value of its wire. Becomes a chip output when you make a chip."
+            ),
         ),
         e(
-            "Sabit",
+            tr!("Sabit", "Constant"),
             Kind::Part(Part::new(PartKind::Const { width: 1, value: 1 })),
-            "Hep aynı değeri verir",
+            tr!("Hep aynı değeri verir", "Always gives the same value"),
         ),
         e(
-            "Böl",
+            tr!("Böl", "Split"),
             Kind::Part(Part::new(PartKind::Split(vec![1; 8]))),
-            "Bus'ı parçalara ayırır",
+            tr!("Bus'ı parçalara ayırır", "Splits a bus into pieces"),
         ),
         e(
-            "Birleştir",
+            tr!("Birleştir", "Join"),
             Kind::Part(Part::new(PartKind::Join(vec![1; 8]))),
-            "Parçaları tek bus yapar",
+            tr!("Parçaları tek bus yapar", "Joins pieces into one bus"),
         ),
     ]
 }
@@ -80,19 +122,22 @@ pub fn device_palette() -> Vec<Entry> {
     };
     vec![
         e(
-            "Yazmaç",
+            tr!("Yazmaç", "Register"),
             Device::Register { bits: 4 },
-            "Yükselen saat kenarında veri saklar; sıfırlama girişli",
+            tr!(
+                "Yükselen saat kenarında veri saklar; sıfırlama girişli",
+                "Stores data on a rising clock edge; has a reset input"
+            ),
         ),
         e(
             "Program ROM",
             Device::ProgramRom { words: vec![0] },
-            "4096 bayt program belleği",
+            tr!("4096 bayt program belleği", "4096 bytes of program memory"),
         ),
         e(
             "RAM",
             Device::Ram { addr: 4, data: 8 },
-            "Okunup yazılabilen bellek",
+            tr!("Okunup yazılabilen bellek", "Memory you can read and write"),
         ),
         e(
             "ROM",
@@ -101,18 +146,28 @@ pub fn device_palette() -> Vec<Entry> {
                 data: 8,
                 words: Vec::new(),
             },
-            "İçeriği senin yazdığın sabit bellek",
+            tr!(
+                "İçeriği senin yazdığın sabit bellek",
+                "Fixed memory with contents you write"
+            ),
         ),
         e(
-            "Ekran",
+            tr!("Ekran", "Screen"),
             Device::Screen { bits: 3 },
-            "Siyah beyaz piksel ekran",
+            tr!("Siyah beyaz piksel ekran", "Black and white pixel screen"),
         ),
-        e("Klavye", Device::Keyboard, "Yazdığın tuşları devreye verir"),
         e(
-            "Gösterge",
+            tr!("Klavye", "Keyboard"),
+            Device::Keyboard,
+            tr!(
+                "Yazdığın tuşları devreye verir",
+                "Sends the keys you type to the circuit"
+            ),
+        ),
+        e(
+            tr!("Gösterge", "Display"),
             Device::Display { bits: 8 },
-            "Teldeki sayıyı gösterir",
+            tr!("Teldeki sayıyı gösterir", "Shows the number on the wire"),
         ),
     ]
 }
@@ -380,10 +435,13 @@ impl WorldView {
             self.part_panel(ui);
         } else {
             ui.horizontal(|ui| {
-                ui.label(theme::strong(format!("{n} parça seçili"), 15.0));
+                ui.label(theme::strong(
+                    trf!("{n} parça seçili", "{n} parts selected"),
+                    15.0,
+                ));
                 if ui
                     .small_button("✖")
-                    .on_hover_text("Seçimi bırak (Esc)")
+                    .on_hover_text(tr!("Seçimi bırak (Esc)", "Clear selection (Esc)"))
                     .clicked()
                 {
                     self.selected.clear();
@@ -391,39 +449,53 @@ impl WorldView {
             });
         }
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Çoğalt").on_hover_text("Ctrl+D").clicked() {
+            if ui
+                .button(tr!("Çoğalt", "Duplicate"))
+                .on_hover_text("Ctrl+D")
+                .clicked()
+            {
                 self.duplicate();
             }
-            if ui.button("Kopyala").on_hover_text("Ctrl+C").clicked() {
+            if ui
+                .button(tr!("Kopyala", "Copy"))
+                .on_hover_text("Ctrl+C")
+                .clicked()
+            {
                 if let Some(t) = self.copy() {
                     ui.ctx().copy_text(t);
                 }
             }
-            if ui.button("Sil").on_hover_text("Delete").clicked() {
+            if ui
+                .button(tr!("Sil", "Delete"))
+                .on_hover_text("Delete")
+                .clicked()
+            {
                 self.delete_selected();
             }
         });
         if n < 2 {
             return;
         }
-        theme::section(ui, "Çipe çevir");
+        theme::section(ui, tr!("Çipe çevir", "Turn into a chip"));
         ui.label(
-            RichText::new(
+            RichText::new(tr!(
                 "Seçimdeki Girişler ve Çıkışlar çipin uçları olur (yukarıdan aşağı). \
                  Anahtarlar o anki değerleriyle sabit olur.",
-            )
+                "The Inputs and Outputs in the selection become the chip's pins (top to bottom). \
+                 Switches become constants with their current values."
+            ))
             .weak()
             .small(),
         );
         ui.horizontal(|ui| {
-            let l = ui.label("Ad").id;
+            let l = ui.label(tr!("Ad", "Name")).id;
             ui.add(
                 egui::TextEdit::singleline(&mut self.chip_name)
                     .hint_text("Toplayici")
                     .desired_width(110.0),
             )
             .labelled_by(l);
-            if ui.button("Çip yap").clicked() {
+            if ui.button(tr!("Çip yap", "Make chip")).clicked() {
                 self.request = Some(Request::MakeChip {
                     name: self.chip_name.trim().to_string(),
                     parts: self.selected.iter().copied().collect(),
@@ -441,7 +513,7 @@ impl WorldView {
             ui.label(theme::strong(kind.label(), 15.0));
             if ui
                 .small_button("✖")
-                .on_hover_text("Seçimi bırak (Esc)")
+                .on_hover_text(tr!("Seçimi bırak (Esc)", "Clear selection (Esc)"))
                 .clicked()
             {
                 self.selected.clear();
@@ -461,7 +533,13 @@ impl WorldView {
         };
         match &kind {
             Kind::Clock { period } => {
-                if let Some(p) = num(ui, "Periyot (adım)", *period, 1, 100_000) {
+                if let Some(p) = num(
+                    ui,
+                    tr!("Periyot (adım)", "Period (steps)"),
+                    *period,
+                    1,
+                    100_000,
+                ) {
                     new = Some(Kind::Clock { period: p });
                 }
             }
@@ -500,20 +578,32 @@ impl WorldView {
         let mut changed = None;
         match d {
             Device::Ram { addr, data } => {
-                if let Some(a) = size(ui, "Adres biti", *addr, 1, device::MAX_ADDR) {
+                if let Some(a) = size(
+                    ui,
+                    tr!("Adres biti", "Address bits"),
+                    *addr,
+                    1,
+                    device::MAX_ADDR,
+                ) {
                     changed = Some(Device::Ram {
                         addr: a,
                         data: *data,
                     });
                 }
-                if let Some(b) = size(ui, "Veri biti", *data, 1, device::MAX_DATA) {
+                if let Some(b) = size(
+                    ui,
+                    tr!("Veri biti", "Data bits"),
+                    *data,
+                    1,
+                    device::MAX_DATA,
+                ) {
                     changed = Some(Device::Ram {
                         addr: *addr,
                         data: b,
                     });
                 }
                 if let Some(words) = self.ram_words(id) {
-                    ui.label(RichText::new("İçerik").small());
+                    ui.label(RichText::new(tr!("İçerik", "Contents")).small());
                     ui.label(
                         RichText::new(device::words_text(&words, *data))
                             .monospace()
@@ -522,14 +612,26 @@ impl WorldView {
                 }
             }
             Device::Rom { addr, data, words } => {
-                if let Some(a) = size(ui, "Adres biti", *addr, 1, device::MAX_ADDR) {
+                if let Some(a) = size(
+                    ui,
+                    tr!("Adres biti", "Address bits"),
+                    *addr,
+                    1,
+                    device::MAX_ADDR,
+                ) {
                     changed = Some(Device::Rom {
                         addr: a,
                         data: *data,
                         words: words.clone(),
                     });
                 }
-                if let Some(b) = size(ui, "Veri biti", *data, 1, device::MAX_DATA) {
+                if let Some(b) = size(
+                    ui,
+                    tr!("Veri biti", "Data bits"),
+                    *data,
+                    1,
+                    device::MAX_DATA,
+                ) {
                     changed = Some(Device::Rom {
                         addr: *addr,
                         data: b,
@@ -546,17 +648,23 @@ impl WorldView {
                 });
             }
             Device::Screen { bits } => {
-                if let Some(b) = size(ui, "Boyut biti", *bits, 2, device::MAX_SCREEN_BITS) {
+                if let Some(b) = size(
+                    ui,
+                    tr!("Boyut biti", "Size bits"),
+                    *bits,
+                    2,
+                    device::MAX_SCREEN_BITS,
+                ) {
                     changed = Some(Device::Screen { bits: b });
                 }
             }
             Device::Display { bits } => {
-                if let Some(b) = size(ui, "Bit sayısı", *bits, 1, device::MAX_DATA) {
+                if let Some(b) = size(ui, tr!("Bit sayısı", "Bits"), *bits, 1, device::MAX_DATA) {
                     changed = Some(Device::Display { bits: b });
                 }
             }
             Device::Register { bits } => {
-                if let Some(b) = size(ui, "Bit sayısı", *bits, 1, 64) {
+                if let Some(b) = size(ui, tr!("Bit sayısı", "Bits"), *bits, 1, 64) {
                     changed = Some(Device::Register { bits: b });
                 }
                 let value = self.sim.value(makine_world::End::new(id, 0));
@@ -570,7 +678,10 @@ impl WorldView {
             Device::Keyboard => {
                 ui.colored_label(
                     theme::GOOD,
-                    "⌨ Yazdıkların bu klavyeye gidiyor. Bitirince Esc.",
+                    tr!(
+                        "⌨ Yazdıkların bu klavyeye gidiyor. Bitirince Esc.",
+                        "⌨ What you type goes to this keyboard. Esc when done."
+                    ),
                 );
             }
         }
@@ -598,8 +709,9 @@ impl WorldView {
         }
         let l = ui
             .label(
-                RichText::new(format!(
+                RichText::new(trf!(
                     "İçerik: {} kelime, onaltılık (ya da #onluk), ; yorum",
+                    "Contents: {} words, hexadecimal (or #decimal), ; comment",
                     1u32 << addr
                 ))
                 .small(),
@@ -614,10 +726,14 @@ impl WorldView {
         )
         .labelled_by(l);
         let mut out = None;
-        if ui.button("İçeriği yükle").clicked() {
+        if ui.button(tr!("İçeriği yükle", "Load contents")).clicked() {
             match device::parse_words(text) {
                 Ok(w) if w.len() > 1 << addr => {
-                    *err = Some(format!("{} kelime fazla", w.len() - (1 << addr)))
+                    *err = Some(trf!(
+                        "{} kelime fazla",
+                        "{} words too many",
+                        w.len() - (1 << addr)
+                    ))
                 }
                 Ok(w) => {
                     *err = None;
@@ -645,18 +761,18 @@ fn port_settings(ui: &mut Ui, kind: &Kind) -> Option<Kind> {
     let mut w = width;
     let mut v = value.unwrap_or(0);
     ui.horizontal(|ui| {
-        let l = ui.label("Ad").id;
+        let l = ui.label(tr!("Ad", "Name")).id;
         ui.add(egui::TextEdit::singleline(&mut n).desired_width(80.0))
             .labelled_by(l);
     });
     ui.horizontal(|ui| {
-        let l = ui.label("Bit sayısı").id;
+        let l = ui.label(tr!("Bit sayısı", "Bits")).id;
         ui.add(egui::DragValue::new(&mut w).range(1..=64))
             .labelled_by(l);
     });
     if value.is_some() {
         ui.horizontal(|ui| {
-            let l = ui.label("Değer").id;
+            let l = ui.label(tr!("Değer", "Value")).id;
             ui.add(egui::DragValue::new(&mut v).range(0..=mask(w)))
                 .labelled_by(l);
         });
@@ -702,7 +818,12 @@ fn part_settings(ui: &mut Ui, p: &Part) -> Option<Part> {
     let mut changed = false;
     match &mut part.kind {
         PartKind::Split(widths) | PartKind::Join(widths) => {
-            let label = ui.label("Gruplar (düşük bitten başlayarak)").id;
+            let label = ui
+                .label(tr!(
+                    "Gruplar (düşük bitten başlayarak)",
+                    "Groups (from the low bit)"
+                ))
+                .id;
             let mut text = widths
                 .iter()
                 .map(|w| w.to_string())
@@ -719,21 +840,24 @@ fn part_settings(ui: &mut Ui, p: &Part) -> Option<Part> {
                 }
             }
             ui.label(
-                RichText::new("örn. 8,8,8,8 ya da 1,1,1,1,1,1,1,1")
-                    .weak()
-                    .small(),
+                RichText::new(tr!(
+                    "örn. 8,8,8,8 ya da 1,1,1,1,1,1,1,1",
+                    "e.g. 8,8,8,8 or 1,1,1,1,1,1,1,1"
+                ))
+                .weak()
+                .small(),
             );
         }
         PartKind::Const { width, value } => {
             ui.horizontal(|ui| {
-                let label = ui.label("Bit sayısı").id;
+                let label = ui.label(tr!("Bit sayısı", "Bits")).id;
                 changed |= ui
                     .add(egui::DragValue::new(width).range(1..=64))
                     .labelled_by(label)
                     .changed();
             });
             ui.horizontal(|ui| {
-                let label = ui.label("Değer").id;
+                let label = ui.label(tr!("Değer", "Value")).id;
                 changed |= ui
                     .add(egui::DragValue::new(value).hexadecimal(1, false, true))
                     .labelled_by(label)
@@ -745,14 +869,17 @@ fn part_settings(ui: &mut Ui, p: &Part) -> Option<Part> {
     }
     if !matches!(part.kind, PartKind::Const { .. }) {
         ui.horizontal(|ui| {
-            let label = ui.label("Tekrar").id;
+            let label = ui.label(tr!("Tekrar", "Repeat")).id;
             changed |= ui
                 .add(egui::DragValue::new(&mut part.repeat).range(1..=64))
                 .labelled_by(label)
                 .changed();
         })
         .response
-        .on_hover_text("Parçanın kaç kopyası yan yana çalışsın. Her uç bu kadar genişler.");
+        .on_hover_text(tr!(
+            "Parçanın kaç kopyası yan yana çalışsın. Her uç bu kadar genişler.",
+            "How many copies of the part work side by side. Each pin gets this many times wider."
+        ));
     }
     changed.then_some(part)
 }

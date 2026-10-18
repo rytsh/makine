@@ -113,10 +113,13 @@ impl Profiles {
     pub fn check_name(&self, name: &str, except: Option<usize>) -> Result<String, String> {
         let name = name.trim();
         if name.is_empty() {
-            return Err("Profile bir ad ver.".into());
+            return Err(makine_lang::tr!("Profile bir ad ver.", "Give the profile a name.").into());
         }
         if name.chars().count() > MAX_NAME {
-            return Err(format!("Ad en çok {MAX_NAME} harf olabilir."));
+            return Err(makine_lang::trf!(
+                "Ad en çok {MAX_NAME} harf olabilir.",
+                "A name can be at most {MAX_NAME} letters."
+            ));
         }
         if self
             .list
@@ -124,7 +127,11 @@ impl Profiles {
             .enumerate()
             .any(|(i, p)| Some(i) != except && p.name.to_lowercase() == name.to_lowercase())
         {
-            return Err("Bu adda bir profil zaten var.".into());
+            return Err(makine_lang::tr!(
+                "Bu adda bir profil zaten var.",
+                "There is already a profile with this name."
+            )
+            .into());
         }
         Ok(name.to_string())
     }
@@ -153,7 +160,11 @@ impl Profiles {
     /// so a mistake can be undone by hand.
     pub fn remove(&mut self, i: usize) -> Result<(), String> {
         if self.list.len() <= 1 {
-            return Err("Son profil silinemez.".into());
+            return Err(makine_lang::tr!(
+                "Son profil silinemez.",
+                "The last profile cannot be deleted."
+            )
+            .into());
         }
         let path = self.path(i);
         if path.exists() {
@@ -173,20 +184,25 @@ pub fn export(progress: &Progress) -> String {
 }
 
 pub fn import(text: &str) -> Result<Progress, String> {
-    serde_json::from_str(text.trim())
-        .map_err(|_| "Bu bir makine profili değil (ya da eksik kopyalanmış).".to_string())
+    serde_json::from_str(text.trim()).map_err(|_| {
+        makine_lang::tr!(
+            "Bu bir makine profili değil (ya da eksik kopyalanmış).",
+            "This is not a makine profile (or it was not copied whole)."
+        )
+        .to_string()
+    })
 }
 
 /// How far a profile has got, for the list.
 pub fn summary(p: &Progress) -> String {
     let all = makine_levels::levels();
     let done = all.iter().filter(|l| p.solved(l.chip)).count();
-    let mut s = format!("{done}/{} seviye", all.len());
+    let mut s = makine_lang::trf!("{done}/{} seviye", "{done}/{} levels", all.len());
     if !p.sandbox.chips.is_empty() {
-        s += &format!(" · {} çip", p.sandbox.chips.len());
+        s += &makine_lang::trf!(" · {} çip", " · {} chips", p.sandbox.chips.len());
     }
     if !p.worlds.is_empty() {
-        s += &format!(" · {} dünya", p.worlds.len());
+        s += &makine_lang::trf!(" · {} dünya", " · {} worlds", p.worlds.len());
     }
     s
 }

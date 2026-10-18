@@ -80,10 +80,13 @@ fn main() -> eframe::Result {
 /// The app has no console on Windows, so a startup failure would be silent.
 /// Show it in a message box instead.
 fn report_failure(e: &eframe::Error) {
-    let text = format!(
+    let text = makine_lang::trf!(
         "makine açılamadı: grafik sürücüsüyle pencere oluşturulamadı.\n\n{e}\n\n\
          Ekran kartı sürücülerini güncellemeyi ya da WGPU_BACKEND=gl ortam \
-         değişkeniyle OpenGL'i denemeyi deneyebilirsin."
+         değişkeniyle OpenGL'i denemeyi deneyebilirsin.",
+        "makine could not start: no window could be made with the graphics driver.\n\n{e}\n\n\
+         Try updating the graphics drivers, or try OpenGL with the environment \
+         variable WGPU_BACKEND=gl."
     );
     eprintln!("{text}");
     #[cfg(windows)]

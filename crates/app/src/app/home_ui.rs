@@ -2,6 +2,7 @@
 //! profiles (switch, new, rename, copy, paste, start over, delete).
 
 use egui::{vec2, RichText, Ui};
+use makine_lang::{tr, trf};
 
 use super::{App, View};
 use crate::profiles::{self, Profiles};
@@ -36,11 +37,12 @@ pub(super) fn logo() -> egui::ImageSource<'static> {
 impl App {
     /// The side panel on the home page: the parts of the game.
     pub(super) fn home_panel(&mut self, ui: &mut Ui) {
-        theme::section(ui, "Bölümler");
+        theme::section(ui, tr!("Bölümler", "Sections"));
         let all = makine_levels::levels();
         let mut start = 0;
         while start < all.len() {
             let section = all[start].section;
+            let section_name = all[start].section_name();
             let end = start
                 + all[start..]
                     .iter()
@@ -51,7 +53,7 @@ impl App {
                 .filter(|l| self.progress.solved(l.chip))
                 .count();
             ui.horizontal(|ui| {
-                ui.label(section);
+                ui.label(section_name);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let col = if done == end - start {
                         theme::GOOD
@@ -65,11 +67,14 @@ impl App {
         }
         ui.add_space(8.0);
         ui.label(
-            RichText::new(
+            RichText::new(tr!(
                 "Her seviye bir çip kurdurur; testi geçince çip kütüphanene eklenir ve \
                  sonraki seviyelerde parça olarak kullanılır. Son durak, Doom çalıştıran \
                  RISC-V işlemci.",
-            )
+                "Each level has you build a chip; once it passes the test, the chip joins \
+                 your library and becomes a part in later levels. The last stop is a \
+                 RISC-V CPU that runs Doom."
+            ))
             .small()
             .color(theme::INK_DIM),
         );
@@ -116,9 +121,12 @@ impl App {
                 ui.add_space(6.0);
                 ui.label(RichText::new("makine").size(34.0).strong());
                 ui.label(
-                    RichText::new("NAND kapısından çalışan bir bilgisayara")
-                        .size(16.0)
-                        .color(theme::INK_DIM),
+                    RichText::new(tr!(
+                        "NAND kapısından çalışan bir bilgisayara",
+                        "From a NAND gate to a working computer"
+                    ))
+                    .size(16.0)
+                    .color(theme::INK_DIM),
                 );
             });
             ui.add_space(18.0);
@@ -140,11 +148,13 @@ impl App {
                     let all = makine_levels::levels();
                     let done = all.iter().filter(|l| self.progress.solved(l.chip)).count();
                     ui.label(
-                        RichText::new(format!(
-                            "{} · {done}/{} seviye",
+                        RichText::new(trf!(
+                            "{} · {}/{} seviye",
+                            "{} · {}/{} levels",
                             self.profiles
                                 .as_ref()
-                                .map_or("Profil", |p| p.current().name.as_str()),
+                                .map_or(tr!("Profil", "Profile"), |p| p.current().name.as_str()),
+                            done,
                             all.len()
                         ))
                         .strong(),
@@ -162,9 +172,9 @@ impl App {
                         .map(|(_, l)| *l);
                     ui.horizontal_wrapped(|ui| {
                         let label = match next {
-                            Some(l) if done == 0 => format!("▶  Başla: {}", l.title),
-                            Some(l) => format!("▶  Devam et: {}", l.title),
-                            None => "▶  Seviyeler".into(),
+                            Some(l) if done == 0 => trf!("▶  Başla: {}", "▶  Start: {}", l.name()),
+                            Some(l) => trf!("▶  Devam et: {}", "▶  Continue: {}", l.name()),
+                            None => tr!("▶  Seviyeler", "▶  Levels").into(),
                         };
                         if ui
                             .add(
@@ -181,10 +191,12 @@ impl App {
                         if ui.button("📖  Wiki").clicked() {
                             self.view = View::Wiki;
                         }
-                        if ui.button("🌍  Dünya").clicked() {
+                        if ui.button(tr!("🌍  Dünya", "🌍  World")).clicked() {
                             self.open_world();
                         }
-                        if self.progress.solved("Cpu") && ui.button("🖥  Bilgisayar").clicked() {
+                        if self.progress.solved("Cpu")
+                            && ui.button(tr!("🖥  Bilgisayar", "🖥  Computer")).clicked()
+                        {
                             self.view = View::Computer;
                         }
                     });
@@ -198,18 +210,18 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                    theme::section(ui, "Profiller");
+                    theme::section(ui, tr!("Profiller", "Profiles"));
                     if self.profiles.is_none() {
                         ui.colored_label(
                             theme::WARN,
-                            "Kayıt klasörü bulunamadı: ilerleme kaydedilmiyor.",
+                            tr!("Kayıt klasörü bulunamadı: ilerleme kaydedilmiyor.", "No folder to save in: progress is not being saved."),
                         );
                         return;
                     }
                     if self.session.is_some() {
                         ui.colored_label(
                             theme::WARN,
-                            "Birlikte kurarken profil değiştirilemez; önce oturumdan çık.",
+                            tr!("Birlikte kurarken profil değiştirilemez; önce oturumdan çık.", "Profiles cannot change while building together; leave the session first."),
                         );
                         return;
                     }
@@ -246,7 +258,7 @@ impl App {
                     if let Some((at, text)) = &mut self.home.rename {
                         if *at == i {
                             let r = ui.add(egui::TextEdit::singleline(text).desired_width(160.0));
-                            if r.lost_focus() || ui.button("Tamam").clicked() {
+                            if r.lost_focus() || ui.button(tr!("Tamam", "OK")).clicked() {
                                 rename = Some((i, text.clone()));
                             }
                             ui.label("");
@@ -275,18 +287,21 @@ impl App {
                     };
                     ui.label(RichText::new(summary).color(theme::INK_DIM).small());
                     ui.horizontal(|ui| {
-                        if !current && ui.button("Geç").clicked() {
+                        if !current && ui.button(tr!("Geç", "Switch")).clicked() {
                             switch = Some(i);
                         }
                         if ui
                             .small_button("✏")
-                            .on_hover_text("Adını değiştir")
+                            .on_hover_text(tr!("Adını değiştir", "Rename"))
                             .clicked()
                         {
                             self.home.rename = Some((i, name.clone()));
                         }
                         if self.profiles.as_ref().is_some_and(|l| l.list.len() > 1)
-                            && ui.small_button("🗑").on_hover_text("Profili sil").clicked()
+                            && ui
+                                .small_button("🗑")
+                                .on_hover_text(tr!("Profili sil", "Delete profile"))
+                                .clicked()
                         {
                             self.home.confirm = Some(Confirm::Delete(i));
                         }
@@ -304,8 +319,9 @@ impl App {
             self.switch_profile(i);
             self.home.message = Some((
                 true,
-                format!(
+                trf!(
                     "'{}' profiline geçildi.",
+                    "Switched to profile '{}'.",
                     self.profiles
                         .as_ref()
                         .map_or("", |p| p.current().name.as_str())
@@ -316,16 +332,19 @@ impl App {
 
     fn profile_new(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            let l = ui.label("Yeni profil").id;
+            let l = ui.label(tr!("Yeni profil", "New profile")).id;
             ui.add(egui::TextEdit::singleline(&mut self.home.new_name).desired_width(160.0))
                 .labelled_by(l);
             let name = self.home.new_name.clone();
-            if ui.button("Boş başla").clicked() {
+            if ui.button(tr!("Boş başla", "Start empty")).clicked() {
                 self.add_profile(&name, Progress::default());
             }
             if ui
-                .button("Bunun kopyası")
-                .on_hover_text("Şu anki profilin bütün ilerlemesiyle yeni bir profil")
+                .button(tr!("Bunun kopyası", "Copy of this one"))
+                .on_hover_text(tr!(
+                    "Şu anki profilin bütün ilerlemesiyle yeni bir profil",
+                    "A new profile with all of this profile's progress"
+                ))
                 .clicked()
             {
                 self.store_world();
@@ -343,7 +362,10 @@ impl App {
             Ok(i) => {
                 self.home.new_name.clear();
                 self.switch_profile(i);
-                self.home.message = Some((true, format!("'{}' profili açıldı.", name.trim())));
+                self.home.message = Some((
+                    true,
+                    trf!("'{}' profili açıldı.", "Profile '{}' created.", name.trim()),
+                ));
             }
             Err(e) => self.home.message = Some((false, e)),
         }
@@ -351,35 +373,50 @@ impl App {
 
     fn profile_copy(&mut self, ui: &mut Ui) {
         ui.label(
-            RichText::new(
+            RichText::new(tr!(
                 "Profili başka bir bilgisayara taşımak için kopyala; orada yapıştır. \
                  Metin bütün seviyeleri, çipleri ve dünyaları içerir.",
-            )
+                "To move a profile to another computer, copy it and paste it there. \
+                 The text holds every level, chip and world."
+            ))
             .small()
             .color(theme::INK_DIM),
         );
         ui.horizontal(|ui| {
-            if ui.button("📋 Profili kopyala").clicked() {
+            if ui
+                .button(tr!("📋 Profili kopyala", "📋 Copy profile"))
+                .clicked()
+            {
                 self.store_world();
                 ui.ctx().copy_text(profiles::export(&self.progress));
-                self.home.message = Some((true, "Profil panoya kopyalandı.".into()));
+                self.home.message = Some((
+                    true,
+                    tr!(
+                        "Profil panoya kopyalandı.",
+                        "Profile copied to the clipboard."
+                    )
+                    .into(),
+                ));
             }
-            if ui.button("💾 Dosyaya kaydet").clicked() {
+            if ui
+                .button(tr!("💾 Dosyaya kaydet", "💾 Save to file"))
+                .clicked()
+            {
                 self.store_world();
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("makine profili", &["json"])
+                    .add_filter(tr!("makine profili", "makine profile"), &["json"])
                     .set_file_name("makine-profil.json")
                     .save_file()
                 {
                     self.home.message = Some(match self.progress.save(&path) {
-                        Ok(()) => (true, "Profil kaydedildi.".into()),
-                        Err(e) => (false, format!("Kaydedilemedi: {e}")),
+                        Ok(()) => (true, tr!("Profil kaydedildi.", "Profile saved.").into()),
+                        Err(e) => (false, trf!("Kaydedilemedi: {e}", "Could not save: {e}")),
                     });
                 }
             }
-            if ui.button("📂 Dosyadan aç").clicked() {
+            if ui.button(tr!("📂 Dosyadan aç", "📂 Open file")).clicked() {
                 if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("makine profili", &["json"])
+                    .add_filter(tr!("makine profili", "makine profile"), &["json"])
                     .pick_file()
                 {
                     match std::fs::read_to_string(&path) {
@@ -387,20 +424,29 @@ impl App {
                             self.home.paste = t;
                             self.home.confirm = Some(Confirm::Replace);
                         }
-                        Err(e) => self.home.message = Some((false, format!("Okunamadı: {e}"))),
+                        Err(e) => {
+                            self.home.message =
+                                Some((false, trf!("Okunamadı: {e}", "Could not read: {e}")))
+                        }
                     }
                 }
             }
         });
         ui.add(
             egui::TextEdit::multiline(&mut self.home.paste)
-                .hint_text("Kopyalanan profili buraya yapıştır")
+                .hint_text(tr!(
+                    "Kopyalanan profili buraya yapıştır",
+                    "Paste a copied profile here"
+                ))
                 .desired_rows(2)
                 .desired_width(f32::INFINITY),
         );
         if !self.home.paste.trim().is_empty() {
             ui.horizontal(|ui| {
-                if ui.button("Yeni profil olarak ekle").clicked() {
+                if ui
+                    .button(tr!("Yeni profil olarak ekle", "Add as a new profile"))
+                    .clicked()
+                {
                     match profiles::import(&self.home.paste) {
                         Ok(p) => {
                             let name = if self.home.new_name.trim().is_empty() {
@@ -414,7 +460,10 @@ impl App {
                         Err(e) => self.home.message = Some((false, e)),
                     }
                 }
-                if ui.button("Bu profilin yerine koy").clicked() {
+                if ui
+                    .button(tr!("Bu profilin yerine koy", "Replace this profile"))
+                    .clicked()
+                {
                     self.home.confirm = Some(Confirm::Replace);
                 }
             });
@@ -423,7 +472,7 @@ impl App {
 
     fn free_profile_name(&self) -> String {
         (1..)
-            .map(|n| format!("Profil {n}"))
+            .map(|n| trf!("Profil {n}", "Profile {n}"))
             .find(|n| {
                 self.profiles
                     .as_ref()
@@ -434,8 +483,11 @@ impl App {
 
     fn profile_danger(&mut self, ui: &mut Ui) {
         if ui
-            .button(RichText::new("İlerlemeyi sıfırla").color(theme::BAD))
-            .on_hover_text("Bu profildeki bütün seviyeleri, çipleri ve dünyaları sil")
+            .button(RichText::new(tr!("İlerlemeyi sıfırla", "Reset progress")).color(theme::BAD))
+            .on_hover_text(tr!(
+                "Bu profildeki bütün seviyeleri, çipleri ve dünyaları sil",
+                "Delete every level, chip and world in this profile"
+            ))
             .clicked()
         {
             self.home.confirm = Some(Confirm::Reset);
@@ -446,18 +498,21 @@ impl App {
             .as_ref()
             .map_or(String::new(), |p| p.current().name.clone());
         let text = match c {
-            Confirm::Reset => format!(
-                "'{name}' profilindeki bütün ilerleme silinecek. Ayarlar kalır. Emin misin?"
+            Confirm::Reset => trf!(
+                "'{name}' profilindeki bütün ilerleme silinecek. Ayarlar kalır. Emin misin?",
+                "All progress in profile '{name}' will be deleted. Settings stay. Are you sure?"
             ),
-            Confirm::Delete(i) => format!(
+            Confirm::Delete(i) => trf!(
                 "'{}' profili silinecek. Emin misin?",
+                "Profile '{}' will be deleted. Are you sure?",
                 self.profiles
                     .as_ref()
                     .and_then(|p| p.list.get(i))
                     .map_or("", |p| p.name.as_str())
             ),
-            Confirm::Replace => format!(
-                "'{name}' profilinin ilerlemesi yapıştırılan profille değiştirilecek. Emin misin?"
+            Confirm::Replace => trf!(
+                "'{name}' profilinin ilerlemesi yapıştırılan profille değiştirilecek. Emin misin?",
+                "The progress of profile '{name}' will be replaced with the pasted one. Are you sure?"
             ),
         };
         egui::Frame::new()
@@ -467,11 +522,14 @@ impl App {
             .show(ui, |ui| {
                 ui.colored_label(theme::WARN, text);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new("Evet").color(theme::BAD)).clicked() {
+                    if ui
+                        .button(RichText::new(tr!("Evet", "Yes")).color(theme::BAD))
+                        .clicked()
+                    {
                         self.home.confirm = None;
                         self.confirmed(c);
                     }
-                    if ui.button("Vazgeç").clicked() {
+                    if ui.button(tr!("Vazgeç", "Cancel")).clicked() {
                         self.home.confirm = None;
                     }
                 });
@@ -486,12 +544,14 @@ impl App {
                     fast: old.fast,
                     symbols: old.symbols,
                     fullscreen: old.fullscreen,
+                    custom_frame: old.custom_frame,
                     ..Progress::default()
                 };
                 let list = self.profiles.take();
                 self.restart(fresh, list);
                 self.save();
-                self.home.message = Some((true, "İlerleme sıfırlandı.".into()));
+                self.home.message =
+                    Some((true, tr!("İlerleme sıfırlandı.", "Progress reset.").into()));
             }
             Confirm::Delete(i) => {
                 let Some(list) = &mut self.profiles else {
@@ -505,9 +565,13 @@ impl App {
                         let list = self.profiles.take().unwrap();
                         let progress = list.progress(list.current);
                         self.restart(progress, Some(list));
-                        self.home.message = Some((true, "Profil silindi.".into()));
+                        self.home.message =
+                            Some((true, tr!("Profil silindi.", "Profile deleted.").into()));
                     }
-                    Ok(()) => self.home.message = Some((true, "Profil silindi.".into())),
+                    Ok(()) => {
+                        self.home.message =
+                            Some((true, tr!("Profil silindi.", "Profile deleted.").into()))
+                    }
                     Err(e) => self.home.message = Some((false, e)),
                 }
             }
@@ -517,7 +581,8 @@ impl App {
                     let list = self.profiles.take();
                     self.restart(p, list);
                     self.save();
-                    self.home.message = Some((true, "Profil yüklendi.".into()));
+                    self.home.message =
+                        Some((true, tr!("Profil yüklendi.", "Profile loaded.").into()));
                 }
                 Err(e) => self.home.message = Some((false, e)),
             },

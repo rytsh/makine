@@ -1,6 +1,8 @@
 //! Minimal loader for statically linked 32-bit little-endian RISC-V ELF
 //! executables: copies every PT_LOAD segment into a memory image.
 
+use makine_lang::tr;
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Image {
     pub entry: u32,
@@ -22,22 +24,32 @@ impl Image {
 pub fn load(data: &[u8]) -> Result<Image, String> {
     let u16_at = |o: usize| -> Result<u16, String> {
         Ok(u16::from_le_bytes(
-            data.get(o..o + 2).ok_or("kesik ELF")?.try_into().unwrap(),
+            data.get(o..o + 2)
+                .ok_or(tr!("kesik ELF", "truncated ELF"))?
+                .try_into()
+                .unwrap(),
         ))
     };
     let u32_at = |o: usize| -> Result<u32, String> {
         Ok(u32::from_le_bytes(
-            data.get(o..o + 4).ok_or("kesik ELF")?.try_into().unwrap(),
+            data.get(o..o + 4)
+                .ok_or(tr!("kesik ELF", "truncated ELF"))?
+                .try_into()
+                .unwrap(),
         ))
     };
     if data.get(..4) != Some(b"\x7fELF") {
-        return Err("ELF dosyası değil".into());
+        return Err(tr!("ELF dosyası değil", "not an ELF file").into());
     }
     if data[4] != 1 || data[5] != 1 {
-        return Err("32-bit little-endian ELF bekleniyordu".into());
+        return Err(tr!(
+            "32-bit little-endian ELF bekleniyordu",
+            "expected a 32-bit little-endian ELF"
+        )
+        .into());
     }
     if u16_at(18)? != 243 {
-        return Err("RISC-V ELF değil".into());
+        return Err(tr!("RISC-V ELF değil", "not a RISC-V ELF").into());
     }
     let entry = u32_at(24)?;
     let phoff = u32_at(28)? as usize;
@@ -55,7 +67,7 @@ pub fn load(data: &[u8]) -> Result<Image, String> {
         let memsz = u32_at(h + 20)? as usize;
         let mut bytes = data
             .get(offset..offset + filesz)
-            .ok_or("kesik segment")?
+            .ok_or(tr!("kesik segment", "truncated segment"))?
             .to_vec();
         bytes.resize(memsz, 0);
         segments.push((paddr, bytes));

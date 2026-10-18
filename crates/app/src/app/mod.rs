@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use egui::{RichText, Ui};
+use makine_lang::{tr, trf};
 use makine_levels::{check, find, levels, Level};
 use makine_sim::{Circuit, Library, PartKind, Pin, Verdict};
 
@@ -15,11 +16,13 @@ use crate::wiki::{self, Wiki};
 
 mod chrome;
 mod computer_ui;
+mod debug_ui;
 mod home_ui;
 mod sandbox_ui;
 mod solution_ui;
 #[cfg(test)]
 mod tests;
+mod truth_ui;
 mod world_ui;
 
 #[cfg(test)]
@@ -104,12 +107,14 @@ pub struct App {
     net_addr: String,
     /// How the player's design compares with the example solution.
     cost: Option<makine_levels::cost::Cost>,
+    delay: Option<makine_levels::depth::Delay>,
     /// The example solution, when open instead of the player's design.
     solution: Option<solution_ui::Solution>,
     reveal: solution_ui::Reveal,
     /// Players on this computer; saving goes to the current one's file.
     profiles: Option<crate::profiles::Profiles>,
     home: home_ui::Home,
+    debug: debug_ui::Debug,
     /// Undo and redo for the design being edited, and the design as it was
     /// after the last change (what an undo goes back to).
     history: crate::design::History,
@@ -179,10 +184,12 @@ impl App {
             net_name: crate::session::default_name(),
             net_addr: String::new(),
             cost: None,
+            delay: None,
             solution: None,
             reveal: Default::default(),
             profiles: None,
             home: Default::default(),
+            debug: Default::default(),
             history: Default::default(),
             snapshot: None,
         };
@@ -312,7 +319,7 @@ impl App {
         }
         let Some(path) = &self.save_path else { return };
         if let Err(e) = self.progress.save(path) {
-            self.status = Some(format!("Kaydedilemedi: {e}"));
+            self.status = Some(trf!("Kaydedilemedi: {e}", "Could not save: {e}"));
         }
     }
 
@@ -365,6 +372,7 @@ impl App {
         let mut start = 0;
         while start < all.len() {
             let section = all[start].section;
+            let section_name = all[start].section_name();
             let end = start
                 + all[start..]
                     .iter()
@@ -375,7 +383,7 @@ impl App {
                 .filter(|l| self.progress.solved(l.chip))
                 .count();
             let current = matches!(&self.target, Target::Level(t) if all[start..end].iter().any(|l| l.chip == t.chip));
-            let header = format!("{section}  ({done}/{})", end - start);
+            let header = format!("{section_name}  ({done}/{})", end - start);
             egui::CollapsingHeader::new(RichText::new(header).strong())
                 .id_salt(section)
                 .default_open(current)
@@ -396,7 +404,7 @@ impl App {
                         };
                         let selected =
                             self.target == Target::Level(level) && self.view == View::Editor;
-                        let label = format!("{mark}  {}", level.title);
+                        let label = format!("{mark}  {}", level.name());
                         let r = ui.add_enabled(unlocked, egui::Button::selectable(selected, label));
                         if r.clicked() && !selected {
                             open = Some(level);
@@ -416,12 +424,20 @@ impl App {
     }
 
     fn parts_panel(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("Parçalar").strong());
-        ui.label(RichText::new("Tuvale sürükle").weak().small());
+        ui.label(RichText::new(tr!("Parçalar", "Parts")).strong());
+        ui.label(
+            RichText::new(tr!("Tuvale sürükle", "Drag onto the board"))
+                .weak()
+                .small(),
+        );
         let mut kinds: Vec<(String, PartKind, String)> = vec![(
             "NAND".into(),
             PartKind::Nand,
-            "Her şeyin temeli: iki giriş de 1 ise 0, değilse 1.".into(),
+            tr!(
+                "Her şeyin temeli: iki giriş de 1 ise 0, değilse 1.",
+                "The base of everything: 0 if both inputs are 1, otherwise 1."
+            )
+            .into(),
         )];
         let (allowed, buses): (Vec<&Level>, bool) = match &self.target {
             Target::Level(level) => (
@@ -431,7 +447,11 @@ impl App {
             Target::Free(_) => (levels().to_vec(), true),
         };
         for l in allowed.iter().filter(|l| self.progress.solved(l.chip)) {
-            kinds.push((l.chip.into(), PartKind::Chip(l.chip.into()), l.title.into()));
+            kinds.push((
+                l.chip.into(),
+                PartKind::Chip(l.chip.into()),
+                l.name().into(),
+            ));
         }
         if let Target::Free(me) = &self.target {
             for name in self.progress.sandbox.chips.keys() {
@@ -439,26 +459,38 @@ impl App {
                     kinds.push((
                         format!("★ {name}"),
                         PartKind::Chip(name.clone()),
-                        "Senin çipin".into(),
+                        tr!("Senin çipin", "Your chip").into(),
                     ));
                 }
             }
         }
         if buses {
             kinds.push((
-                "Böl".into(),
+                tr!("Böl", "Split").into(),
                 PartKind::Split(vec![1; 8]),
-                "Bus'ı parçalara ayır. Sağ tıkla: grupları ayarla.".into(),
+                tr!(
+                    "Bus'ı parçalara ayır. Sağ tıkla: grupları ayarla.",
+                    "Split a bus into parts. Right-click: set the groups."
+                )
+                .into(),
             ));
             kinds.push((
-                "Birleştir".into(),
+                tr!("Birleştir", "Join").into(),
                 PartKind::Join(vec![1; 8]),
-                "Parçaları tek bus yap. Sağ tıkla: grupları ayarla.".into(),
+                tr!(
+                    "Parçaları tek bus yap. Sağ tıkla: grupları ayarla.",
+                    "Join parts into one bus. Right-click: set the groups."
+                )
+                .into(),
             ));
             kinds.push((
-                "Sabit".into(),
+                tr!("Sabit", "Constant").into(),
                 PartKind::Const { width: 1, value: 1 },
-                "Hep aynı değeri verir. Sağ tıkla: değeri ayarla.".into(),
+                tr!(
+                    "Hep aynı değeri verir. Sağ tıkla: değeri ayarla.",
+                    "Always gives the same value. Right-click: set the value."
+                )
+                .into(),
             ));
         }
         for (i, (name, kind, tip)) in kinds.into_iter().enumerate() {
@@ -476,13 +508,17 @@ impl App {
 
     fn level_panel(&mut self, ui: &mut Ui) {
         let level = self.level;
-        ui.heading(level.title);
+        ui.heading(level.name());
         ui.add_space(4.0);
-        ui.label(level.description);
+        ui.label(level.about());
         if let Some(page) = wiki::page_for_level(level.chip) {
             ui.add_space(4.0);
             if ui
-                .link(format!("📖 Wiki'de oku: {}", page.title()))
+                .link(trf!(
+                    "📖 Wiki'de oku: {}",
+                    "📖 Read in the wiki: {}",
+                    page.title()
+                ))
                 .clicked()
             {
                 self.wiki.open(page);
@@ -497,8 +533,12 @@ impl App {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        ui.label(format!("Girişler: {}", pins(level.input_pins())));
-        ui.label(format!("Çıkışlar: {}", pins(level.output_pins())));
+        ui.label(trf!("Girişler: {}", "Inputs: {}", pins(level.input_pins())));
+        ui.label(trf!(
+            "Çıkışlar: {}",
+            "Outputs: {}",
+            pins(level.output_pins())
+        ));
         ui.separator();
 
         match &self.sim {
@@ -507,35 +547,43 @@ impl App {
             }
             Ok(sim) => {
                 let text = if sim.native_count() > 0 {
-                    format!(
+                    trf!(
                         "{} NAND kapısı + {} hızlı model (⚡)",
+                        "{} NAND gates + {} fast models (⚡)",
                         sim.gate_count(),
                         sim.native_count()
                     )
                 } else {
-                    format!("{} NAND kapısı", sim.gate_count())
+                    trf!("{} NAND kapısı", "{} NAND gates", sim.gate_count())
                 };
                 ui.label(RichText::new(text).weak());
                 if self.oscillating {
                     ui.colored_label(
                         crate::theme::BAD,
-                        "Devre salınıyor: bir geri besleme döngüsü hiç durulmuyor.",
+                        tr!(
+                            "Devre salınıyor: bir geri besleme döngüsü hiç durulmuyor.",
+                            "The circuit oscillates: a feedback loop never settles."
+                        ),
                     );
                 }
             }
             _ => {}
         }
         ui.label(
-            RichText::new("Girişleri tıklayarak değiştir. Bus girişlerinde değeri aşağıdan gir.")
-                .weak()
-                .small(),
+            RichText::new(tr!(
+                "Girişleri tıklayarak değiştir. Bus girişlerinde değeri aşağıdan gir.",
+                "Click inputs to change them. For bus inputs, enter the value below."
+            ))
+            .weak()
+            .small(),
         );
         self.bus_inputs(ui);
+        self.truth_table(ui);
         self.undo_buttons(ui);
         ui.horizontal(|ui| {
             if ui
-                .button("Durumu sıfırla")
-                .on_hover_text("Bütün mandalları 0'a çek")
+                .button(tr!("Durumu sıfırla", "Reset state"))
+                .on_hover_text(tr!("Bütün mandalları 0'a çek", "Set every latch to 0"))
                 .clicked()
             {
                 if let Ok(sim) = &mut self.sim {
@@ -544,8 +592,11 @@ impl App {
                 self.run();
             }
             if ui
-                .button("Temizle")
-                .on_hover_text("Bütün parçaları sil, baştan başla")
+                .button(tr!("Temizle", "Clear"))
+                .on_hover_text(tr!(
+                    "Bütün parçaları sil, baştan başla",
+                    "Delete every part and start over"
+                ))
                 .clicked()
             {
                 *self.design() = Design::new(level.blank());
@@ -556,7 +607,7 @@ impl App {
         ui.separator();
         if ui
             .add(
-                egui::Button::new(RichText::new("▶  Test et").size(16.0))
+                egui::Button::new(RichText::new(tr!("▶  Test et", "▶  Test")).size(16.0))
                     .min_size(egui::vec2(120.0, 32.0)),
             )
             .clicked()
@@ -565,6 +616,9 @@ impl App {
         }
         ui.add_space(6.0);
         self.result_view(ui);
+        if !self.progress.solved(level.chip) {
+            self.hints_view(ui);
+        }
         ui.add_space(6.0);
         self.cost_view(ui);
     }
@@ -573,14 +627,20 @@ impl App {
     fn undo_buttons(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(self.history.can_undo(), egui::Button::new("↶ Geri al"))
+                .add_enabled(
+                    self.history.can_undo(),
+                    egui::Button::new(tr!("↶ Geri al", "↶ Undo")),
+                )
                 .on_hover_text("Ctrl+Z")
                 .clicked()
             {
                 self.undo();
             }
             if ui
-                .add_enabled(self.history.can_redo(), egui::Button::new("↷ Yinele"))
+                .add_enabled(
+                    self.history.can_redo(),
+                    egui::Button::new(tr!("↷ Yinele", "↷ Redo")),
+                )
                 .on_hover_text("Ctrl+Y")
                 .clicked()
             {
@@ -596,20 +656,34 @@ impl App {
             TestResult::Pass => {
                 ui.colored_label(
                     ON,
-                    RichText::new("✔ Tebrikler, bütün testler geçti!").strong(),
+                    RichText::new(tr!(
+                        "✔ Tebrikler, bütün testler geçti!",
+                        "✔ Well done, every test passed!"
+                    ))
+                    .strong(),
                 );
                 let next = levels().get(level.index() + 1);
                 if let Some(&next) = next {
-                    ui.label(format!(
+                    ui.label(trf!(
                         "{} artık bir parça olarak kullanılabilir.",
+                        "{} can now be used as a part.",
                         level.chip
                     ));
-                    if ui.button(format!("Sıradaki: {} ▶", next.title)).clicked() {
+                    if ui
+                        .button(trf!("Sıradaki: {} ▶", "Next: {} ▶", next.name()))
+                        .clicked()
+                    {
                         self.open_level(next);
                     }
                 } else {
-                    ui.label("İşlemcin hazır! Soldan 'Bilgisayar'ı aç ve onda program çalıştır.");
-                    if ui.button("🖥  Bilgisayara git").clicked() {
+                    ui.label(tr!(
+                        "İşlemcin hazır! Üstten 'Bilgisayar'ı aç ve onda program çalıştır.",
+                        "Your CPU is ready! Open 'Computer' at the top and run programs on it."
+                    ));
+                    if ui
+                        .button(tr!("🖥  Bilgisayara git", "🖥  Go to the computer"))
+                        .clicked()
+                    {
                         self.view = View::Computer;
                     }
                 }
@@ -618,13 +692,20 @@ impl App {
                 ui.colored_label(crate::theme::BAD, e);
             }
             TestResult::Wrong(m) => {
-                ui.colored_label(crate::theme::BAD, "✖ Test geçmedi");
+                ui.colored_label(
+                    crate::theme::BAD,
+                    tr!("✖ Test geçmedi", "✖ The test failed"),
+                );
                 ui.label(m);
             }
             TestResult::Oscillates { step } => {
                 ui.colored_label(
                     crate::theme::BAD,
-                    format!("Adım {}: devre salınıyor ve hiç durulmuyor.", step + 1),
+                    trf!(
+                        "Adım {}: devre salınıyor ve hiç durulmuyor.",
+                        "Step {}: the circuit oscillates and never settles.",
+                        step + 1
+                    ),
                 );
             }
             TestResult::Fail {
@@ -635,10 +716,14 @@ impl App {
             } => {
                 ui.colored_label(
                     crate::theme::BAD,
-                    format!("✖ Adım {}'de yanlış sonuç", step + 1),
+                    trf!(
+                        "✖ Adım {}'de yanlış sonuç",
+                        "✖ Wrong result at step {}",
+                        step + 1
+                    ),
                 );
                 if matches!(level.test, makine_levels::Test::Sequence(_)) {
-                    ui.label(RichText::new("Bu bir sıralı test: adımlar art arda çalışır, devre önceki adımları hatırlar.").weak().small());
+                    ui.label(RichText::new(tr!("Bu bir sıralı test: adımlar art arda çalışır, devre önceki adımları hatırlar.", "This is a sequential test: steps run one after another and the circuit remembers earlier steps.")).weak().small());
                 }
                 egui::Grid::new("failure").striped(true).show(ui, |ui| {
                     for (p, v) in level.input_pins().iter().zip(inputs) {
@@ -647,8 +732,8 @@ impl App {
                         ui.end_row();
                     }
                     ui.label("");
-                    ui.label(RichText::new("beklenen").weak());
-                    ui.label(RichText::new("senin").weak());
+                    ui.label(RichText::new(tr!("beklenen", "expected")).weak());
+                    ui.label(RichText::new(tr!("senin", "yours")).weak());
                     ui.end_row();
                     for ((p, e), a) in level.output_pins().iter().zip(expected).zip(actual) {
                         let ok = e.is_none_or(|e| e == *a);
@@ -661,7 +746,13 @@ impl App {
                         ui.end_row();
                     }
                 });
-                if ui.button("Bu girişleri devreye yükle").clicked() {
+                if ui
+                    .button(tr!(
+                        "Bu girişleri devreye yükle",
+                        "Load these inputs into the circuit"
+                    ))
+                    .clicked()
+                {
                     self.inputs = inputs.clone();
                     self.run();
                 }
@@ -779,7 +870,7 @@ impl App {
                     }
                     _ => {
                         self.status = Some(
-                            "Bu seviye henüz kilitli: önceki seviyeleri bitirince açılır.".into(),
+                            tr!("Bu seviye henüz kilitli: önceki seviyeleri bitirince açılır.", "This level is still locked: it opens once the earlier levels are done.").into(),
                         )
                     }
                 }
@@ -823,6 +914,8 @@ impl App {
                 if out.redo {
                     self.redo();
                 }
+                let rect = ui.max_rect();
+                self.guide(ui.ctx(), rect);
             });
     }
 }

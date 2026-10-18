@@ -291,7 +291,10 @@ impl Host {
                         continue;
                     };
                     if protocol != PROTOCOL {
-                        let reason = "makine sürümleriniz farklı; ikiniz de aynı sürümü kullanın";
+                        let reason = makine_lang::tr!(
+                            "makine sürümleriniz farklı; ikiniz de aynı sürümü kullanın",
+                            "your makine versions differ; both of you should use the same version"
+                        );
                         let _ = conn.tx.send(json(&ToClient::Refused {
                             reason: reason.into(),
                         }));
@@ -409,10 +412,12 @@ impl Client {
     /// Connect to a host at `addr` (`192.168.1.20` or `192.168.1.20:7878`).
     pub fn connect(addr: &str, name: &str) -> io::Result<Client> {
         let addr = with_port(addr);
-        let target = addr
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "adres bulunamadı"))?;
+        let target = addr.to_socket_addrs()?.next().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                makine_lang::tr!("adres bulunamadı", "address not found"),
+            )
+        })?;
         let stream = TcpStream::connect_timeout(&target, Duration::from_secs(3))?;
         stream.set_nodelay(true)?;
         let tx = writer(stream.try_clone()?);
@@ -449,7 +454,9 @@ impl Client {
             match m {
                 None => {
                     self.closed = true;
-                    events.push(Event::Closed("bağlantı koptu".into()));
+                    events.push(Event::Closed(
+                        makine_lang::tr!("bağlantı koptu", "connection lost").into(),
+                    ));
                 }
                 Some(ToClient::Welcome {
                     you,

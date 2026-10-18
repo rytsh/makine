@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use egui::Color32;
+use makine_lang::{tr, trf};
 use makine_net::{Client, Event, Host, Player};
 use makine_pack::Package;
 use makine_sim::Library;
@@ -86,7 +87,7 @@ fn install(chips: &[Package], lib: &Library, sandbox: &mut Sandbox, status: &mut
         let before = sandbox.chips.len();
         match sandbox::install(lib, sandbox, p) {
             Ok(_) => added |= sandbox.chips.len() > before,
-            Err(e) => *status = format!("Bir çip eklenemedi: {e}"),
+            Err(e) => *status = trf!("Bir çip eklenemedi: {e}", "Could not add a chip: {e}"),
         }
     }
     added
@@ -97,7 +98,9 @@ impl Session {
         let h = Host::start(name, port)?;
         let ip = makine_net::local_ip()
             .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "bu bilgisayarın IP adresi".into());
+            .unwrap_or_else(|| {
+                tr!("bu bilgisayarın IP adresi", "this computer's IP address").into()
+            });
         let port = h.port();
         let addr = if port == makine_net::PORT {
             ip
@@ -106,7 +109,10 @@ impl Session {
         };
         Ok(Session {
             link: Link::Host(h),
-            status: format!("Paylaşımda. Arkadaşların şu adrese bağlansın: {addr}"),
+            status: trf!(
+                "Paylaşımda. Arkadaşların şu adrese bağlansın: {addr}",
+                "Sharing. Your friends should connect to: {addr}"
+            ),
             last_cursor: None,
             cursors: BTreeMap::new(),
             ready: true,
@@ -117,7 +123,7 @@ impl Session {
         let c = Client::connect(addr, name)?;
         Ok(Session {
             link: Link::Client(c),
-            status: "Bağlanılıyor…".into(),
+            status: tr!("Bağlanılıyor…", "Connecting…").into(),
             last_cursor: None,
             cursors: BTreeMap::new(),
             ready: false,
@@ -200,7 +206,10 @@ impl Session {
                     // and hands it to the new view.
                     new_chips = true;
                     self.ready = true;
-                    self.status = format!("'{name}' dünyasına bağlandın.");
+                    self.status = trf!(
+                        "'{name}' dünyasına bağlandın.",
+                        "You joined the world '{name}'."
+                    );
                 }
                 Event::Edit { edit, chips, .. } => {
                     new_chips |= install(&chips, lib, sandbox, &mut self.status);
@@ -208,10 +217,10 @@ impl Session {
                         view.apply_remote(edit);
                     }
                 }
-                Event::Joined(p) => self.status = format!("{} katıldı.", p.name),
+                Event::Joined(p) => self.status = trf!("{} katıldı.", "{} joined.", p.name),
                 Event::Left(p) => {
                     self.cursors.remove(&p.id);
-                    self.status = format!("{} ayrıldı.", p.name);
+                    self.status = trf!("{} ayrıldı.", "{} left.", p.name);
                 }
                 Event::Cursor { id, pos } => match pos {
                     Some(p) => {

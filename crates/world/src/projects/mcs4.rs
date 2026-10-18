@@ -12,6 +12,7 @@
 
 use super::Project;
 use crate::{Device, Edit, End, Kind, Module, Placed, Pos, WireStyle, World};
+use makine_lang::{tr, trf};
 use makine_sim::{out, ChipBuilder, ChipDef, Part, PartKind, Source};
 use std::ops::Range;
 
@@ -27,7 +28,12 @@ pub const DEMO: &[u64] = &[
     0x40, 0x02, // JUN loop
 ];
 
-pub const SUPPORTED: &str = "NOP, JCN, FIM, FIN, JIN, JUN, JMS, INC, ISZ, ADD, SUB, LD, XCH, BBL, LDM; CLB–KBP. SRC, Ex bellek/GÇ ve DCL henüz yok; HATA=1 yapıp durur.";
+pub fn supported() -> &'static str {
+    tr!(
+        "NOP, JCN, FIM, FIN, JIN, JUN, JMS, INC, ISZ, ADD, SUB, LD, XCH, BBL, LDM; CLB–KBP. SRC, Ex bellek/GÇ ve DCL henüz yok; HATA=1 yapıp durur.",
+        "NOP, JCN, FIM, FIN, JIN, JUN, JMS, INC, ISZ, ADD, SUB, LD, XCH, BBL, LDM; CLB–KBP. SRC, Ex memory/I/O and DCL are not there yet; they set FAULT=1 and stop."
+    )
+}
 
 /// Display only: the actual decoder is the NAND circuit below.
 pub fn disassemble(op: u8, next: u8) -> String {
@@ -55,7 +61,10 @@ pub fn disassemble(op: u8, next: u8) -> String {
             "KBP",
         ][n as usize]
             .into(),
-        _ => format!("{op:02X}: desteklenmeyen komut"),
+        _ => trf!(
+            "{op:02X}: desteklenmeyen komut",
+            "{op:02X}: unsupported instruction"
+        ),
     }
 }
 
@@ -205,7 +214,10 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     let stack = g.bits("stack", 36);
     let test = g.b.input("test");
     let setup_end = g.count;
-    g.ranges.push(("Uçlar / bus ayırıcılar", 0..setup_end));
+    g.ranges.push((
+        tr!("Uçlar / bus ayırıcılar", "Pins / bus splitters"),
+        0..setup_end,
+    ));
     let start = g.count;
     let hi = &op[4..];
     let lo = &op[..4];
@@ -230,7 +242,7 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
         group[10], group[11], group[12], group[13], acc_ok,
     ]);
     let fault = g.not(supported);
-    g.mark("Komut çözücü", start);
+    g.mark(tr!("Komut çözücü", "Instruction decoder"), start);
 
     let start = g.count;
     let rows: Vec<_> = regs.chunks(4).map(|r| r.to_vec()).collect();
@@ -242,7 +254,10 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
         .collect();
     let rp = g.pick(&pairs, &pairsel);
     let (rninc, _) = g.add(&rn, &g.constant(4, 1), g.zero);
-    g.mark("Yazmaç okuma / seçiciler", start);
+    g.mark(
+        tr!("Yazmaç okuma / seçiciler", "Register read / selectors"),
+        start,
+    );
 
     let start = g.count;
     let (sum, carry) = g.add(&a, &rn, c);
@@ -323,7 +338,10 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     ] {
         cn = g.mux(cn, value, sel);
     }
-    g.mark("ALU 4-bit / akümülatör", start);
+    g.mark(
+        tr!("ALU 4-bit / akümülatör", "4-bit ALU / accumulator"),
+        start,
+    );
 
     let start = g.count;
     let inc_or_isz = g.or(group[6], group[7]);
@@ -342,7 +360,10 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
             chunk[bit] = g.mux(x, indirect[pos], update_fin);
         }
     }
-    g.mark("Yazmaç yazma / yükleme", start);
+    g.mark(
+        tr!("Yazmaç yazma / yükleme", "Register write / load"),
+        start,
+    );
 
     let start = g.count;
     let two = g.any(&[group[1], fim, group[4], group[5], group[7]]);
@@ -379,7 +400,13 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     let sn = g.select(&stack, &push, group[5]);
     let sn = g.select(&sn, &pop, group[12]);
     let lookup = [pairs[0].clone(), pc1[8..].to_vec()].concat();
-    g.mark("Program sayacı / çağrı yığını", start);
+    g.mark(
+        tr!(
+            "Program sayacı / çağrı yığını",
+            "Program counter / call stack"
+        ),
+        start,
+    );
     let start = g.count;
     g.output("a_next", &an);
     g.output("c_next", &[cn]);
@@ -388,7 +415,7 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
     g.output("stack_next", &sn);
     g.output("lookup", &lookup);
     g.output("fault", &[fault]);
-    g.mark("Sonuç bus'ları", start);
+    g.mark(tr!("Sonuç bus'ları", "Result buses"), start);
     let ranges = g.ranges;
     (g.b.build(), ranges)
 }
@@ -397,7 +424,10 @@ fn control() -> (ChipDef, Vec<(&'static str, Range<usize>)>) {
 /// and edited. Modules are visual groupings, not native CPU substitutes.
 pub fn project(program: &[u64]) -> Project {
     let (def, ranges) = control();
-    let mut world = World::new("4004 · aritmetik ve kontrol atölyesi");
+    let mut world = World::new(tr!(
+        "4004 · aritmetik ve kontrol atölyesi",
+        "4004 · arithmetic and control workshop"
+    ));
     let mut id = 1u64;
     fn put(w: &mut World, id: &mut u64, kind: Kind, x: f32, y: f32) -> End {
         let n = *id;
@@ -532,9 +562,15 @@ pub fn project(program: &[u64]) -> Project {
             makine_sim::Sink::Output(i) => outputs[i] = Some(from),
         }
     }
-    for (i, name) in ["A", "C", "R0…R15", "PC", "Dönüş adresleri"]
-        .into_iter()
-        .enumerate()
+    for (i, name) in [
+        "A",
+        "C",
+        "R0…R15",
+        "PC",
+        tr!("Dönüş adresleri", "Return addresses"),
+    ]
+    .into_iter()
+    .enumerate()
     {
         link(
             &mut world,
@@ -548,7 +584,7 @@ pub fn project(program: &[u64]) -> Project {
         &mut world,
         outputs[5].unwrap(),
         End::new(rom.part, 1),
-        "FIN adresi",
+        tr!("FIN adresi", "FIN address"),
     );
     let fault = outputs[6].unwrap();
     let control_module = id;
@@ -556,7 +592,7 @@ pub fn project(program: &[u64]) -> Project {
     world.apply(Edit::Module {
         id: control_module,
         module: Some(Module {
-            name: "Denetim ve veri yolu".into(),
+            name: tr!("Denetim ve veri yolu", "Control and data path").into(),
             pos: world.corner(&ends.iter().map(|e| e.part).collect::<Vec<_>>()),
             members: ends.iter().map(|e| e.part).collect(),
         }),
@@ -568,7 +604,7 @@ pub fn project(program: &[u64]) -> Project {
     world.apply(Edit::Module {
         id: root,
         module: Some(Module {
-            name: "4004 aritmetik / kontrol".into(),
+            name: tr!("4004 aritmetik / kontrol", "4004 arithmetic / control").into(),
             pos: world.corner(&root_members),
             members: root_members,
         }),
@@ -578,8 +614,8 @@ pub fn project(program: &[u64]) -> Project {
         (stores[0], "A", 4),
         (stores[1], "C", 1),
         (stores[3], "PC", 12),
-        (rom, "Komut", 8),
-        (fault, "HATA", 1),
+        (rom, tr!("Komut", "Instr"), 8),
+        (fault, tr!("HATA", "FAULT"), 1),
     ]
     .into_iter()
     .enumerate()

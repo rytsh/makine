@@ -37,10 +37,14 @@ pub enum Problem {
 impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Problem::MissingChip { name, .. } => write!(f, "'{name}' çipi kütüphanende yok"),
-            Problem::Width { from, into, .. } => {
-                write!(f, "{from} bitlik bir tel {into} bitlik bir uca bağlı")
-            }
+            Problem::MissingChip { name, .. } => f.write_str(&makine_lang::trf!(
+                "'{name}' çipi kütüphanende yok",
+                "chip '{name}' is not in your library"
+            )),
+            Problem::Width { from, into, .. } => f.write_str(&makine_lang::trf!(
+                "{from} bitlik bir tel {into} bitlik bir uca bağlı",
+                "a {from}-bit wire is connected to a {into}-bit pin"
+            )),
         }
     }
 }

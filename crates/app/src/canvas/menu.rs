@@ -1,6 +1,7 @@
 //! Right-click menus on the canvas.
 
 use egui::Ui;
+use makine_lang::tr;
 use makine_sim::{mask, Library, PartId, PartKind, Sink};
 
 use super::layout::part_label;
@@ -24,7 +25,12 @@ pub(super) fn part_menu(ui: &mut Ui, design: &mut Design, i: PartId, lib: &Libra
 
     match &mut part.kind {
         PartKind::Split(widths) | PartKind::Join(widths) => {
-            let label = ui.label("Gruplar (düşük bitten başlayarak):").id;
+            let label = ui
+                .label(tr!(
+                    "Gruplar (düşük bitten başlayarak):",
+                    "Groups (from the low bit up):"
+                ))
+                .id;
             let mut text = widths
                 .iter()
                 .map(|w| w.to_string())
@@ -40,18 +46,24 @@ pub(super) fn part_menu(ui: &mut Ui, design: &mut Design, i: PartId, lib: &Libra
                     changed = true;
                 }
             }
-            ui.label(egui::RichText::new("örn. 8,8,8,8 ya da 1,1,1,1,1,1,1,1").small());
+            ui.label(
+                egui::RichText::new(tr!(
+                    "örn. 8,8,8,8 ya da 1,1,1,1,1,1,1,1",
+                    "e.g. 8,8,8,8 or 1,1,1,1,1,1,1,1"
+                ))
+                .small(),
+            );
         }
         PartKind::Const { width, value } => {
             ui.horizontal(|ui| {
-                let label = ui.label("Genişlik:").id;
+                let label = ui.label(tr!("Genişlik:", "Width:")).id;
                 changed |= ui
                     .add(egui::DragValue::new(width).range(1..=64))
                     .labelled_by(label)
                     .changed();
             });
             ui.horizontal(|ui| {
-                let label = ui.label("Değer:").id;
+                let label = ui.label(tr!("Değer:", "Value:")).id;
                 changed |= ui
                     .add(egui::DragValue::new(value).hexadecimal(1, false, true))
                     .labelled_by(label)
@@ -64,21 +76,24 @@ pub(super) fn part_menu(ui: &mut Ui, design: &mut Design, i: PartId, lib: &Libra
 
     if !matches!(part.kind, PartKind::Const { .. }) {
         ui.horizontal(|ui| {
-            let label = ui.label("Tekrar:").id;
+            let label = ui.label(tr!("Tekrar:", "Repeat:")).id;
             changed |= ui
                 .add(egui::DragValue::new(&mut part.repeat).range(1..=64))
                 .labelled_by(label)
                 .changed();
         })
         .response
-        .on_hover_text("Parçanın kaç kopyası yan yana çalışsın. Her uç bu kadar genişler.");
+        .on_hover_text(tr!(
+            "Parçanın kaç kopyası yan yana çalışsın. Her uç bu kadar genişler.",
+            "How many copies of the part work side by side. Every pin gets this much wider."
+        ));
     }
 
     if changed {
         design.prune(lib);
     }
     ui.separator();
-    if ui.button("Sil").clicked() {
+    if ui.button(tr!("Sil", "Delete")).clicked() {
         design.remove_part(i);
         changed = true;
         ui.close();

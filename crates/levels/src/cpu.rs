@@ -13,6 +13,7 @@
 //! All memory addresses on the bus are word-aligned; the CPU shifts bytes and
 //! halves into place itself.
 
+use makine_lang::{tr, trf};
 use makine_rv::emu::{byte_mask, mul_div, Cpu, Memory, Trap};
 use makine_rv::isa::*;
 use makine_sim::{mask, Circuit, Rng, TestStep, Verdict};
@@ -589,15 +590,22 @@ impl CircuitCpu {
         c.set_input(CPU_IN_CLK, 0);
         c.eval().map_err(osc)?;
         let pc = c.output(CPU_OUT_PC) as u32;
-        let instr = mem
-            .fetch(pc)
-            .ok_or_else(|| format!("pc = 0x{pc:08X}: orada bellek yok"))?;
+        let instr = mem.fetch(pc).ok_or_else(|| {
+            trf!(
+                "pc = 0x{pc:08X}: orada bellek yok",
+                "pc = 0x{pc:08X}: there is no memory there"
+            )
+        })?;
         c.set_input(CPU_IN_INSTR, instr as u64);
         c.eval().map_err(osc)?;
         let rdata = if opcode(instr) == OP_LOAD {
             let addr = c.output(CPU_OUT_ADDR) as u32 & !3;
-            mem.read(addr)
-                .ok_or_else(|| format!("0x{addr:08X} adresinden okunamaz: orada bellek yok"))?
+            mem.read(addr).ok_or_else(|| {
+                trf!(
+                    "0x{addr:08X} adresinden okunamaz: orada bellek yok",
+                    "cannot read from 0x{addr:08X}: there is no memory there"
+                )
+            })?
         } else {
             0
         };
@@ -614,8 +622,12 @@ impl CircuitCpu {
         c.set_input(CPU_IN_CLK, 1);
         c.eval().map_err(osc)?;
         if let Some((a, d, m)) = store {
-            mem.write(a, d, m)
-                .ok_or_else(|| format!("0x{a:08X} adresine yazılamaz: orada bellek yok"))?;
+            mem.write(a, d, m).ok_or_else(|| {
+                trf!(
+                    "0x{a:08X} adresine yazılamaz: orada bellek yok",
+                    "cannot write to 0x{a:08X}: there is no memory there"
+                )
+            })?;
         }
         Ok(Cycle { pc, instr, store })
     }
@@ -632,6 +644,18 @@ pub const TEST_PROGRAMS: &[(&str, &str)] = &[
     ("fonksiyon", include_str!("programs/calls.s")),
     ("çarpma/bölme", include_str!("programs/muldiv.s")),
 ];
+
+/// A test program's name in the interface language.
+fn program_name(name: &str) -> &str {
+    match name {
+        "aritmetik" => tr!("aritmetik", "arithmetic"),
+        "dallanma" => tr!("dallanma", "branch"),
+        "bellek" => tr!("bellek", "memory"),
+        "fonksiyon" => tr!("fonksiyon", "function"),
+        "çarpma/bölme" => tr!("çarpma/bölme", "multiply/divide"),
+        other => other,
+    }
+}
 
 /// RAM for tests: a flat vector of words, nothing else.
 #[derive(Clone)]
@@ -675,7 +699,11 @@ fn cpu_test(circuit: &mut Circuit) -> Verdict {
         if let Err(message) = run_lockstep(&mut cpu, &prog.bytes, &mut steps) {
             return Verdict::Wrong {
                 step: steps,
-                message: format!("'{name}' programı: {message}"),
+                message: trf!(
+                    "'{}' programı: {message}",
+                    "'{}' program: {message}",
+                    program_name(name)
+                ),
             };
         }
     }
@@ -713,14 +741,19 @@ pub fn run_lockstep(cpu: &mut CircuitCpu, image: &[u8], steps: &mut usize) -> Re
 
     let blame = |r: usize, reference: &Cpu, writers: &[Writer; 32]| -> String {
         if r == 0 {
-            return "x0 her zaman 0 olmalı.".into();
+            return tr!("x0 her zaman 0 olmalı.", "x0 must always be 0.").into();
         }
         let w = writers[r];
         if w.instr == 0 {
-            return format!("{} bu programda hiç yazılmadı.", reg(r));
+            return trf!(
+                "{} bu programda hiç yazılmadı.",
+                "{} was never written in this program.",
+                reg(r)
+            );
         }
-        format!(
+        trf!(
             "{} = 0x{:08X} olmalıydı. Bu değeri en son {} yazdı (o anda {} = 0x{:08X}, {} = 0x{:08X}).",
+            "{} should have been 0x{:08X}. It was last written by {} (at that time {} = 0x{:08X}, {} = 0x{:08X}).",
             reg(r),
             reference.x[r],
             describe(w.pc, w.instr),
@@ -744,17 +777,27 @@ pub fn run_lockstep(cpu: &mut CircuitCpu, image: &[u8], steps: &mut usize) -> Re
         match reference.step(&mut ref_ram) {
             Ok(()) => {}
             Err(Trap::Breakpoint) => return Ok(()),
-            Err(t) => return Err(format!("referans işlemci durdu: {t}")),
+            Err(t) => {
+                return Err(trf!(
+                    "referans işlemci durdu: {t}",
+                    "the reference processor stopped: {t}"
+                ))
+            }
         }
         let cycle = cpu.step(&mut ram)?;
 
         if cycle.pc != pc {
-            let mut msg = format!(
+            let mut msg = trf!(
                 "pc = 0x{pc:04X} olmalıydı, senin işlemcinde 0x{:04X}.",
+                "pc should have been 0x{pc:04X}, in your processor it is 0x{:04X}.",
                 cycle.pc
             );
             if let Some(p) = prev {
-                msg += &format!(" Bir önceki komut {} idi", describe(p.pc, p.instr));
+                msg += &trf!(
+                    " Bir önceki komut {} idi",
+                    " The previous instruction was {}",
+                    describe(p.pc, p.instr)
+                );
                 if opcode(p.instr) == OP_BRANCH {
                     msg += &format!(
                         " ({} = 0x{:08X}, {} = 0x{:08X})",
@@ -773,20 +816,32 @@ pub fn run_lockstep(cpu: &mut CircuitCpu, image: &[u8], steps: &mut usize) -> Re
         let got = cycle.store.map(|(a, d, m)| (a, d & byte_mask(m), m));
         if want != got {
             let show = |s: Option<(u32, u32, u8)>| match s {
-                None => "yazma yok".to_string(),
-                Some((a, d, m)) => format!("0x{a:04X} adresine 0x{d:08X} (bayt maskesi {m:04b})"),
+                None => tr!("yazma yok", "no write").to_string(),
+                Some((a, d, m)) => trf!(
+                    "0x{a:04X} adresine 0x{d:08X} (bayt maskesi {m:04b})",
+                    "0x{d:08X} to 0x{a:04X} (byte mask {m:04b})"
+                ),
             };
-            let mut msg = format!(
+            let mut msg = trf!(
                 "{} komutunda bellek yazımı yanlış. Beklenen: {}. Senin işlemcin: {}.",
+                "Wrong memory write at instruction {}. Expected: {}. Your processor: {}.",
                 describe(pc, instr),
                 show(want),
                 show(got)
             );
             if let (Some(w), Some(g)) = (want, got) {
                 if w.0 != g.0 {
-                    msg += &format!(" Adres yanlış. {}", blame(rs1(instr), &reference, &writers));
+                    msg += &trf!(
+                        " Adres yanlış. {}",
+                        " Wrong address. {}",
+                        blame(rs1(instr), &reference, &writers)
+                    );
                 } else if w.1 != g.1 {
-                    msg += &format!(" Veri yanlış. {}", blame(rs2(instr), &reference, &writers));
+                    msg += &trf!(
+                        " Veri yanlış. {}",
+                        " Wrong data. {}",
+                        blame(rs2(instr), &reference, &writers)
+                    );
                 }
             }
             return Err(msg);
@@ -799,5 +854,8 @@ pub fn run_lockstep(cpu: &mut CircuitCpu, image: &[u8], steps: &mut usize) -> Re
         }
         prev = Some(now);
     }
-    Err(format!("program {TEST_MAX_STEPS} adımda bitmedi"))
+    Err(trf!(
+        "program {TEST_MAX_STEPS} adımda bitmedi",
+        "the program did not finish in {TEST_MAX_STEPS} steps"
+    ))
 }

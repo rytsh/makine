@@ -3,6 +3,7 @@
 //! once the player's CPU passes.
 
 use crate::isa::*;
+use makine_lang::{tr, trf};
 
 /// The memory bus as the CPU sees it. All accesses are aligned 32-bit words;
 /// `bytes` is a 4-bit byte-enable mask (bit 0 = lowest address).
@@ -27,11 +28,20 @@ pub enum Trap {
 impl std::fmt::Display for Trap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Trap::Breakpoint => write!(f, "ebreak (dur)"),
+            Trap::Breakpoint => f.write_str(tr!("ebreak (dur)", "ebreak (halt)")),
             Trap::Ecall => write!(f, "ecall"),
-            Trap::IllegalInstruction(i) => write!(f, "geçersiz komut 0x{i:08X}"),
-            Trap::MisalignedFetch(a) => write!(f, "hizasız komut adresi 0x{a:08X}"),
-            Trap::AccessFault(a) => write!(f, "geçersiz bellek adresi 0x{a:08X}"),
+            Trap::IllegalInstruction(i) => f.write_str(&trf!(
+                "geçersiz komut 0x{i:08X}",
+                "illegal instruction 0x{i:08X}"
+            )),
+            Trap::MisalignedFetch(a) => f.write_str(&trf!(
+                "hizasız komut adresi 0x{a:08X}",
+                "misaligned instruction address 0x{a:08X}"
+            )),
+            Trap::AccessFault(a) => f.write_str(&trf!(
+                "geçersiz bellek adresi 0x{a:08X}",
+                "invalid memory address 0x{a:08X}"
+            )),
         }
     }
 }

@@ -1,5 +1,6 @@
 //! What can be placed in a world, and the pins each part has.
 
+use makine_lang::{tr, trf};
 use makine_sim::{mask, Library, Part, PartKind, PartPins, Pin, MAX_WIDTH};
 use serde::{Deserialize, Serialize};
 
@@ -109,18 +110,18 @@ impl Kind {
     pub fn label(&self) -> String {
         match self {
             Kind::Gate(g) => g.name().into(),
-            Kind::Switch { .. } => "Anahtar".into(),
-            Kind::Lamp => "Lamba".into(),
-            Kind::Clock { .. } => "Saat".into(),
-            Kind::Input { name, .. } => format!("Giriş {name}"),
-            Kind::Output { name, .. } => format!("Çıkış {name}"),
+            Kind::Switch { .. } => tr!("Anahtar", "Switch").into(),
+            Kind::Lamp => tr!("Lamba", "Lamp").into(),
+            Kind::Clock { .. } => tr!("Saat", "Clock").into(),
+            Kind::Input { name, .. } => trf!("Giriş {name}", "Input {name}"),
+            Kind::Output { name, .. } => trf!("Çıkış {name}", "Output {name}"),
             Kind::Device(d) => d.name(),
             Kind::Part(p) => match &p.kind {
                 PartKind::Nand => "NAND".into(),
                 PartKind::Chip(n) => n.clone(),
-                PartKind::Split(_) => "Böl".into(),
-                PartKind::Join(_) => "Birleştir".into(),
-                PartKind::Const { .. } => "Sabit".into(),
+                PartKind::Split(_) => tr!("Böl", "Split").into(),
+                PartKind::Join(_) => tr!("Birleştir", "Join").into(),
+                PartKind::Const { .. } => tr!("Sabit", "Constant").into(),
             },
         }
     }

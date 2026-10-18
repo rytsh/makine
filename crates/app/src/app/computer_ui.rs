@@ -2,6 +2,7 @@
 //! its controls.
 
 use egui::{Color32, RichText, Ui};
+use makine_lang::{tr, trf};
 
 use super::{App, View};
 use crate::computer::{self, Computer, Engine};
@@ -53,7 +54,7 @@ impl App {
                     ui.painter().text(
                         ui.max_rect().right_top() + egui::vec2(-16.0, 16.0),
                         egui::Align2::RIGHT_TOP,
-                        "F10: çık   F11: tam ekran",
+                        tr!("F10: çık   F11: tam ekran", "F10: leave   F11: full screen"),
                         egui::FontId::proportional(16.0),
                         Color32::from_white_alpha(alpha),
                     );
@@ -91,9 +92,11 @@ impl App {
             if (entry != 0 || size > 256 * 1024) && !self.turbo {
                 self.turbo = true;
                 self.computer = None;
-                self.status = Some(format!(
+                self.status = Some(trf!(
                     "{name} büyük bir program; turbo açıldı. Kendi işlemcinde denemek için \
-                     turboyu kapatabilirsin (çok yavaş olur)."
+                     turboyu kapatabilirsin (çok yavaş olur).",
+                    "{name} is a big program; turbo is on. To try it on your own processor, \
+                     turn turbo off (it will be very slow)."
                 ));
             }
             let c = self.computer()?;
@@ -116,17 +119,26 @@ impl App {
     }
 
     pub(super) fn computer_controls(&mut self, ui: &mut Ui) {
-        ui.heading("Bilgisayar");
-        ui.label(
+        ui.heading(tr!("Bilgisayar", "Computer"));
+        ui.label(tr!(
             "Senin yaptığın RISC-V işlemci, 16 MB RAM, 320×200 ekran, konsol ve klavye. \
              Bir örnek seç ya da kendi programını yükle (assembly .s ya da derlenmiş RISC-V ELF).",
-        );
+            "The RISC-V processor you built, 16 MB of RAM, a 320×200 screen, a console and a \
+             keyboard. Pick an example or load your own program (assembly .s or a compiled \
+             RISC-V ELF)."
+        ));
         ui.add_space(6.0);
-        ui.label(RichText::new("Örnekler").strong());
+        ui.label(RichText::new(tr!("Örnekler", "Examples")).strong());
         let mut load = None;
         ui.horizontal_wrapped(|ui| {
             for (name, src) in computer::EXAMPLES {
-                if ui.button(*name).clicked() {
+                let shown = match *name {
+                    "Merhaba" => tr!("Merhaba", "Hello"),
+                    "Renkler" => tr!("Renkler", "Colors"),
+                    "Klavye" => tr!("Klavye", "Keyboard"),
+                    n => n,
+                };
+                if ui.button(shown).clicked() {
                     load = Some((name.to_string(), src.as_bytes().to_vec()));
                 }
             }
@@ -138,9 +150,15 @@ impl App {
                 Err(e) => self.status = Some(format!("{}: {e}", doom.display())),
             }
         }
-        if ui.button("📂  Dosyadan yükle…").clicked() {
+        if ui
+            .button(tr!("📂  Dosyadan yükle…", "📂  Load from file…"))
+            .clicked()
+        {
             if let Some(path) = rfd::FileDialog::new()
-                .add_filter("RISC-V programı", &["s", "S", "asm", "elf", ""])
+                .add_filter(
+                    tr!("RISC-V programı", "RISC-V program"),
+                    &["s", "S", "asm", "elf", ""],
+                )
                 .pick_file()
             {
                 match std::fs::read(&path) {
@@ -155,12 +173,21 @@ impl App {
         ui.separator();
 
         let mut turbo = self.turbo;
-        ui.checkbox(&mut turbo, "🚀 Turbo (referans işlemci)")
-            .on_hover_text(
-                "Senin devren yerine doğrudan Rust ile yazılmış bir RISC-V emülatörü kullan. \
+        ui.checkbox(
+            &mut turbo,
+            tr!(
+                "🚀 Turbo (referans işlemci)",
+                "🚀 Turbo (reference processor)"
+            ),
+        )
+        .on_hover_text(tr!(
+            "Senin devren yerine doğrudan Rust ile yazılmış bir RISC-V emülatörü kullan. \
              Senin işlemcin testleri bu emülatörle karşılaştırılarak geçti; turbo, Doom gibi \
              büyük programlar için gereken yüz milyonlarca komutu saniyeler içinde çalıştırır.",
-            );
+            "Use a RISC-V emulator written in Rust instead of your circuit. Your processor \
+             passed its tests by being compared with this emulator; turbo runs the hundreds \
+             of millions of instructions big programs like Doom need in seconds."
+        ));
         if turbo != self.turbo {
             self.turbo = turbo;
             let program = self.computer.as_ref().map(|c| (c.running,));
@@ -173,27 +200,31 @@ impl App {
             }
         }
         let engine_label = if self.turbo {
-            "Motor: referans emülatör"
+            tr!("Motor: referans emülatör", "Engine: reference emulator")
         } else if self.progress.fast {
-            "Motor: senin işlemcin (⚡ hızlı modeller)"
+            tr!(
+                "Motor: senin işlemcin (⚡ hızlı modeller)",
+                "Engine: your processor (⚡ fast models)"
+            )
         } else {
-            "Motor: senin işlemcin (NAND seviyesinde, yavaş)"
+            tr!(
+                "Motor: senin işlemcin (NAND seviyesinde, yavaş)",
+                "Engine: your processor (NAND level, slow)"
+            )
         };
         ui.label(RichText::new(engine_label).weak());
         ui.add_space(6.0);
 
-        let c = match self.computer() {
-            Ok(c) => c,
-            Err(e) => {
-                ui.colored_label(crate::theme::BAD, e);
-                return;
-            }
-        };
+        if let Err(e) = self.computer() {
+            ui.colored_label(crate::theme::BAD, e);
+            return;
+        }
+        let (c, debug) = (self.computer.as_mut().unwrap(), &mut self.debug);
         ui.horizontal(|ui| {
             let label = if c.running {
-                "⏸  Durdur"
+                tr!("⏸  Durdur", "⏸  Pause")
             } else {
-                "▶  Çalıştır"
+                tr!("▶  Çalıştır", "▶  Run")
             };
             if ui
                 .add_enabled(c.halted.is_none(), egui::Button::new(label))
@@ -202,14 +233,20 @@ impl App {
                 c.running = !c.running;
             }
             if ui
-                .add_enabled(!c.running && c.halted.is_none(), egui::Button::new("Adım"))
+                .add_enabled(
+                    !c.running && c.halted.is_none(),
+                    egui::Button::new(tr!("Adım", "Step")),
+                )
+                .on_hover_text(tr!("Bir komut çalıştır", "Run one instruction"))
                 .clicked()
             {
+                debug.before = c.registers().copied();
                 if let Err(e) = c.step_n(1) {
                     c.halted = Some(e);
                 }
             }
-            if ui.button("⟲  Baştan").clicked() {
+            if ui.button(tr!("⟲  Baştan", "⟲  Restart")).clicked() {
+                debug.before = None;
                 if let Err(e) = c.reset() {
                     c.halted = Some(e);
                 }
@@ -218,10 +255,15 @@ impl App {
         let mut play = false;
         if ui
             .add(
-                egui::Button::new(RichText::new("🎮  Oyna (tam ekran)").size(16.0))
-                    .min_size(egui::vec2(200.0, 32.0)),
+                egui::Button::new(
+                    RichText::new(tr!("🎮  Oyna (tam ekran)", "🎮  Play (full screen)")).size(16.0),
+                )
+                .min_size(egui::vec2(200.0, 32.0)),
             )
-            .on_hover_text("Sadece ekranı göster, tam ekran yap. Çıkmak için F10.")
+            .on_hover_text(tr!(
+                "Sadece ekranı göster, tam ekran yap. Çıkmak için F10.",
+                "Show only the screen, in full screen. F10 to leave."
+            ))
             .clicked()
         {
             play = true;
@@ -231,23 +273,32 @@ impl App {
         }
         ui.add_space(6.0);
         ui.label(
-            RichText::new(
+            RichText::new(tr!(
                 "Klavye: ekrana tıkla. Doom'da oklar yürür, Ctrl ateş eder, boşluk kapı açar, \
                  Enter menüde seçer, Esc menüyü açar. F11 tam ekran, oyun modundan çıkmak için F10.",
-            )
+                "Keyboard: click the screen. In Doom the arrows walk, Ctrl fires, space opens \
+                 doors, Enter picks in the menu, Esc opens the menu. F11 is full screen, F10 \
+                 leaves play mode."
+            ))
             .small(),
         );
         ui.add_space(6.0);
-        ui.label(RichText::new("Bellek haritası").strong());
+        ui.label(RichText::new(tr!("Bellek haritası", "Memory map")).strong());
         ui.label(
-            RichText::new(
+            RichText::new(tr!(
                 "0x00000000  RAM (program burada başlar)\n\
                  0x10000000  konsol (yaz: karakter bas, oku: tuş)\n\
                  0x10000004  zaman (milisaniye)\n\
                  0x10000008  klavye olayı\n\
                  0x1000000C  ekranı göster\n\
                  0x11000000  ekran pikselleri (0x00RRGGBB)",
-            )
+                "0x00000000  RAM (programs start here)\n\
+                 0x10000000  console (write: print a char, read: a key)\n\
+                 0x10000004  time (milliseconds)\n\
+                 0x10000008  keyboard event\n\
+                 0x1000000C  show the screen\n\
+                 0x11000000  screen pixels (0x00RRGGBB)"
+            ))
             .monospace()
             .small(),
         );
@@ -262,8 +313,16 @@ impl App {
             }
         };
         c.run_for(std::time::Duration::from_millis(12));
-        c.ui(ui);
-        if c.running {
+        let running = c.running;
+        egui::ScrollArea::vertical()
+            .id_salt("computer_scroll")
+            .show(ui, |ui| {
+                if let Some(c) = self.computer.as_mut() {
+                    c.ui(ui);
+                }
+                self.debugger(ui);
+            });
+        if running {
             ui.ctx().request_repaint();
         }
     }

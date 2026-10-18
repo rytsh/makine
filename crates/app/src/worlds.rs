@@ -3,6 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use makine_lang::{tr, trf};
 use makine_pack::Package;
 use makine_sim::Library;
 use makine_world::World;
@@ -53,16 +54,24 @@ pub fn export(world: &World, lib: &Library, sandbox: &Sandbox) -> Result<String,
 /// Read a world file: install the free chips it carries into `sandbox`
 /// (skipping ones already there) and return the world.
 pub fn import(text: &str, lib: &Library, sandbox: &mut Sandbox) -> Result<World, String> {
-    let f: WorldFile =
-        serde_json::from_str(text).map_err(|e| format!("geçersiz dünya dosyası: {e}"))?;
+    let f: WorldFile = serde_json::from_str(text)
+        .map_err(|e| trf!("geçersiz dünya dosyası: {e}", "invalid world file: {e}"))?;
     if f.format != FORMAT {
-        return Err("bu bir makine dünyası değil".into());
+        return Err(tr!("bu bir makine dünyası değil", "this is not a makine world").into());
     }
     if f.version > VERSION {
-        return Err("dosya daha yeni bir sürümden; makine'yi güncelle".into());
+        return Err(tr!(
+            "dosya daha yeni bir sürümden; makine'yi güncelle",
+            "the file is from a newer version; update makine"
+        )
+        .into());
     }
     if f.version < VERSION {
-        return Err("bu dosya eski kareli dünyalardan; yeni dünya bunları açamıyor".into());
+        return Err(tr!(
+            "bu dosya eski kareli dünyalardan; yeni dünya bunları açamıyor",
+            "this file is from the old grid worlds; the new world can't open them"
+        )
+        .into());
     }
     // Check every package first so a failure adds nothing.
     let mut trial = sandbox.clone();
@@ -82,8 +91,9 @@ pub fn import(text: &str, lib: &Library, sandbox: &mut Sandbox) -> Result<World,
         .filter(|n| !l.contains(n))
         .collect();
     if !missing.is_empty() {
-        return Err(format!(
+        return Err(trf!(
             "bu dünya için önce şunlar gerekli: {}",
+            "this world needs these first: {}",
             missing.join(", ")
         ));
     }
@@ -105,10 +115,10 @@ pub fn unique_name(base: &str, taken: &BTreeMap<String, World>) -> String {
 /// Valid world names: not empty, not too long, no line breaks.
 pub fn check_name(name: &str) -> Result<(), String> {
     if name.trim().is_empty() {
-        return Err("dünyanın bir adı olmalı".into());
+        return Err(tr!("dünyanın bir adı olmalı", "the world needs a name").into());
     }
     if name.chars().count() > 40 || name.contains('\n') {
-        return Err("ad çok uzun".into());
+        return Err(tr!("ad çok uzun", "the name is too long").into());
     }
     Ok(())
 }
