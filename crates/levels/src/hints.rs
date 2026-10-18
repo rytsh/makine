@@ -452,6 +452,22 @@ pub fn hints(chip: &str) -> Vec<&'static str> {
                 "b and sub → XOR×8 → the adder's b; a → its a; sub → its c.",
             ],
         ),
+        "MiniDecode"=>(
+            &["Üst ve alt yarı sadece farklı tellerdir.","Bir Böl, gruplar 4,4. Gruplar düşük bitten başlar.","Böl'ün ilk çıkışı arg, ikinci çıkışı op."],
+            &["The upper and lower halves are simply different wires.","One Split with groups 4,4, starting at the low bit.","The first Split output is arg, the second op."]
+        ),
+        "MiniZero8"=>(
+            &["Sayı sıfırsa hiçbir biti 1 değildir.","Sekiz biti OR ağacıyla birleştir.","Son OR'un çıkışını NOT ile tersle; 7 OR yeter."],
+            &["A number is zero if none of its bits is 1.","Combine eight bits with an OR tree.","Invert the final OR output; 7 ORs are enough."]
+        ),
+        "MiniPc4"=>(
+            &["Sıradaki değeri seçmek ile onu saklamak farklı işlerdir.","Bit×4, Adder8 ile +1, Mux×4 ile jump ve reset; hold yazma iznini kapatır.","d=MUX(MUX(pc+1,target,jump),0,reset); load=(DEĞİL hold) VEYA reset. Toplamın yalnızca alt 4 bitini al."],
+            &["Choosing a next value and storing it are separate jobs.","Bit×4, Adder8 for +1, Mux×4 for jump/reset; hold disables writes.","d=MUX(MUX(pc+1,target,jump),0,reset); load=(NOT hold) OR reset. Keep only the low 4 sum bits."]
+        ),
+        "MiniAcc8"=>(
+            &["Reset yükleme olmasa bile kaydı sıfırlamalı.","Bit×8 ve önünde MUX×8; yükleme izni için OR.","d=MUX(d,0,reset); Bit.load=load VEYA reset. clk doğrudan Bit'e."],
+            &["Reset must clear the register even with load disabled.","Bit×8 with MUX×8 before it; OR for write enable.","d=MUX(d,0,reset); Bit.load=load OR reset. Wire clk to Bit."]
+        ),
         "MiniControl" => (
             &[
                 "Önce op'un hangi komut olduğunu bul: her komut için \"op şu sayı mı?\" diye soran bir kapı. Sonra çıkışlar bunların VEYA'sı.",

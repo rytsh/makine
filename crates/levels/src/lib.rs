@@ -175,6 +175,7 @@ pub mod hints;
 pub mod mini;
 pub mod reference;
 mod reference_cpu;
+pub mod teaching;
 pub mod workshop;
 
 const LOGIC: &str = "1. Mantık";

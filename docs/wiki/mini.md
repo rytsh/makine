@@ -1,5 +1,5 @@
 <!--
-seviyeler: AddSub8, MiniControl, MiniCpu
+seviyeler: AddSub8, MiniDecode, MiniZero8, MiniPc4, MiniAcc8, MiniControl, MiniCpu
 -->
 # Mini işlemci: ilk bilgisayarın
 
@@ -53,18 +53,34 @@ tekrarlayarak çarpar (RAM[3] = 1):
 9: HLT
 ```
 
-Bu makinede çarpma komutu yok, ama döngü ve koşullu atlama olunca her
-hesap yapılabilir. Bu fikir, Alan Turing'in 1936'da gösterdiği şeyin
-özüdür.
+Bu makinede çarpma komutu yok, ama toplama ve koşullu döngüyle bu program
+çarpma yapar. Yine de 16 baytlık ROM/RAM sınırlıdır: her programı
+sığdıramaz, her hesabı temsil edemez. Genel hesaplanabilirlikte Turing'in
+1936'daki modeli gerekirse büyüyebilen bellek varsayar; bu küçük devreyle
+onu aynı şey sanmamalısın.
 
 ## Parçalar
 
 1. **Topla / Çıkar:** tek bir toplayıcı hem toplar hem çıkarır:
    a − b = a + (DEĞİL b) + 1. [Çıkarma](cikarma.md) sayfasına bak.
-2. **Mini Kontrol:** komutun op'una bakıp her parçaya ne yapacağını
+2. **Komutu Alanlarına Ayır (MiniDecode):** üst dört bit opcode, alt dört bit
+   argüman. Bitleri taşımak işlem yapmak değildir.
+3. **Sıfır Bayrağı (MiniZero8):** sekiz bitin hepsini sınar; JZ'nin koşulunu üretir.
+4. **Komut Adresi ve Atlama (MiniPc4):** reset, durma, atlama ve +1 önceliği;
+   sonuç yalnızca yükselen kenarda saklanır.
+5. **Akümülatör (MiniAcc8):** reset ve yazma izni olan 8-bit kayıt.
+6. **Mini Kontrol:** komutun op'una bakıp her parçaya ne yapacağını
    söyleyen devre. Yalnızca VE, VEYA ve DEĞİL'den oluşur.
-3. **Mini İşlemci:** iki kayıt (acc ve pc), önlerinde seçiciler, kontrol
-   ve Topla/Çıkar.
+7. **Mini İşlemci:** öğrendiğin altı parçayı seçicilerle birleştir.
+
+Her seviyede **Ayrıntılı anlatım ve deney** altında somut örnek, sık hata ve
+bir deney vardır. Kendi tahminini not olarak kaydedebilirsin. Saat yüksek
+kalırken veriyi değiştirmek yeni kenar sayılmaz; PC ve acc yeniden yazılmamalı.
+Yazmaç ve kontrolü bir anda kurmak yerine bu ara seviyeleri sırayla tamamla.
+
+Kendi opcode tablonu ve bu devrenin bağlantısını öğrenmek için
+[Sıfırdan bir komut seti tasarla](komutseti.md) yoluna geç. Programlama'daki
+on tasarım dersi, sadece metni okuduğunu değil kodlamayı ve devreni de sınar.
 
 Test, işlemcinde üç program çalıştırır ve her adımda acc'yi, pc'yi ve
 RAM'e yazılanları bir referansla karşılaştırır. Bir fark olursa hangi

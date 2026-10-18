@@ -48,6 +48,56 @@ pub static LEVELS: &[Level] = &[
         }),
     },
     Level {
+        chip: "MiniDecode",
+        section: SECTION,
+        title: "Komutu Alanlarına Ayır",
+        description: "8-bit komutun üst dört bitini op, alt dört bitini arg olarak çıkar.\n\n\
+                      Örneğin 0x47 = 0100 0111: op=4 (ADD), arg=7 (RAM adresi). \
+                      Bu aşama işlem yapmaz; yalnızca bitleri doğru yere taşır. \
+                      Böl parçasında gruplar düşük bitten başlar: 4,4.",
+        inputs: &["instr[8]"],
+        outputs: &["op[4]", "arg[4]"],
+        test: Test::Function(|i| vec![i[0] >> 4, i[0] & 15]),
+    },
+    Level {
+        chip: "MiniZero8",
+        section: SECTION,
+        title: "Sıfır Bayrağı",
+        description: "a'nın sekiz bitinin hepsi 0 ise zero=1, değilse 0.\n\n\
+                      Koşullu atlama bu tek bite bakar. 00000001 ve 10000000 da sıfır değildir: \
+                      yalnızca bir bite bakmak yetmez. Bitleri OR ile birleştirip sonucu tersle. \
+                      Dalları dengeli bir ağaç yaparsan en uzun yol kısalır.",
+        inputs: &["a[8]"],
+        outputs: &["zero"],
+        test: Test::Function(|i| vec![(i[0] == 0) as u64]),
+    },
+    Level {
+        chip: "MiniPc4",
+        section: SECTION,
+        title: "Komut Adresi ve Atlama",
+        description: "Her yükselen kenarda sıradaki pc'yi seç: reset varsa 0; yoksa hold varsa \
+                      aynı değer; yoksa jump varsa target; değilse pc+1.\n\n\
+                      4 bit yalnızca 0–15'i tutar; 15+1 tekrar 0 olur. Mini makinede adres \
+                      birimi komuttur, RISC-V'deki pc+4 ile karıştırma. Saatin kenarları arasında \
+                      target değişse bile pc değişmemeli. reset, hold'dan da önceliklidir.",
+        inputs: &["target[4]", "jump", "hold", "reset", "clk"],
+        outputs: &["pc[4]"],
+        test: Test::Sequence(pc_steps),
+    },
+    Level {
+        chip: "MiniAcc8",
+        section: SECTION,
+        title: "Akümülatör ve Yazma İzni",
+        description: "8-bit acc kaydı: yükselen kenarda reset=1 ise 0, yoksa load=1 ise d, \
+                      yoksa eski değer.\n\n\
+                      ALU sürekli hesaplayabilir ama her komut register'a yazmaz. \
+                      ST ve JMP, acc'yi korumalıdır. d=7, load=1, clk=0 iken kayıt değişmez; \
+                      clk=1 olduğunda 7 olur. load=0 iken yeni d tutulmaz. reset en önceliklidir.",
+        inputs: &["d[8]", "load", "reset", "clk"],
+        outputs: &["q[8]"],
+        test: Test::Sequence(acc_steps),
+    },
+    Level {
         chip: "MiniControl",
         section: SECTION,
         title: "Mini Kontrol",
@@ -76,6 +126,58 @@ pub static LEVELS: &[Level] = &[
         test: Test::Custom(cpu_test),
     },
 ];
+
+fn pc_steps() -> Vec<makine_sim::TestStep> {
+    let mut steps = vec![];
+    let mut pc = 0;
+    for k in 0..96u64 {
+        let target = (k * 7) & 15;
+        let jump = (k % 3 == 0) as u64;
+        let hold = (k % 7 == 0) as u64;
+        let reset = (k % 19 == 0) as u64;
+        steps.push(step(&[target, jump, hold, reset, 0], pc));
+        pc = if reset == 1 {
+            0
+        } else if hold == 1 {
+            pc
+        } else if jump == 1 {
+            target
+        } else {
+            (pc + 1) & 15
+        };
+        steps.push(step(&[target, jump, hold, reset, 1], pc));
+        steps.push(step(&[target ^ 15, 1 - jump, 1 - hold, 1 - reset, 1], pc));
+    }
+    steps
+}
+
+fn acc_steps() -> Vec<makine_sim::TestStep> {
+    let mut steps = vec![];
+    let mut q = 0;
+    for k in 0..96u64 {
+        let d = (k * 73) & 255;
+        let load = (k % 3 != 0) as u64;
+        let reset = (k % 13 == 0) as u64;
+        steps.push(step(&[d, load, reset, 0], q));
+        q = if reset == 1 {
+            0
+        } else if load == 1 {
+            d
+        } else {
+            q
+        };
+        steps.push(step(&[d, load, reset, 1], q));
+        steps.push(step(&[d ^ 255, 1 - load, 1 - reset, 1], q));
+    }
+    steps
+}
+
+fn step(inputs: &[u64], q: u64) -> makine_sim::TestStep {
+    makine_sim::TestStep {
+        inputs: inputs.to_vec(),
+        expect: vec![Some(q)],
+    }
+}
 
 pub const NOP: u8 = 0;
 pub const LDI: u8 = 1;
@@ -403,6 +505,65 @@ pub fn reference(chip: &str) -> Option<ChipDef> {
             let sum = b.chip("Adder8", &[x, out(flip, 0), s]);
             b.output("out", out(sum, 0));
         }
+        "MiniDecode" => {
+            let instr = b.input("instr");
+            let p = b.split(&[4, 4], instr);
+            b.output("arg", out(p, 0));
+            b.output("op", out(p, 1));
+        }
+        "MiniZero8" => {
+            let a = b.input("a");
+            let bits = b.split(&[1; 8], a);
+            let mut layer: Vec<_> = (0..8).map(|k| out(bits, k)).collect();
+            while layer.len() > 1 {
+                layer = layer.chunks(2).map(|p| b.chip1("Or", p)).collect();
+            }
+            let z = b.chip1("Not", &layer);
+            b.output("zero", z);
+        }
+        "MiniAcc8" => {
+            let (d, load, reset, clk) = (
+                b.input("d"),
+                b.input("load"),
+                b.input("reset"),
+                b.input("clk"),
+            );
+            let zero = b.constant(8, 0);
+            let chosen = b.chip_n("Mux", 8, &[d, zero, reset]);
+            let enabled = b.chip1("Or", &[load, reset]);
+            let reg = b.chip_n("Bit", 8, &[out(chosen, 0), enabled, clk]);
+            b.output("q", out(reg, 0));
+        }
+        "MiniPc4" => {
+            let (target, jump, hold, reset, clk) = (
+                b.input("target"),
+                b.input("jump"),
+                b.input("hold"),
+                b.input("reset"),
+                b.input("clk"),
+            );
+            let reg = b.part(
+                Part {
+                    kind: PartKind::Chip("Bit".into()),
+                    repeat: 4,
+                },
+                &[],
+            );
+            let zero4 = b.constant(4, 0);
+            let pc8 = b.join(&[4, 4], &[out(reg, 0), zero4]);
+            let one = b.constant(8, 1);
+            let zero = b.constant(1, 0);
+            let inc = b.chip("Adder8", &[pc8, one, zero]);
+            let bits = b.split(&[4, 4], out(inc, 0));
+            let chosen = b.chip_n("Mux", 4, &[out(bits, 0), target, jump]);
+            let reset_d = b.chip_n("Mux", 4, &[out(chosen, 0), zero4, reset]);
+            let not_hold = b.chip1("Not", &[hold]);
+            let enabled = b.chip1("Or", &[not_hold, reset]);
+            b.wire(out(reset_d, 0), makine_sim::into(reg, 0));
+            b.wire(enabled, makine_sim::into(reg, 1));
+            b.wire(clk, makine_sim::into(reg, 2));
+            b.output("pc", out(reg, 0));
+        }
         "MiniControl" => {
             let (op, zero) = (b.input("op"), b.input("zero"));
             let bits = b.split(&[1, 1, 1, 1], op);
@@ -440,27 +601,12 @@ pub fn reference(chip: &str) -> Option<ChipDef> {
         "MiniCpu" => {
             let (instr, rdata) = (b.input("instr"), b.input("rdata"));
             let (reset, clk) = (b.input("reset"), b.input("clk"));
-            let f = b.split(&[4, 4], instr);
-            let (arg, op) = (out(f, 0), out(f, 1));
-            let reg = |b: &mut ChipBuilder, n: u8| {
-                b.part(
-                    Part {
-                        kind: PartKind::Chip("Bit".into()),
-                        repeat: n,
-                    },
-                    &[],
-                )
-            };
-            let accr = reg(&mut b, 8);
-            let pcr = reg(&mut b, 4);
+            let f = b.chip("MiniDecode", &[instr]);
+            let (op, arg) = (out(f, 0), out(f, 1));
+            let accr = b.chip("MiniAcc8", &[]);
+            let pcr = b.chip("MiniPc4", &[]);
             let (acc, pc) = (out(accr, 0), out(pcr, 0));
-            // zero = no bit of acc is 1.
-            let bits = b.split(&[1; 8], acc);
-            let mut any = out(bits, 0);
-            for k in 1..8 {
-                any = b.chip1("Or", &[any, out(bits, k)]);
-            }
-            let zero = b.chip1("Not", &[any]);
+            let zero = b.chip1("MiniZero8", &[acc]);
             let ctl = b.chip("MiniControl", &[op, zero]);
             let sig = |k: usize| out(ctl, k);
             // acc: memory, the adder, or the immediate; 0 on reset.
@@ -469,27 +615,12 @@ pub fn reference(chip: &str) -> Option<ChipDef> {
             let imm = b.join(&[4, 4], &[arg, zero4]);
             let v1 = b.chip_n("Mux", 8, &[rdata, alu, sig(2)]);
             let v2 = b.chip_n("Mux", 8, &[out(v1, 0), imm, sig(1)]);
-            let zero8 = b.constant(8, 0);
-            let accd = b.chip_n("Mux", 8, &[out(v2, 0), zero8, reset]);
-            let accload = b.chip1("Or", &[sig(0), reset]);
-            b.wire(out(accd, 0), makine_sim::into(accr, 0));
-            b.wire(accload, makine_sim::into(accr, 1));
-            b.wire(clk, makine_sim::into(accr, 2));
-            // pc: + 1, or arg on a jump; held on HLT; 0 on reset.
-            let zero4b = b.constant(4, 0);
-            let pc8 = b.join(&[4, 4], &[pc, zero4b]);
-            let one = b.constant(8, 1);
-            let no_carry = b.constant(1, 0);
-            let inc = b.chip("Adder8", &[pc8, one, no_carry]);
-            let low = b.split(&[4, 4], out(inc, 0));
-            let pn = b.chip_n("Mux", 4, &[out(low, 0), arg, sig(5)]);
-            let zero4c = b.constant(4, 0);
-            let pcd = b.chip_n("Mux", 4, &[out(pn, 0), zero4c, reset]);
-            let run = b.chip1("Not", &[sig(6)]);
-            let pcload = b.chip1("Or", &[run, reset]);
-            b.wire(out(pcd, 0), makine_sim::into(pcr, 0));
-            b.wire(pcload, makine_sim::into(pcr, 1));
-            b.wire(clk, makine_sim::into(pcr, 2));
+            for (pin, from) in [out(v2, 0), sig(0), reset, clk].into_iter().enumerate() {
+                b.wire(from, makine_sim::into(accr, pin));
+            }
+            for (pin, from) in [arg, sig(5), sig(6), reset, clk].into_iter().enumerate() {
+                b.wire(from, makine_sim::into(pcr, pin));
+            }
             b.output("pc", pc);
             b.output("addr", arg);
             b.output("acc", acc);
@@ -537,5 +668,33 @@ mod tests {
         let mut cpu = MiniDriver::new(c);
         let e = run_lockstep(&mut cpu, &programs()[0]).unwrap_err();
         assert!(e.contains("SUB 15"), "{e}");
+    }
+
+    #[test]
+    fn intermediate_levels_reject_swapped_fields_and_missing_reset() {
+        let lib = crate::cost::best_library();
+        let mut d = reference("MiniDecode").unwrap();
+        for w in &mut d.wires {
+            w.to = match w.to {
+                makine_sim::Sink::Output(0) => makine_sim::Sink::Output(1),
+                makine_sim::Sink::Output(1) => makine_sim::Sink::Output(0),
+                s => s,
+            };
+        }
+        assert!(!matches!(
+            crate::check(find("MiniDecode").unwrap(), lib, &d).unwrap(),
+            Verdict::Pass
+        ));
+        let mut d = reference("MiniAcc8").unwrap();
+        let reg = d
+            .parts
+            .iter()
+            .position(|p| p.kind == PartKind::Chip("Bit".into()))
+            .unwrap();
+        d.connect(Source::Input(1), makine_sim::into(reg, 1));
+        assert!(!matches!(
+            crate::check(find("MiniAcc8").unwrap(), lib, &d).unwrap(),
+            Verdict::Pass
+        ));
     }
 }

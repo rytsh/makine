@@ -289,6 +289,10 @@ pub(crate) fn level(chip: &str) -> Option<(&'static str, &'static str)> {
              Subtracting needs no separate circuit: a - b = a + (NOT b) + 1. XOR b with sub \
              and it is inverted while sub = 1; the adder's carry input gives the +1.",
         ),
+        "MiniDecode" => ("Instruction Fields", "Split an 8-bit instruction into the upper four bits op and lower four bits arg.\n\nFor example 0x47 = 0100 0111: op=4 (ADD), arg=7 (a RAM address). This stage does not compute; it only routes bits. Split groups start at the low bit: 4,4."),
+        "MiniZero8" => ("Zero Flag", "Set zero=1 only when all eight bits of a are 0.\n\nConditional jumps use this bit. Both 00000001 and 10000000 are nonzero: checking one bit is not enough. OR all bits together and invert. A balanced tree shortens the longest path."),
+        "MiniPc4" => ("Instruction Address and Jump", "At each rising edge choose the next pc: 0 on reset; otherwise unchanged on hold; otherwise target on jump; otherwise pc+1.\n\nFour bits hold 0–15; 15+1 wraps to 0. Mini addresses count instructions, unlike RISC-V's pc+4. Changing target between clock edges must not change pc. Reset overrides hold too."),
+        "MiniAcc8" => ("Accumulator and Write Enable", "An 8-bit acc register: at the rising edge reset=1 clears it; otherwise load=1 stores d; otherwise keep its value.\n\nThe ALU can compute continuously, but not every instruction writes a register. ST and JMP must preserve acc. With d=7, load=1, clk=0 the register does not change; clk=1 stores 7. With load=0 new d is ignored. Reset has highest priority."),
         "MiniControl" => (
             "Mini Control",
             "The mini processor's boss: look at the instruction's op (and whether acc is 0) \

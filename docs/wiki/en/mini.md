@@ -1,5 +1,5 @@
 <!--
-seviyeler: AddSub8, MiniControl, MiniCpu
+seviyeler: AddSub8, MiniDecode, MiniZero8, MiniPc4, MiniAcc8, MiniControl, MiniCpu
 -->
 # The mini processor: your first computer
 
@@ -55,18 +55,35 @@ by adding again and again (RAM[3] = 1):
 9: HLT
 ```
 
-This machine has no multiply instruction, but with loops and a
-conditional jump it can compute anything. That idea is the heart of what
-Alan Turing showed in 1936.
+This machine has no multiply instruction, but addition and a conditional
+loop let this program multiply. Its 16-byte ROM/RAM is still finite: not
+every program fits or every computation can be represented. Turing's 1936
+model of general computability assumes memory can grow as needed; do not
+confuse it with this small finite circuit.
 
 ## The parts
 
 1. **Add / Subtract:** one adder both adds and subtracts:
    a − b = a + (NOT b) + 1. See the [subtraction](cikarma.md) page.
-2. **Mini Control:** the circuit that looks at the instruction's op and
+2. **Instruction Fields (MiniDecode):** high four bits opcode, low four bits
+   operand. Routing bits does not execute an operation.
+3. **Zero Flag (MiniZero8):** checks all eight bits, producing JZ's condition.
+4. **Instruction Address and Jump (MiniPc4):** reset, hold, jump and +1 priorities;
+   the result is stored only at the rising edge.
+5. **Accumulator (MiniAcc8):** an 8-bit register with reset and write enable.
+6. **Mini Control:** the circuit that looks at the instruction's op and
    tells each part what to do. It is only AND, OR and NOT.
-3. **Mini Processor:** two registers (acc and pc), selectors in front of
-   them, the control and Add/Subtract.
+7. **Mini Processor:** connect your six building blocks with selectors.
+
+Every level has a worked example, common mistake and experiment under
+**Detailed explanation and experiment**. Save your prediction as a note.
+Changing data while the clock stays high is not a new edge; PC and acc must
+not write again. Finish these intermediate levels rather than building
+state and control all at once.
+
+Continue with [Design an instruction set from scratch](komutseti.md) to learn
+how your opcode table connects to hardware. The ten design lessons in
+Programming check encodings and circuits, not just whether you read text.
 
 The test runs three programs on your processor and compares acc, pc and
 what is written to RAM with a reference at every step. If something
