@@ -11,6 +11,9 @@
 //!
 //! Links between pages (`[x](hafiza.md)`) open the page in the wiki; other
 //! links open in the browser. Images (`img/x.png`) are served from memory.
+//!
+//! The English version of each page is in `docs/wiki/en/`, under the same
+//! name; the page shown follows the interface language.
 
 use egui::{RichText, Ui};
 use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
@@ -18,13 +21,20 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 pub struct Page {
     /// File name without `.md`, e.g. `hafiza`.
     pub slug: &'static str,
+    /// The Turkish page, which also names the levels.
     pub source: &'static str,
+    pub en: &'static str,
 }
 
 impl Page {
+    /// The page in the interface language.
+    pub fn text(&self) -> &'static str {
+        makine_lang::pick(self.source, self.en)
+    }
+
     /// The page title: its first `# ` heading.
     pub fn title(&self) -> &'static str {
-        self.source
+        self.text()
             .lines()
             .find_map(|l| l.strip_prefix("# "))
             .unwrap_or(self.slug)
@@ -48,14 +58,17 @@ impl Page {
 
     /// The Markdown without the header comment.
     fn body(&self) -> &'static str {
-        match self
-            .source
-            .strip_prefix("<!--")
-            .and_then(|s| s.split_once("-->"))
-        {
-            Some((_, rest)) => rest.trim_start(),
-            None => self.source,
-        }
+        body_of(self.text())
+    }
+}
+
+fn body_of(source: &'static str) -> &'static str {
+    match source
+        .strip_prefix("<!--")
+        .and_then(|s| s.split_once("-->"))
+    {
+        Some((_, rest)) => rest.trim_start(),
+        None => source,
     }
 }
 
@@ -64,6 +77,7 @@ macro_rules! pages {
         &[$(Page {
             slug: $slug,
             source: include_str!(concat!("../../../docs/wiki/", $slug, ".md")),
+            en: include_str!(concat!("../../../docs/wiki/en/", $slug, ".md")),
         }),*]
     };
 }
@@ -164,7 +178,7 @@ impl Wiki {
 
     /// The page list, for the side panel.
     pub fn contents(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("İçindekiler").strong());
+        ui.label(RichText::new(makine_lang::tr!("İçindekiler", "Contents")).strong());
         let mut open = None;
         for (i, p) in PAGES.iter().enumerate() {
             let selected = p.slug == self.current.slug;
@@ -192,7 +206,7 @@ impl Wiki {
         // The scroll area fills the panel, so its bar sits at the right edge;
         // the page is a centred column inside it.
         let mut scroll = egui::ScrollArea::vertical()
-            .id_salt(("wiki", page.slug))
+            .id_salt(("wiki", page.slug, makine_lang::get().code()))
             .auto_shrink([false, false]);
         if std::mem::take(&mut self.scroll_to_top) {
             scroll = scroll.vertical_scroll_offset(0.0);
@@ -219,7 +233,10 @@ impl Wiki {
     fn header(&mut self, ui: &mut Ui, page: &'static Page, go_level: &mut Option<&'static str>) {
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!self.history.is_empty(), egui::Button::new("◀ Geri"))
+                .add_enabled(
+                    !self.history.is_empty(),
+                    egui::Button::new(makine_lang::tr!("◀ Geri", "◀ Back")),
+                )
                 .clicked()
             {
                 if let Some(p) = self.history.pop() {
@@ -229,7 +246,14 @@ impl Wiki {
             }
             let idx = PAGES.iter().position(|p| p.slug == page.slug).unwrap_or(0);
             if let Some(next) = PAGES.get(idx + 1) {
-                if ui.button(format!("Sonraki: {} ▶", next.title())).clicked() {
+                if ui
+                    .button(makine_lang::trf!(
+                        "Sonraki: {} ▶",
+                        "Next: {} ▶",
+                        next.title()
+                    ))
+                    .clicked()
+                {
                     self.open(next);
                 }
             }
@@ -237,7 +261,9 @@ impl Wiki {
         let levels: Vec<&str> = page.levels().collect();
         if !levels.is_empty() {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("İlgili seviyeler:").weak());
+                ui.label(
+                    RichText::new(makine_lang::tr!("İlgili seviyeler:", "Related levels:")).weak(),
+                );
                 for l in levels {
                     let title = makine_levels::find(l).map_or(l, |lv| lv.title);
                     if ui.link(title).clicked() {
@@ -278,6 +304,31 @@ mod tests {
     }
 
     /// Links between pages and to images must point at something that exists.
+    /// Both languages: same header, same links and images.
+    #[test]
+    fn english_pages_match() {
+        let links = |s: &str| {
+            let mut v: Vec<String> = s
+                .split("](")
+                .skip(1)
+                .map(|r| r[..r.find(')').unwrap()].to_string())
+                .collect();
+            v.sort();
+            v
+        };
+        for p in PAGES {
+            let head = |s: &'static str| s.len() - body_of(s).len();
+            assert_eq!(
+                p.source[..head(p.source)].trim(),
+                p.en[..head(p.en)].trim(),
+                "{}: header differs",
+                p.slug
+            );
+            assert_eq!(links(p.source), links(p.en), "{}: links differ", p.slug);
+            assert!(p.en.contains("\n# "), "{}: no English title", p.slug);
+        }
+    }
+
     #[test]
     fn links_resolve() {
         for p in PAGES {

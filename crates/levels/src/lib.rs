@@ -60,6 +60,32 @@ impl Level {
         levels().iter().copied().take_while(move |l| l.chip != me)
     }
 
+    /// The title in the interface language.
+    pub fn name(&self) -> &'static str {
+        match en::level(self.chip) {
+            Some((t, _)) if makine_lang::is_en() => t,
+            _ => self.title,
+        }
+    }
+
+    /// The description in the interface language.
+    pub fn about(&self) -> &'static str {
+        match en::level(self.chip) {
+            Some((_, d)) if makine_lang::is_en() => d,
+            _ => self.description,
+        }
+    }
+
+    /// The section's name in the interface language (`section` itself is
+    /// the Turkish name, used to group levels).
+    pub fn section_name(&self) -> &'static str {
+        if makine_lang::is_en() {
+            en::section(self.section).unwrap_or(self.section)
+        } else {
+            self.section
+        }
+    }
+
     pub fn index(&self) -> usize {
         levels().iter().position(|l| l.chip == self.chip).unwrap()
     }
@@ -122,6 +148,7 @@ pub fn levels() -> &'static [&'static Level] {
 }
 
 pub mod cost;
+mod en;
 pub mod cpu;
 pub mod fast;
 pub mod reference;
