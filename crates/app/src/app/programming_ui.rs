@@ -8,6 +8,16 @@ use makine_lang::{tr, trf};
 
 impl App {
     pub(super) fn programming_panel(&mut self, ui: &mut Ui) {
+        if self.debug.report_source.as_ref().is_some_and(|(id, s)| {
+            !self
+                .progress
+                .notebook
+                .current()
+                .is_some_and(|d| d.id == *id && d.source == *s)
+        }) {
+            self.debug.report = None;
+            self.debug.report_source = None;
+        }
         ui.heading(tr!("Programlama atölyesi", "Programming workshop"));
         ui.label(tr!(
             "Taslaklar otomatik kaydedilir. Derlemek programı çalıştırmaz.",
@@ -47,10 +57,11 @@ impl App {
                 .on_hover_text(d.architecture.name())
                 .clicked()
             {
-                self.progress.notebook.selected = d.id;
+                self.progress.notebook.select(d.id);
                 self.debug.asm_error = None;
                 self.debug.report = None;
                 self.debug.last_case = None;
+                self.debug.isa_feedback = None;
                 self.save_soon();
             }
         }
@@ -146,6 +157,9 @@ impl App {
                     Architecture::Mcs4=>tr!("Derlenen kod Dünya'da 4004 atölyesine yüklenir; mevcut dünyan korunur. Saat çevrimi ile komut yürüt. WPM bu donanımda desteklenmez.","Compiled code opens in the 4004 World workshop, keeping your current world. Clock cycle executes an instruction. This hardware does not implement WPM."),
                     _=>tr!("Bir komutun adını, opcode'unu ve argümanını tanımla. CPU çipini Serbest çipler'de kendin kur; Derle ve Devreye yükle ROM'u o devreye bağlar. Hazır davranış emülatörü eklenmez.","Define instruction names, opcodes and operands. Build the CPU in Free chips; Build and Load into circuit connect ROM to that circuit. No behaviour emulator is added."),
                 });
+                if d.architecture == Architecture::Custom {
+                    self.isa_panel(ui);
+                }
                 return;
             }
         }
@@ -171,9 +185,9 @@ impl App {
             .width(ui.available_width() - 16.0)
             .selected_text(current)
             .show_ui(ui, |ui| {
-                for l in crate::lessons::all() {
+                for (i, l) in crate::lessons::all().into_iter().enumerate() {
                     let solved = self.progress.notebook.solved.contains(l.id);
-                    let title = format!("{}{}", if solved { "✔ " } else { "" }, l.title);
+                    let title = format!("{}{}. {}", if solved { "✔ " } else { "" }, i + 1, l.title);
                     if ui
                         .selectable_label(self.debug.lesson.as_deref() == Some(l.id), title)
                         .clicked()
@@ -182,7 +196,13 @@ impl App {
                         self.debug.show_answer = false;
                         self.debug.show_hint = false;
                         self.debug.show_solution = false;
-                        self.debug.prediction.clear();
+                        self.debug.prediction = self
+                            .progress
+                            .notebook
+                            .lesson_notes
+                            .get(&format!("predict:{}", l.id))
+                            .cloned()
+                            .unwrap_or_default();
                         self.debug.report = None;
                     }
                 }
@@ -195,13 +215,37 @@ impl App {
         {
             ui.separator();
             ui.heading(l.title);
+            let ready = crate::lessons::unlocked(l.id, &self.progress.notebook.solved);
+            if !ready {
+                let previous = crate::lessons::all()
+                    .into_iter()
+                    .take_while(|p| p.id != l.id)
+                    .find(|p| !self.progress.notebook.solved.contains(p.id))
+                    .map_or("", |p| p.title);
+                ui.colored_label(
+                    theme::WARN,
+                    trf!(
+                        "Bu dersi okuyabilirsin. Görev için önce tamamla: {previous}",
+                        "You may read this lesson. Before its task, complete: {previous}"
+                    ),
+                );
+            }
             ui.label(l.about);
             theme::section(ui, tr!("Tahmin et", "Predict"));
             ui.label(l.predict);
-            ui.add(
-                egui::TextEdit::singleline(&mut self.debug.prediction)
-                    .hint_text(tr!("Tahminin", "Your prediction")),
-            );
+            if ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.debug.prediction)
+                        .hint_text(tr!("Tahminin", "Your prediction")),
+                )
+                .changed()
+            {
+                self.progress
+                    .notebook
+                    .lesson_notes
+                    .insert(format!("predict:{}", l.id), self.debug.prediction.clone());
+                self.save_soon();
+            }
             if ui.button(tr!("Yanıtı açıkla", "Reveal answer")).clicked() {
                 self.debug.show_answer = true;
             }
@@ -216,7 +260,10 @@ impl App {
                         .add(l.title, Architecture::RiscV, l.example);
                     self.save_soon();
                 }
-                if ui.button(tr!("Görevi başlat", "Start task")).clicked() {
+                if ui
+                    .add_enabled(ready, egui::Button::new(tr!("Görevi başlat", "Start task")))
+                    .clicked()
+                {
                     self.progress
                         .notebook
                         .add(l.title, Architecture::RiscV, l.starter);
@@ -225,7 +272,10 @@ impl App {
             });
             theme::section(ui, tr!("Kendin yaz", "Write it yourself"));
             ui.label(l.task);
-            if ui.button(tr!("Görevi test et", "Test task")).clicked() {
+            if ui
+                .add_enabled(ready, egui::Button::new(tr!("Görevi test et", "Test task")))
+                .clicked()
+            {
                 self.test_program(l.id);
             }
             if ui.button(tr!("İpucu", "Hint")).clicked() {
@@ -246,6 +296,7 @@ impl App {
             }
         }
         if let Some(r) = &self.debug.report {
+            let passed = r.failure.is_none() && r.total > 0;
             ui.separator();
             ui.label(trf!(
                 "{} / {} test geçti",
@@ -273,6 +324,32 @@ impl App {
                     .clicked()
                 {
                     self.load_failed_case();
+                }
+            }
+            if passed {
+                let lessons = crate::lessons::all();
+                if let Some(next) = lessons
+                    .iter()
+                    .position(|l| Some(l.id) == self.debug.lesson.as_deref())
+                    .and_then(|i| lessons.get(i + 1))
+                {
+                    if ui
+                        .button(trf!("Sonraki ders: {}", "Next lesson: {}", next.title))
+                        .clicked()
+                    {
+                        self.debug.lesson = Some(next.id.into());
+                        self.debug.report = None;
+                        self.debug.show_answer = false;
+                        self.debug.show_hint = false;
+                        self.debug.show_solution = false;
+                        self.debug.prediction = self
+                            .progress
+                            .notebook
+                            .lesson_notes
+                            .get(&format!("predict:{}", next.id))
+                            .cloned()
+                            .unwrap_or_default();
+                    }
                 }
             }
         }
@@ -322,6 +399,16 @@ impl App {
     }
 
     fn test_program(&mut self, id: &str) {
+        if !crate::lessons::unlocked(id, &self.progress.notebook.solved) {
+            self.status = Some(
+                tr!(
+                    "Görevden önce eksik temel dersleri tamamla.",
+                    "Complete the missing foundation lessons before this task."
+                )
+                .into(),
+            );
+            return;
+        }
         let Some(d) = self.progress.notebook.current().cloned() else {
             return;
         };
@@ -336,6 +423,7 @@ impl App {
                     self.save_soon();
                 }
                 self.debug.report = Some(r);
+                self.debug.report_source = Some((d.id, d.source));
                 self.debug.asm_error = None;
             }
             Err(e) => self.debug.asm_error = Some((e.line, e.message)),
@@ -579,6 +667,7 @@ impl App {
         egui::ScrollArea::vertical()
             .id_salt("program_workbench")
             .show(ui, |ui| {
+                self.programming_teaching(ui, &draft);
                 ui.columns(2, |cols| {
                     let source_label = cols[0]
                         .label(RichText::new(tr!("Kaynak kod", "Source code")).strong())
@@ -851,7 +940,7 @@ mod tests {
         h.run_steps(3);
         assert_eq!(
             app.borrow().computer.as_ref().unwrap().registers().unwrap()[10],
-            2
+            42
         );
         app.borrow_mut()
             .progress
@@ -865,7 +954,7 @@ mod tests {
         assert!(app.borrow().debug.asm_error.is_some());
         assert_eq!(
             app.borrow().computer.as_ref().unwrap().registers().unwrap()[10],
-            2,
+            42,
             "failed build keeps loaded machine"
         );
     }
@@ -873,6 +962,10 @@ mod tests {
     #[test]
     fn task_failures_are_reproducible_in_the_debugger() {
         let mut a = App::new(Progress::default(), None);
+        a.progress
+            .notebook
+            .solved
+            .extend(["register".into(), "copy".into()]);
         a.progress.notebook.current_mut().unwrap().source = "ebreak".into();
         a.test_program("sum");
         assert_eq!(a.debug.report.as_ref().unwrap().passed, 0);
@@ -883,6 +976,34 @@ mod tests {
             (2, 3)
         );
         assert_eq!(c.source_line(), Some(1));
+    }
+
+    #[test]
+    fn task_checks_require_foundations_but_do_not_erase_old_completions() {
+        let mut a = App::new(Progress::default(), None);
+        a.progress.notebook.current_mut().unwrap().source = "add a0,a0,a1\nebreak".into();
+        a.test_program("sum");
+        assert!(a.debug.report.is_none());
+        assert!(!a.progress.notebook.solved.contains("sum"));
+        for id in ["register", "copy", "sum"] {
+            let source = crate::lessons::all()
+                .into_iter()
+                .find(|l| l.id == id)
+                .unwrap()
+                .solution;
+            a.progress.notebook.current_mut().unwrap().source = source.into();
+            a.test_program(id);
+            assert!(a.progress.notebook.solved.contains(id));
+        }
+        a.progress
+            .notebook
+            .lesson_notes
+            .insert("predict:bits".into(), "1".into());
+        let saved = serde_json::to_string(&a.progress).unwrap();
+        let fresh = App::new(serde_json::from_str(&saved).unwrap(), None);
+        assert_eq!(fresh.debug.lesson.as_deref(), Some("bits"));
+        assert_eq!(fresh.debug.prediction, "1");
+        assert!(fresh.progress.notebook.solved.contains("sum"));
     }
 
     #[test]
@@ -940,6 +1061,39 @@ mod tests {
             h.render()
                 .unwrap()
                 .save(format!("{dir}/isa-{}.png", lang.code()))
+                .unwrap();
+            {
+                let mut a = app.borrow_mut();
+                a.debug.isa_lesson = 5;
+                a.progress
+                    .notebook
+                    .isa_solved
+                    .extend(crate::isa_lessons::all()[..5].iter().map(|l| l.id.into()));
+            }
+            h.run_steps(4);
+            h.render()
+                .unwrap()
+                .save(format!("{dir}/isa-control-{}.png", lang.code()))
+                .unwrap();
+            {
+                let mut a = app.borrow_mut();
+                a.view = super::super::View::Editor;
+                a.progress.designs.insert(
+                    "MiniDecode".into(),
+                    crate::design::Design::new(makine_levels::reference::reference("MiniDecode")),
+                );
+                a.open_level(makine_levels::find("MiniDecode").unwrap());
+            }
+            h.run_steps(4);
+            h.get_by_label(tr!(
+                "Ayrıntılı anlatım ve deney",
+                "Detailed explanation and experiment"
+            ))
+            .click();
+            h.run_steps(4);
+            h.render()
+                .unwrap()
+                .save(format!("{dir}/level-guide-{}.png", lang.code()))
                 .unwrap();
             makine_lang::set_for_thread(None);
         }

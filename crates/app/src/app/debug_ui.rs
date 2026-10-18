@@ -13,6 +13,11 @@ use crate::theme;
 /// What the debugger shows; not saved.
 #[derive(Default)]
 pub(super) struct Debug {
+    pub isa_lesson: usize,
+    pub isa_answer: String,
+    pub isa_feedback: Option<(bool, String)>,
+    pub isa_hint: bool,
+    pub lesson_trace: Option<(String, Vec<crate::lessons::ExampleStep>)>,
     pub built: Option<(u64, String, makine_rv::asm::Program)>,
     pub selected_line: usize,
     pub slow: bool,
@@ -22,6 +27,7 @@ pub(super) struct Debug {
     pub show_answer: bool,
     pub show_hint: bool,
     pub report: Option<crate::lessons::Report>,
+    pub report_source: Option<(u64, String)>,
     pub show_solution: bool,
     pub beginner: bool,
     pub number_format: u8,
@@ -66,7 +72,7 @@ impl App {
                     .find(|d| d.source == source)
                     .map(|d| d.id)
                 {
-                    self.progress.notebook.selected = id;
+                    self.progress.notebook.select(id);
                 } else {
                     self.progress.notebook.add(
                         tr!("Yüklenen program", "Loaded program"),

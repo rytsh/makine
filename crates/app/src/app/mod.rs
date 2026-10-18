@@ -23,6 +23,7 @@ mod programming_ui;
 mod sandbox_ui;
 mod small_ui;
 mod solution_ui;
+mod teaching_ui;
 #[cfg(test)]
 mod tests;
 mod truth_ui;
@@ -157,6 +158,16 @@ impl App {
 
     pub fn new(mut progress: Progress, save_path: Option<PathBuf>) -> Self {
         progress.notebook.ensure(progress.program.as_deref());
+        let next_programming_lesson = crate::lessons::all()
+            .into_iter()
+            .find(|l| !progress.notebook.solved.contains(l.id))
+            .map_or("register", |l| l.id);
+        let prediction = progress
+            .notebook
+            .lesson_notes
+            .get(&format!("predict:{next_programming_lesson}"))
+            .cloned()
+            .unwrap_or_default();
         let first_open = levels()
             .iter()
             .enumerate()
@@ -204,7 +215,8 @@ impl App {
             home: Default::default(),
             debug: debug_ui::Debug {
                 beginner: true,
-                lesson: Some("sum".into()),
+                lesson: Some(next_programming_lesson.into()),
+                prediction,
                 selected_line: 1,
                 number_format: 1,
                 ..Default::default()
@@ -334,6 +346,7 @@ impl App {
     }
 
     fn save(&mut self) {
+        self.progress.notebook.sync_custom();
         self.unsaved_since = None;
         if let Some(p) = &self.profiles {
             self.save_path = Some(p.current_path());
@@ -532,6 +545,7 @@ impl App {
         ui.heading(level.name());
         ui.add_space(4.0);
         ui.label(level.about());
+        self.circuit_teaching(ui);
         if let Some(page) = wiki::page_for_level(level.chip) {
             ui.add_space(4.0);
             if ui

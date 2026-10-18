@@ -201,7 +201,7 @@ impl App {
         }
         let mut changed = false;
         egui::ScrollArea::vertical().id_salt("small_assembly").show(ui,|ui|{
-            if d.architecture==Architecture::Custom{self.custom_definition(ui);}
+            if d.architecture==Architecture::Custom{self.isa_material(ui);self.custom_definition(ui);}
             ui.columns(2,|cols|{
                 if let Some(d)=self.progress.notebook.current_mut(){let l=cols[0].label(tr!("Kaynak kod", "Source code")).id;changed=cols[0].add(egui::TextEdit::multiline(&mut d.source).code_editor().desired_rows(20).desired_width(f32::INFINITY)).labelled_by(l).changed();}
                 if let Some((id,_,p))=&self.debug.small_built{if *id==d.id{
@@ -227,6 +227,7 @@ impl App {
             }
         });
         if changed {
+            self.progress.notebook.sync_custom();
             self.save_soon();
         }
     }
@@ -312,6 +313,8 @@ impl App {
         }
         if changed {
             self.debug.small_built = None;
+            self.debug.isa_feedback = None;
+            self.progress.notebook.sync_custom();
             self.save_soon();
         }
     }

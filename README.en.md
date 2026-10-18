@@ -159,12 +159,17 @@ in your profile. **Build → Load from start → One source line** lets you writ
 trace assembly, with machine code, registers, memory and the last step's changes.
 Use the reference processor or your completed CPU circuit.
 
-- Ten hands-on lessons: registers, bits, decisions, loops, arrays, strings,
+- Twenty hands-on lessons: registers, bits, decisions, loops, arrays, strings,
   functions, console, pixels and memory copying. Behaviour tests use different
   inputs; reopen a failing case in the debugger.
 - Label-based Mini CPU and 4004 assemblers, ROM hex export and circuit loading.
 - Custom ISA design: word/opcode/operand definitions, JSON sharing, and ROM/RAM
   wiring to your free CPU chip. An encoding definition does not add an emulator.
+- A ten-step [ISA design course](docs/wiki/en/komutseti.md): bit budgeting, labels,
+  control tables, gates, clocks and datapaths; the capstone tests programs on your
+  own chip. The Mini CPU path now has seven intermediate circuit levels.
+- Every circuit level has a worked example, common mistake, experiment and saved
+  notes. Programming tasks unlock by prerequisite; existing completions remain.
 - Fibonacci, sorting, nested calls, echo, graphics and keyboard projects.
 
 [Detailed guide and examples](docs/wiki/en/programlama.md).

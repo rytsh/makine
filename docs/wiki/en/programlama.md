@@ -52,16 +52,32 @@ before the example solution; revealing it does not change your draft.
 
 | Lesson | Task |
 |---|---|
-| First instructions | Add two registers |
+| Registers and constants | Load a value |
+| Copy a value | Preserve the source register |
+| Addition | Add two registers |
 | Bits | Odd/even test |
-| Decisions | Signed maximum |
+| Shifts | Multiplication and 32-bit wrapping |
+| Signed decisions | Signed maximum |
+| Unsigned decisions | Interpret the same bits differently |
 | Loops | Sum 1 through n |
+| Addresses vs contents | Read the second array word |
+| Memory writes | Preserve neighbouring words |
 | Memory | Array sum |
+| Bytes and signs | lb vs lbu |
 | Text | Byte length of a zero-terminated string |
 | Functions | Call and return |
+| Nested calls | Save ra on the stack and restore sp |
 | Console | Print a character |
+| Console input | Echo through Enter |
 | Graphics | Paint and present a pixel |
+| Pixel addressing | Convert x,y to a byte address |
 | Project | Copy bytes in memory |
+
+Twenty tasks unlock in order. You may read ahead and inspect examples;
+finish missing prerequisites before checking a task. Existing completed
+tasks stay recorded. **Study this lesson in detail** can trace the first
+32 example instructions' PC/register/memory changes without touching your
+program. Prediction and experiment notes are saved in your profile.
 
 ## Understanding a loop
 
@@ -141,6 +157,11 @@ HLT; self-jump to wait. WPM is encoded but the workshop hardware does not
 implement it and asserts FAULT. The assembler checks JCN/ISZ page rules.
 
 ## Your own instruction set
+
+The detailed course is [Design an instruction set from scratch](komutseti.md).
+Its ten lessons check answers, encodings, circuits and programs, not a read
+checkbox. Each draft keeps its own ISA definition; opening a course draft
+does not change your previous design.
 
 Use **+ My instruction set** to choose word width (4–16 bits), opcode
 field, instruction names and operand types. Upper bits hold the opcode,

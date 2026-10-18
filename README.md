@@ -159,12 +159,17 @@ profilde otomatik saklanır. **Derle → Baştan yükle → Bir kaynak satırı*
 kendi assembly'ni yazıp izle; adres/makine kodu, register, bellek ve son adımda
 değişenler birlikte gösterilir. Referans işlemci veya tamamladığın CPU kullanılabilir.
 
-- On uygulamalı ders: register'lardan döngülere, dizi/metin, fonksiyon, konsol,
+- Yirmi uygulamalı ders: register'lardan döngülere, dizi/metin, fonksiyon, konsol,
   piksel ve bellek kopyalamaya. Görevler farklı girişlerle test edilir;
   hatalı örneği debugger'da yeniden açabilirsin.
 - Mini CPU ve 4004 için etiketli assembler, ROM hex dışa aktarımı ve devreye yükleme.
 - Özel komut seti tasarımı: kelime/opcode/argüman tanımları, JSON paylaşımı ve kendi
   serbest CPU çipine ROM/RAM bağlama. Kodlama tanımı otomatik emülatör eklemez.
+- On adımlı [komut seti eğitimi](docs/wiki/komutseti.md): bit bütçesi, etiketler,
+  kontrol tablosu, kapılara dönüşüm, saat ve veri yolu; sonunda kendi çipin gerçek
+  programlarla sınanır. Mini CPU yolu yedi ara seviyeden oluşur.
+- Bütün devre seviyelerinde somut örnek, sık hata, deney ve kaydedilen notlar var.
+  Programlama görevleri önkoşullarla sırayla açılır; eski tamamlamalar korunur.
 - Fibonacci, sıralama, iç içe çağrılar, konsol yankısı ve grafik/klavye projeleri.
 
 [Ayrıntılı kullanım ve örnekler](docs/wiki/programlama.md).

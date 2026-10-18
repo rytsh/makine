@@ -51,16 +51,32 @@ dene. **Görevi başlat** ile kendi çözümünü yaz. İpucunu örnek çözümd
 
 | Ders | Görev |
 |---|---|
-| İlk komutlar | İki register'ı topla |
+| Register ve sabit | Bir değer yükle |
+| Değeri kopyala | Kaynağı koruyarak register kopyala |
+| Toplama | İki register'ı topla |
 | Bitler | Tek/çift testi |
-| Karar | İşaretli maksimum |
+| Kaydırma | Çarpma ve 32-bit taşma |
+| İşaretli karar | İşaretli maksimum |
+| İşaretsiz karar | Aynı bitleri farklı yorumla |
 | Döngü | 1'den n'e toplam |
+| Adres ile değer | Dizinin ikinci kelimesini oku |
+| Belleğe yazma | Komşu kelimeleri koruyarak yaz |
 | Bellek | Dizi toplamı |
+| Bayt ve işaret | lb / lbu farkı |
 | Metin | Sıfırla biten metnin bayt uzunluğu |
 | Fonksiyon | Çağrı ve dönüş |
+| İç içe çağrı | ra'yı yığında koru; sp'yi geri getir |
 | Konsol | Karakter bas |
+| Konsol girdisi | Enter'a kadar yankı |
 | Grafik | Piksel boya ve göster |
+| Piksel adresi | x,y'den gerçek bayt adresine |
 | Proje | Bellekte bayt kopyala |
+
+Yirmi görev sırayla açılır. İleri dersleri okuyup örnekleri inceleyebilirsin;
+görev kontrolü için eksik önkoşulları tamamla. Daha önce geçtiğin görevlerin
+kaydı korunur. **Dersi ayrıntılı incele** bölümünde örneğin ilk 32 komutunun
+PC/register/bellek değişimini kendi programına dokunmadan çıkarabilirsin.
+Tahmin ve deney notların profilde saklanır.
 
 ## Bir döngüyü anlamak
 
@@ -138,6 +154,11 @@ için kendine atla. WPM kodlanır ama atölye donanımı desteklemez: HATA
 verir. Assembler JCN/ISZ'nin aynı sayfa kuralını denetler.
 
 ## Kendi komut setin
+
+Bu araçların ayrıntılı öğretimi [Sıfırdan bir komut seti tasarla](komutseti.md)
+yolundadır. On ders, okuma onayı değil gerçek yanıt, kodlama, devre ve program
+kontrolü ister. Her taslağın ISA tanımı ayrıdır; eğitim taslağı açmak önceki
+tasarımını değiştirmez.
 
 **+ Kendi komut setim** ile kelime genişliği (4–16 bit), opcode alanı,
 komut adı ve argüman türünü seç. Üst bitler opcode, alt bitler sayı veya
