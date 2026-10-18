@@ -84,7 +84,7 @@ Redistributable kurulu olmayan makinelerde de çalışır.
 
 **Dünya**, parçaları serbestçe yerleştirip uçtan uca tel çektiğin canlı bir
 elektronik tezgâhıdır. Shift+sürükle ile seç; **Modül yap** ile adlandır;
-başlığa çift tıklayarak içini aç/kapat. İç içe modüller özgün yerleşimi ve
+çift tıklayarak içine gir (üstteki yol çubuğu ya da Esc ile çık). İç içe modüller özgün yerleşimi ve
 çalışan devreyi korur. Tel adları, elle eklenen dirsekler, hizalama ve
 tıklanabilir küçük harita büyük şemaları düzenlemeyi kolaylaştırır.
 

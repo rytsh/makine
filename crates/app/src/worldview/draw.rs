@@ -17,6 +17,14 @@ use crate::theme;
 impl WorldView {
     pub(super) fn draw(&self, painter: &egui::Painter, board: Rect, l: &Layout, hover: &Hover) {
         self.draw_board(painter, board, l);
+        if let Some(r) = self.scope_frame(l) {
+            painter.rect_stroke(
+                r,
+                8.0,
+                Stroke::new(1.0, theme::COPPER.gamma_multiply(0.5)),
+                StrokeKind::Outside,
+            );
+        }
         for m in &l.modules {
             let r = l.rect(m.rect);
             if !board.intersects(r) {
@@ -121,7 +129,68 @@ impl WorldView {
                 }
             }
         }
+        self.draw_ports(painter, l);
         self.draw_overlays(painter, l);
+    }
+
+    /// The edge of the module looked into, around its insides (not the
+    /// ports), on screen.
+    fn scope_frame(&self, l: &Layout) -> Option<Rect> {
+        if l.ports.is_empty() && self.scope.is_empty() {
+            return None;
+        }
+        let inner = l
+            .parts
+            .iter()
+            .filter(|(id, _, _)| l.visible(*id))
+            .filter_map(|(id, _, _)| l.part_rect(*id))
+            .chain(l.modules.iter().map(|m| m.rect))
+            .reduce(|a, b| a.union(b))?;
+        Some(l.rect(inner.expand(60.0)))
+    }
+
+    /// The connections of the module looked into to the outside: tabs on
+    /// its left (coming in) and right (going out) with the net's value.
+    fn draw_ports(&self, painter: &egui::Painter, l: &Layout) {
+        let z = self.zoom;
+        for p in &l.ports {
+            let r = l.rect(p.rect());
+            if !painter.clip_rect().intersects(r) {
+                continue;
+            }
+            let value = self.sim.value(p.source);
+            let col = wire_color(p.width, value);
+            painter.rect_filled(r, 4.0 * z, theme::RAISED);
+            painter.rect_stroke(r, 4.0 * z, Stroke::new(1.0, col), StrokeKind::Inside);
+            let pin = l.to_screen(p.at);
+            painter.circle_filled(pin, 4.0 * z, col);
+            if z > 0.3 {
+                let v = value.map_or("?".into(), |v| format!("{v:X}"));
+                let mut name = p.name.clone();
+                if name.chars().count() > 16 {
+                    name = name.chars().take(15).collect::<String>() + "…";
+                }
+                let font = FontId::proportional(11.0 * z);
+                painter.text(
+                    r.left_center() + vec2(8.0 * z, 0.0),
+                    Align2::LEFT_CENTER,
+                    if p.incoming {
+                        format!("→ {name}")
+                    } else {
+                        name.clone()
+                    },
+                    font.clone(),
+                    TEXT,
+                );
+                painter.text(
+                    r.right_center() - vec2(8.0 * z, 0.0),
+                    Align2::RIGHT_CENTER,
+                    if p.incoming { v } else { format!("{v} →") },
+                    FontId::monospace(11.0 * z),
+                    col,
+                );
+            }
+        }
     }
 
     fn draw_board(&self, painter: &egui::Painter, board: Rect, l: &Layout) {

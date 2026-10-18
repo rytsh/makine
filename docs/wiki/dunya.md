@@ -53,8 +53,10 @@ tel girer.
 
 ## Modüller ve sinyal izleme
 
-Bir alanı seçip sağ panelde ad vererek **Modül yap**. Başlığına çift
-tıklayınca içi açılır; tekrar çift tıklayınca kapanır. Kapalı modülün
+Bir alanı seçip sağ panelde ad vererek **Modül yap**. Modüle çift
+tıklayınca **içine girersin**: yalnızca modülün içi görünür, dışarıyla
+bağlantıları solda (gelen) ve sağda (giden) etiketler olarak durur. Üstteki
+yol çubuğundan veya **Esc** ile dışarı çıkarsın. Kapalı modülün
 uçları içindeki gerçek bağlantılara gider. Parçaların konumları ve
 simülasyon durumu korunur. Modüller iç içe olabilir.
 

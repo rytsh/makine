@@ -237,7 +237,7 @@ mod editor {
             .save(format!("{dir}/makine-world-4004.png"))
             .unwrap();
 
-        // Open the outer module; its existing child modules remain closed.
+        // Look into the outer module; its child modules stay closed.
         {
             let mut a = app.borrow_mut();
             let w = a.world.as_mut().unwrap();
@@ -247,8 +247,7 @@ mod editor {
                 .max_by_key(|(_, m)| m.members.len())
                 .unwrap()
                 .0;
-            w.toggle_module(root);
-            w.refit();
+            w.enter_module(root);
         }
         harness.run_steps(2);
         harness
@@ -261,8 +260,7 @@ mod editor {
         {
             let mut a = app.borrow_mut();
             let w = a.world.as_mut().unwrap();
-            w.collapsed = w.world.modules().map(|(id, _)| id).collect();
-            w.refit();
+            w.leave_to(0);
         }
 
         // Building together: a guest's cursor in the host's world.

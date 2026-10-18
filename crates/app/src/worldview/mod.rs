@@ -100,6 +100,9 @@ pub struct WorldView {
     pub selected: BTreeSet<Id>,
     pub selected_module: Option<Id>,
     pub collapsed: BTreeSet<Id>,
+    /// The modules looked into, outermost first; only the last one's
+    /// insides are shown.
+    pub scope: Vec<Id>,
     module_name: String,
     selected_wire: Option<End>,
     routing: Option<End>,
@@ -191,6 +194,7 @@ impl WorldView {
             selected: BTreeSet::new(),
             selected_module: None,
             collapsed,
+            scope: Vec::new(),
             module_name: "Modül".into(),
             selected_wire: None,
             routing: None,
@@ -226,6 +230,10 @@ impl WorldView {
         let w = &self.world;
         self.selected.retain(|id| w.part(*id).is_some());
         self.collapsed.retain(|id| w.module(*id).is_some());
+        if let Some(gone) = self.scope.iter().position(|id| w.module(*id).is_none()) {
+            self.scope.truncate(gone);
+            self.fit = true;
+        }
         if self
             .selected_module
             .is_some_and(|id| w.module(id).is_none())
@@ -305,14 +313,81 @@ impl WorldView {
     pub fn add(&mut self, kind: Kind, at: Pos2) -> Id {
         let kind = free_name(&self.world, kind);
         let id = self.world.new_id();
-        self.edit(Edit::Part {
+        let mut edits = vec![Edit::Part {
             id,
             part: Some(Placed {
                 kind,
                 pos: Pos::new(at.x.round(), at.y.round()),
             }),
-        });
+        }];
+        edits.extend(self.adopt(&[id]));
+        self.edit(Edit::Batch(edits));
         id
+    }
+
+    /// Edits putting new parts `ids` into the modules being looked into,
+    /// so they stay in view.
+    fn adopt(&self, ids: &[Id]) -> Vec<Edit> {
+        self.scope
+            .iter()
+            .filter_map(|m| {
+                let mut module = self.world.module(*m)?.clone();
+                module.members.extend_from_slice(ids);
+                Some(Edit::Module {
+                    id: *m,
+                    module: Some(module),
+                })
+            })
+            .collect()
+    }
+
+    /// Look into module `id` (one of those shown): only its insides are
+    /// drawn, with its connections to the outside as ports.
+    pub fn enter_module(&mut self, id: Id) {
+        if self.world.module(id).is_none() || self.scope.last() == Some(&id) {
+            return;
+        }
+        // A module inside the one looked into, maybe several levels down:
+        // go through the ones between.
+        let members = |m: Id| -> BTreeSet<Id> {
+            self.world
+                .module(m)
+                .map(|m| m.members.iter().copied().collect())
+                .unwrap_or_default()
+        };
+        let target = members(id);
+        let mut path: Vec<(Id, usize)> = self
+            .world
+            .modules()
+            .filter(|(m, module)| {
+                *m != id
+                    && !self.scope.contains(m)
+                    && module.members.len() > target.len()
+                    && target.iter().all(|p| module.members.contains(p))
+                    && self
+                        .scope
+                        .last()
+                        .is_none_or(|s| module.members.iter().all(|p| members(*s).contains(p)))
+            })
+            .map(|(m, module)| (m, module.members.len()))
+            .collect();
+        path.sort_by_key(|(m, n)| (std::cmp::Reverse(*n), *m));
+        self.scope.extend(path.into_iter().map(|(m, _)| m));
+        self.scope.push(id);
+        self.selected.clear();
+        self.selected_module = None;
+        self.refit();
+    }
+
+    /// Go back out to the `depth` outermost levels (0: the whole world).
+    pub fn leave_to(&mut self, depth: usize) {
+        if depth >= self.scope.len() {
+            return;
+        }
+        self.scope.truncate(depth);
+        self.selected.clear();
+        self.selected_module = None;
+        self.refit();
     }
 
     /// Change part `id` into `kind`, keeping where it is. Wires to pins it
@@ -505,6 +580,7 @@ impl WorldView {
                 });
             }
         }
+        edits.extend(self.adopt(&ids));
         self.edit(Edit::Batch(edits));
         self.selected = ids.into_iter().collect();
         self.selected_module = None;
@@ -588,7 +664,7 @@ impl WorldView {
             self.zoom,
             self.symbols,
         )
-        .project(&self.world, &self.collapsed)
+        .project(&self.world, &self.collapsed, self.scope.last().copied())
     }
 
     fn fit_to(&mut self, board: Rect) {
@@ -652,6 +728,8 @@ impl WorldView {
     }
 
     pub fn show(&mut self, ui: &mut Ui) {
+        self.after_remote_edits();
+        self.breadcrumbs(ui);
         self.map_ui(ui);
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
         let board = response.rect;
@@ -757,6 +835,10 @@ impl WorldView {
             && self.routing.take().is_none()
             && self.placing.take().is_none()
         {
+            // Esc with nothing selected goes up a level.
+            if self.selected.is_empty() && self.selected_module.is_none() {
+                self.leave_to(self.scope.len().saturating_sub(1));
+            }
             self.selected.clear();
             self.selected_module = None;
         }
@@ -815,7 +897,13 @@ impl WorldView {
             self.duplicate();
         }
         if all {
-            self.selected = self.world.parts().map(|(id, _)| id).collect();
+            let l = self.layout(self.origin);
+            self.selected = self
+                .world
+                .parts()
+                .map(|(id, _)| id)
+                .filter(|id| !l.outside(*id))
+                .collect();
         }
         const DIGITS: [Key; 9] = [
             Key::Num1,
@@ -1038,7 +1126,7 @@ impl WorldView {
         if response.double_clicked() {
             if let Some(p) = ui.ctx().pointer_interact_pos() {
                 if let Some(id) = self.layout(self.origin).module_at(p) {
-                    self.toggle_module(id);
+                    self.enter_module(id);
                     return;
                 }
             }

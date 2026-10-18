@@ -96,7 +96,18 @@ impl WorldView {
                 } else {
                     "Kapat"
                 };
-                if ui.button(label).clicked() {
+                if ui
+                    .button("İçine gir")
+                    .on_hover_text("Yalnızca bu modülün içini göster (çift tık)")
+                    .clicked()
+                {
+                    self.enter_module(id);
+                }
+                if ui
+                    .button(label)
+                    .on_hover_text("Modülü burada, çevresiyle birlikte aç ya da kapat")
+                    .clicked()
+                {
                     self.toggle_module(id);
                 }
                 if ui
@@ -121,7 +132,7 @@ impl WorldView {
                 });
             }
             ui.label(
-                RichText::new("Başlığa çift tıkla: aç/kapat. Başlığı sürükle: hepsini taşı.")
+                RichText::new("Başlığa çift tıkla: içine gir. Başlığı sürükle: hepsini taşı.")
                     .weak()
                     .small(),
             );
@@ -190,6 +201,43 @@ impl WorldView {
                 theme::COPPER_BRIGHT,
                 "Tahtaya tıkla: dirsek ekle. Enter / Esc: bitir.",
             );
+        }
+    }
+
+    /// Where the player is: the world, then each module looked into. A
+    /// click goes back out to that level.
+    pub(super) fn breadcrumbs(&mut self, ui: &mut Ui) {
+        if self.scope.is_empty() {
+            return;
+        }
+        let mut go = None;
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("⬅ Dışarı çık")
+                .on_hover_text("Bir üst seviyeye dön (Esc)")
+                .clicked()
+            {
+                go = Some(self.scope.len() - 1);
+            }
+            ui.separator();
+            if ui
+                .link(RichText::new(&self.world.name).color(theme::INK_DIM))
+                .clicked()
+            {
+                go = Some(0);
+            }
+            for (i, id) in self.scope.iter().enumerate() {
+                ui.label(RichText::new("›").color(theme::INK_DIM));
+                let name = self.world.module(*id).map_or("?", |m| m.name.as_str());
+                if i + 1 == self.scope.len() {
+                    ui.label(RichText::new(name).strong().color(theme::COPPER_BRIGHT));
+                } else if ui.link(RichText::new(name).color(theme::INK_DIM)).clicked() {
+                    go = Some(i + 1);
+                }
+            }
+        });
+        if let Some(depth) = go {
+            self.leave_to(depth);
         }
     }
 
@@ -263,9 +311,11 @@ impl WorldView {
                     .small(),
                 );
                 ui.label(
-                    RichText::new("Shift+sürükle: seç · Başlığa çift tık: modülü aç")
-                        .weak()
-                        .small(),
+                    RichText::new(
+                        "Shift+sürükle: seç · Modüle çift tık: içine gir · Esc: dışarı çık",
+                    )
+                    .weak()
+                    .small(),
                 );
             });
         });

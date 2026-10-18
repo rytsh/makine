@@ -446,6 +446,51 @@ fn modules_preserve_wires_state_layout_and_copy() {
 }
 
 #[test]
+fn entering_a_module_shows_only_its_insides_and_ports() {
+    let mut v = view(World::new("enter"));
+    let sw = v.add(Kind::Switch { on: true }, pos2(10.0, 60.0));
+    let n1 = v.add(Kind::Gate(Gate::Not), pos2(180.0, 60.0));
+    let n2 = v.add(Kind::Gate(Gate::Not), pos2(330.0, 60.0));
+    let lamp = v.add(Kind::Lamp, pos2(500.0, 60.0));
+    for (f, t) in [(sw, n1), (n1, n2), (n2, lamp)] {
+        v.edit(Edit::Wire {
+            to: End::new(t, 0),
+            from: Some(End::new(f, 0)),
+        });
+    }
+    v.selected = [n1, n2].into();
+    let inner = v.group_selected("İç").unwrap();
+    v.selected = [sw, n1, n2].into();
+    let outer = v.group_selected("Dış").unwrap();
+
+    // Entering the inner module goes through the outer one.
+    v.enter_module(inner);
+    assert_eq!(v.scope, [outer, inner]);
+    let l = v.layout(Pos2::ZERO);
+    assert!(l.visible(n1) && l.visible(n2));
+    assert!(!l.visible(sw) && !l.visible(lamp));
+    assert!(l.modules.is_empty());
+    // One port coming in (the switch), one going out (to the lamp).
+    assert_eq!(l.ports.iter().filter(|p| p.incoming).count(), 1);
+    assert_eq!(l.ports.iter().filter(|p| !p.incoming).count(), 1);
+    assert!(l.source_pos(End::new(sw, 0)).is_some());
+    assert!(l.sink_pos(End::new(lamp, 0)).is_some());
+    let r = l.bounds().unwrap();
+    assert!(r.width() < 1000.0);
+
+    // A part placed inside joins the modules looked into.
+    let added = v.add(Kind::Gate(Gate::And), pos2(250.0, 200.0));
+    assert!(v.world.module(inner).unwrap().members.contains(&added));
+    assert!(v.world.module(outer).unwrap().members.contains(&added));
+
+    v.leave_to(1);
+    assert_eq!(v.scope, [outer]);
+    v.leave_to(0);
+    assert!(v.scope.is_empty());
+    assert!(v.layout(Pos2::ZERO).ports.is_empty());
+}
+
+#[test]
 fn collapsed_fanout_is_one_pin_and_reconnects_all_members() {
     let mut v = view(World::new("fanout"));
     let a = v.add(Kind::Switch { on: false }, pos2(20.0, 100.0));

@@ -6,7 +6,7 @@
 use egui::{pos2, vec2, Pos2, Rect, Vec2};
 use makine_sim::{Library, Part, PartKind, PartPins, Pin};
 use makine_world::{Device, End, Gate, Id, Kind, World};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::design::{geometry, Geometry, Symbol, GATE_H, HEADER, PIN_GAP};
 
@@ -133,6 +133,36 @@ pub struct Layout {
     pub owners: HashMap<Id, Id>,
     source_proxy: HashMap<End, Pos2>,
     sink_proxy: HashMap<End, Pos2>,
+    /// Parts outside the module being looked into: not drawn at all.
+    outside: HashSet<Id>,
+    /// Connections to the outside of the module being looked into.
+    pub ports: Vec<Port>,
+}
+
+/// Where a net crosses the edge of the module being looked into: on the
+/// left for signals coming in, on the right for signals going out.
+pub struct Port {
+    /// The pin, in world units.
+    pub at: Pos2,
+    pub name: String,
+    pub width: u8,
+    pub incoming: bool,
+    /// The output driving the net (for its value).
+    pub source: End,
+}
+
+/// Size of a port tab, in world units.
+pub const PORT_TAB: Vec2 = vec2(150.0, 24.0);
+
+impl Port {
+    pub fn rect(&self) -> Rect {
+        let min = if self.incoming {
+            self.at - vec2(PORT_TAB.x, PORT_TAB.y / 2.0)
+        } else {
+            self.at - vec2(0.0, PORT_TAB.y / 2.0)
+        };
+        Rect::from_min_size(min, PORT_TAB)
+    }
 }
 
 pub struct ModuleShape {
@@ -164,14 +194,40 @@ impl Layout {
             owners: HashMap::new(),
             source_proxy: HashMap::new(),
             sink_proxy: HashMap::new(),
+            outside: HashSet::new(),
+            ports: Vec::new(),
         }
     }
 
     /// Project collapsed modules without changing the circuit. A boundary
     /// pin still addresses the actual inner pin, so reconnecting it edits
     /// the same wire whether its module is open or closed.
-    pub fn project(mut self, world: &World, collapsed: &BTreeSet<Id>) -> Self {
-        let mut groups: Vec<_> = world.modules().collect();
+    ///
+    /// With a `scope`, only that module's insides are shown, and the nets
+    /// crossing its edge become ports.
+    pub fn project(mut self, world: &World, collapsed: &BTreeSet<Id>, scope: Option<Id>) -> Self {
+        let inside: Option<BTreeSet<Id>> = scope
+            .and_then(|s| world.module(s))
+            .map(|m| m.members.iter().copied().collect());
+        if let Some(inside) = &inside {
+            self.outside = self
+                .parts
+                .iter()
+                .map(|(id, _, _)| *id)
+                .filter(|id| !inside.contains(id))
+                .collect();
+        }
+        let mut groups: Vec<_> = world
+            .modules()
+            .filter(|(id, m)| {
+                Some(*id) != scope
+                    && inside.as_ref().is_none_or(|inside| {
+                        m.members
+                            .iter()
+                            .all(|p| inside.contains(p) || world.part(*p).is_none())
+                    })
+            })
+            .collect();
         groups.sort_by_key(|(id, m)| (std::cmp::Reverse(m.members.len()), *id));
         for (id, m) in groups {
             let members: BTreeSet<_> = m
@@ -302,7 +358,141 @@ impl Layout {
                 self.modules[i].rect = r;
             }
         }
+        if inside.is_some() {
+            self.place_ports(world);
+        }
         self
+    }
+
+    /// The name of the net driven by output `e`: its wire's name, or the
+    /// part and pin.
+    fn net_name(&self, world: &World, e: End) -> Option<(String, u8)> {
+        let part = world.part(e.part)?;
+        let pin = self.output_pin(e)?;
+        let named = world.wires().find_map(|(from, to)| {
+            (from == e)
+                .then(|| world.wire_style(to))
+                .flatten()
+                .filter(|s| !s.name.is_empty())
+                .map(|s| s.name.clone())
+        });
+        Some((
+            named.unwrap_or_else(|| format!("{} / {}", label(&part.kind), pin.name)),
+            pin.width,
+        ))
+    }
+
+    /// World position of input `e` as shown (a closed module's pin if it
+    /// is inside one).
+    fn world_sink(&self, e: End) -> Option<Pos2> {
+        if let Some(p) = self.sink_proxy.get(&e) {
+            return Some(*p);
+        }
+        let (at, s) = self.find(e.part)?;
+        Some(at + s.geometry.inputs.get(e.pin)?.0)
+    }
+
+    fn world_source(&self, e: End) -> Option<Pos2> {
+        if let Some(p) = self.source_proxy.get(&e) {
+            return Some(*p);
+        }
+        let (at, s) = self.find(e.part)?;
+        Some(at + *s.geometry.outputs.get(e.pin)?)
+    }
+
+    /// Ports for the nets crossing the edge of the module looked into,
+    /// each near the pins it connects, without overlapping.
+    fn place_ports(&mut self, world: &World) {
+        let Some(bounds) = self.bounds() else { return };
+        let mut incoming = BTreeMap::<End, Vec<End>>::new();
+        let mut outgoing = BTreeMap::<End, Vec<End>>::new();
+        for (from, to) in world.wires() {
+            match (
+                self.outside.contains(&from.part),
+                self.outside.contains(&to.part),
+            ) {
+                (true, false) => incoming.entry(from).or_default().push(to),
+                (false, true) => outgoing.entry(from).or_default().push(to),
+                _ => {}
+            }
+        }
+        const GAP: f32 = 34.0;
+        const MARGIN: f32 = 120.0;
+        let mean = |ys: Vec<f32>| {
+            if ys.is_empty() {
+                bounds.center().y
+            } else {
+                ys.iter().sum::<f32>() / ys.len() as f32
+            }
+        };
+        let column = |mut v: Vec<(f32, End, Vec<End>)>| {
+            v.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut last = f32::NEG_INFINITY;
+            for p in &mut v {
+                p.0 = p.0.max(last + GAP);
+                last = p.0;
+            }
+            v
+        };
+        let ins = column(
+            incoming
+                .into_iter()
+                .map(|(from, to)| {
+                    let y = mean(
+                        to.iter()
+                            .filter_map(|e| self.world_sink(*e))
+                            .map(|p| p.y)
+                            .collect(),
+                    );
+                    (y, from, to)
+                })
+                .collect(),
+        );
+        let outs = column(
+            outgoing
+                .into_iter()
+                .map(|(from, to)| {
+                    (
+                        self.world_source(from).map_or(bounds.center().y, |p| p.y),
+                        from,
+                        to,
+                    )
+                })
+                .collect(),
+        );
+        for (y, from, _) in ins {
+            let at = pos2(bounds.left() - MARGIN, y);
+            self.source_proxy.insert(from, at);
+            if let Some((name, width)) = self.net_name(world, from) {
+                self.ports.push(Port {
+                    at,
+                    name,
+                    width,
+                    incoming: true,
+                    source: from,
+                });
+            }
+        }
+        for (y, from, to) in outs {
+            let at = pos2(bounds.right() + MARGIN, y);
+            for e in to {
+                self.sink_proxy.insert(e, at);
+            }
+            if let Some((name, width)) = self.net_name(world, from) {
+                self.ports.push(Port {
+                    at,
+                    name,
+                    width,
+                    incoming: false,
+                    source: from,
+                });
+            }
+        }
+    }
+
+    /// Whether part `id` is outside the module being looked into.
+    pub fn outside(&self, id: Id) -> bool {
+        self.outside.contains(&id)
     }
 
     pub fn sink_aliases(&self, end: End) -> Vec<End> {
@@ -318,10 +508,13 @@ impl Layout {
     }
 
     pub fn visible(&self, id: Id) -> bool {
-        !self.owners.contains_key(&id)
+        !self.owners.contains_key(&id) && !self.outside.contains(&id)
     }
 
     pub fn wire_visible(&self, from: End, to: End) -> bool {
+        if self.outside(from.part) && self.outside(to.part) {
+            return false;
+        }
         !matches!((self.owners.get(&from.part), self.owners.get(&to.part)), (Some(a), Some(b)) if a == b)
     }
 
@@ -461,6 +654,7 @@ impl Layout {
             .filter(|(id, _, _)| self.visible(*id))
             .filter_map(|(id, _, _)| self.part_rect(*id))
             .chain(self.modules.iter().map(|m| m.rect))
+            .chain(self.ports.iter().map(|p| p.rect()))
             .reduce(|a, b| a.union(b))
     }
 }

@@ -22,7 +22,14 @@ elektriksel parça değildir: içerideki gerçek ucun görünür temsilidir.
 
 ## Açmak, kapatmak ve taşımak
 
-- Modül başlığına **çift tıkla** ya da sağ panelde **İçini aç / Kapat** kullan.
+- Modüle **çift tıkla** ya da sağ panelde **İçine gir**: tahtada yalnızca
+  modülün içi kalır. Dışarıdan gelen sinyaller solda, dışarı giden
+  sinyaller sağda adları ve anlık değerleriyle görünür. Üstteki yol
+  çubuğu nerede olduğunu gösterir (*Dünya › CPU › ALU*); bir adına
+  tıklayınca o seviyeye, **Esc** ile bir üst seviyeye dönersin.
+- İçerideyken koyduğun ya da yapıştırdığın parçalar o modüle eklenir.
+- Modülü çevresiyle birlikte yerinde görmek istersen sağ paneldeki
+  **İçini aç / Kapat** düğmesini kullan.
 - Başlığı sürükleyince bütün üyeler aynı miktarda taşınır; aralarındaki
   yerleşim korunur.
 - **Grubu çöz**, yalnızca modül sınırını kaldırır. Kapılar ve teller kalır.

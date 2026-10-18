@@ -4,6 +4,10 @@ use egui::{pos2, Pos2};
 use makine_world::{End, World};
 
 pub fn points(world: &World, l: &Layout, from: End, to: End) -> Option<Vec<Pos2>> {
+    // Waypoints drawn outside the module being looked into mean nothing here.
+    if l.outside(from.part) || l.outside(to.part) {
+        return None;
+    }
     let s = world.wire_style(to)?;
     if s.points.is_empty() {
         return None;
