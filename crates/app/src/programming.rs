@@ -33,6 +33,19 @@ pub struct Draft {
     pub isa: Option<makine_rv::smallasm::Definition>,
     #[serde(default)]
     pub cpu_chip: String,
+    /// Stable association; navigation reuses the draft without overwriting it.
+    #[serde(default)]
+    pub activity: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Lab {
+    pub chip: Option<String>,
+    pub draft: Option<u64>,
+    pub rom: Option<u64>,
+    pub loaded_words: Vec<u64>,
+    pub loaded_source: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -45,6 +58,7 @@ pub struct Notebook {
     pub custom_chip: String,
     pub isa_solved: std::collections::BTreeSet<String>,
     pub lesson_notes: std::collections::BTreeMap<String, String>,
+    pub labs: std::collections::BTreeMap<String, Lab>,
 }
 
 impl Notebook {
@@ -62,6 +76,7 @@ impl Notebook {
             name: name.into(),
             architecture,
             source: source.into(),
+            activity: None,
             isa: (architecture == Architecture::Custom).then(|| self.custom.clone()),
             cpu_chip: if architecture == Architecture::Custom {
                 self.custom_chip.clone()

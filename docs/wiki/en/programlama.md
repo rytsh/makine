@@ -3,7 +3,19 @@ seviyeler:
 -->
 # Write your own program
 
-The **Programming** tab opens before you finish the CPU level. Write
+Writing code is not a separate tab; it lives **inside the levels**. In the level list, each
+circuit shows the lessons (↳) that use it; for example the RAM level lists the address and
+memory lessons. Clicking one opens the same level in code view; **Build / inspect circuit**
+takes you back to the circuit. The **Build → Code → Try in World** steps in the right panel
+are parts of the same work and share progress.
+
+**Coding in World:** select a ROM (or a Program ROM for the 4004) in World, then in the right
+panel's **Learn and code in this world** section use **Link selected ROM to this draft**, build
+the code and press **Upload ROM and restart**. The program runs on the same live circuit; the
+upload can be undone with Ctrl+Z. If capacity or word width does not fit, nothing changes.
+RV32 code runs in the computer simulator and is not wired into World.
+
+The code view opens before you finish the CPU level. Write
 assembly and step through it without an external compiler. The reference
 CPU is used until your CPU is complete; then you can choose the engine.
 

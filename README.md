@@ -154,7 +154,10 @@ register'ın yanlış olduğunu söyler.
 
 ## Programlama atölyesi
 
-Üstteki **Programlama** sekmesi CPU'yu bitirmeden de açılır. Program taslakları
+Programlama ayrı bir sekme değil, seviyelerin içindedir: her seviyenin altında o devreyi
+kullanan kod dersleri (↳) listelenir ve sağ panelde **Kur → Kodla → Dünya'da dene** adımları
+çıkar. Aynı çalışma Dünya'da da açılır; derlediğin program seçtiğin ROM'a yüklenir ve canlı
+devrede çalışır (geri alınabilir). CPU'yu bitirmeden de kod yazılabilir. Program taslakları
 profilde otomatik saklanır. **Derle → Baştan yükle → Bir kaynak satırı** ile
 kendi assembly'ni yazıp izle; adres/makine kodu, register, bellek ve son adımda
 değişenler birlikte gösterilir. Referans işlemci veya tamamladığın CPU kullanılabilir.

@@ -3,7 +3,19 @@ seviyeler:
 -->
 # Kendi programını yaz
 
-**Programlama** sekmesi CPU seviyesini bitirmeden de açılır. Burada
+Kod yazmak ayrı bir sekmede değil, **seviyelerin içindedir**. Seviye listesinde her
+devrenin altında onu kullanan dersler (↳) görünür; örneğin RAM seviyesinin altında adres ve
+bellek dersleri. Bir derse tıklayınca aynı seviye kod görünümünde açılır; **Devreyi kur /
+incele** ile devreye dönersin. Sağ paneldeki **Kur → Kodla → Dünya'da dene** adımları aynı
+çalışmanın parçalarıdır ve ilerlemeleri ortaktır.
+
+**Dünya'da kodlamak:** Dünya'da bir ROM (ya da 4004 için Program ROM) seç, sağ paneldeki
+**Bu dünyada öğren ve kodla** bölümünde **Seçili ROM'u bu taslağa bağla**, sonra kodu derle
+ve **ROM'a yükle ve baştan başlat**. Program aynı canlı devrede çalışır; yükleme Ctrl+Z ile
+geri alınabilir. Kapasite ya da kelime genişliği uymazsa hiçbir şey değişmez. RV32 kodu
+bilgisayar simülatöründe çalışır, Dünya tellerine bağlanmaz.
+
+Kod görünümü CPU seviyesini bitirmeden de açılır. Burada
 assembly yazıp adımlayabilirsin. Harici derleyici gerekmez. Kendi CPU'n
 bitene kadar referans işlemci kullanılır; sonra motoru seçebilirsin.
 

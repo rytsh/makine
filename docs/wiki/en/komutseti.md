@@ -5,8 +5,8 @@ seviyeler:
 
 Choosing instruction names is not building a CPU. This chapter connects
 three parts: **the ISA contract**, **the assembler**, and **a gate-built
-circuit**. Programming → **+ My instruction set** contains ten design
-lessons. You can read ahead; completion checks unlock in order. Notes,
+circuit**. The ten design lessons are listed (↳) under the mini processor
+levels; each opens on its related circuit level. You can read ahead; completion checks unlock in order. Notes,
 completed lessons and each draft's ISA definition are saved in the profile.
 
 ## 1. Decide what the programmer can see

@@ -18,7 +18,8 @@ impl App {
             self.debug.report = None;
             self.debug.report_source = None;
         }
-        ui.heading(tr!("Programlama atölyesi", "Programming workshop"));
+        self.workspace_header(ui);
+        ui.heading(tr!("Kodla uygula", "Apply with code"));
         ui.label(tr!(
             "Taslaklar otomatik kaydedilir. Derlemek programı çalıştırmaz.",
             "Drafts save automatically. Building does not run your program."
@@ -163,7 +164,6 @@ impl App {
                 return;
             }
         }
-        theme::section(ui, tr!("Öğrenme yolu", "Learning path"));
         egui::CollapsingHeader::new(tr!("Daha büyük projeler", "Larger projects"))
             .id_salt("program_projects")
             .show(ui, |ui| {
@@ -176,39 +176,24 @@ impl App {
                     }
                 }
             });
-        let current = crate::lessons::all()
-            .into_iter()
-            .find(|l| Some(l.id) == self.debug.lesson.as_deref())
-            .map_or(tr!("Ders seç", "Choose lesson"), |l| l.title);
-        let lesson_label = ui.label(tr!("Ders", "Lesson")).id;
-        egui::ComboBox::from_id_salt("lesson_picker")
-            .width(ui.available_width() - 16.0)
-            .selected_text(current)
-            .show_ui(ui, |ui| {
-                for (i, l) in crate::lessons::all().into_iter().enumerate() {
-                    let solved = self.progress.notebook.solved.contains(l.id);
-                    let title = format!("{}{}. {}", if solved { "✔ " } else { "" }, i + 1, l.title);
-                    if ui
-                        .selectable_label(self.debug.lesson.as_deref() == Some(l.id), title)
-                        .clicked()
-                    {
-                        self.debug.lesson = Some(l.id.into());
-                        self.debug.show_answer = false;
-                        self.debug.show_hint = false;
-                        self.debug.show_solution = false;
-                        self.debug.prediction = self
-                            .progress
-                            .notebook
-                            .lesson_notes
-                            .get(&format!("predict:{}", l.id))
-                            .cloned()
-                            .unwrap_or_default();
-                        self.debug.report = None;
-                    }
-                }
-            })
-            .response
-            .labelled_by(lesson_label);
+        if let Some(chip) = self
+            .debug
+            .lesson
+            .as_deref()
+            .and_then(crate::curriculum::program_chip)
+        {
+            if let Some(level) = makine_levels::find(chip) {
+                ui.label(
+                    RichText::new(trf!(
+                        "Bu ders {} seviyesinin uygulamasıdır.",
+                        "This lesson applies the {} level.",
+                        level.name()
+                    ))
+                    .small()
+                    .weak(),
+                );
+            }
+        }
         if let Some(l) = crate::lessons::all()
             .into_iter()
             .find(|l| Some(l.id) == self.debug.lesson.as_deref())
@@ -469,7 +454,11 @@ impl App {
             return;
         };
         ui.horizontal(|ui| {
-            ui.heading(tr!("Programlama", "Programming"));
+            ui.heading(if self.view == super::View::World {
+                tr!("Dünya kodu", "World code")
+            } else {
+                tr!("Seviye uygulaması", "Level application")
+            });
             ui.label(draft.architecture.name());
         });
         let mut dirty = false;
@@ -919,7 +908,8 @@ mod tests {
     #[test]
     fn beginner_can_build_load_and_step_without_solving_cpu() {
         let app = Rc::new(RefCell::new(App::new(Progress::default(), None)));
-        app.borrow_mut().view = super::super::View::Programming;
+        app.borrow_mut().view = super::super::View::Editor;
+        app.borrow_mut().editor_code = true;
         let a = app.clone();
         let mut h = egui_kittest::Harness::builder()
             .with_size(egui::vec2(1440., 960.))
@@ -1017,7 +1007,8 @@ mod tests {
         ] {
             makine_lang::set_for_thread(Some(lang));
             let mut app = App::new(Progress::default(), None);
-            app.view = super::super::View::Programming;
+            app.view = super::super::View::Editor;
+            app.editor_code = true;
             app.debug.lesson = Some("loop".into());
             let src = crate::lessons::all()
                 .into_iter()

@@ -57,6 +57,7 @@ impl App {
         let mut v = crate::worldview::WorldView::new(world);
         v.set_library(self.lib.clone());
         self.world = Some(v);
+        self.world_code = false;
         self.store_world();
     }
 
@@ -395,6 +396,9 @@ impl App {
             return;
         }
         self.progress.worlds.remove(&from);
+        if let Some(lab) = self.progress.notebook.labs.remove(&from) {
+            self.progress.notebook.labs.insert(to.clone(), lab);
+        }
         w.world.name = to.clone();
         self.progress.last_world = Some(to);
         self.store_world();
@@ -408,6 +412,7 @@ impl App {
             return;
         }
         self.progress.worlds.remove(&name);
+        self.progress.notebook.labs.remove(&name);
         let next = self.progress.worlds.values().next().cloned().unwrap();
         self.world = None;
         self.switch_world(next);
@@ -768,6 +773,8 @@ impl App {
         if let Some(req) = w.request.take() {
             self.handle_world_request(req);
         }
+        ui.separator();
+        self.world_learning_panel(ui);
     }
 
     pub(super) fn handle_world_request(&mut self, req: crate::worldview::Request) {

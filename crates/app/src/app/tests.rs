@@ -543,6 +543,8 @@ mod glyph_tests {
             include_str!("debug_ui.rs"),
             include_str!("programming_ui.rs"),
             include_str!("teaching_ui.rs"),
+            include_str!("journey_ui.rs"),
+            include_str!("../curriculum.rs"),
             include_str!("../isa_lessons.rs"),
             include_str!("../lessons_extended.rs"),
             include_str!("../../../levels/src/teaching.rs"),

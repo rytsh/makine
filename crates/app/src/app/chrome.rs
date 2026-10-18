@@ -84,16 +84,10 @@ impl App {
 
     fn tabs(&mut self, ui: &mut Ui) {
         let cpu_done = self.progress.solved("Cpu");
-        let tabs: [(View, &str, &str, bool); 6] = [
+        let tabs: [(View, &str, &str, bool); 5] = [
             (View::Home, "⌂", tr!("Ana sayfa", "Home"), true),
             (View::Editor, "◧", tr!("Seviyeler", "Levels"), true),
             (View::World, "🌍", tr!("Dünya", "World"), true),
-            (
-                View::Programming,
-                "",
-                tr!("Programlama", "Programming"),
-                true,
-            ),
             (View::Wiki, "📖", "Wiki", true),
             (View::Computer, "🖥", tr!("Bilgisayar", "Computer"), cpu_done),
         ];

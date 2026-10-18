@@ -5,7 +5,8 @@ seviyeler:
 
 Bir komut adı seçmek CPU yapmak değildir. Bu bölüm üç parçayı birbirine
 bağlar: **sözleşme (ISA)**, **assembler** ve **kapılardan yapılmış devre**.
-Programlama → **+ Kendi komut setim** bölümünde on tasarım dersi vardır.
+Mini işlemci seviyelerinin altında (↳) on tasarım dersi vardır; her biri ilgili devre
+seviyesinde açılır.
 Gelecek dersleri okuyabilirsin; tamamlama kontrolleri sırayla açılır.
 Notların, tamamlanan dersler ve her taslağın ISA tanımı profilde saklanır.
 

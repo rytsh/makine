@@ -82,7 +82,8 @@ impl App {
                 }
                 self.save_soon();
             }
-            self.view = super::View::Programming;
+            self.view = super::View::Editor;
+            self.editor_code = true;
         }
     }
 }

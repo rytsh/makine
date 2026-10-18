@@ -5,6 +5,7 @@
 mod app;
 mod canvas;
 mod computer;
+mod curriculum;
 mod design;
 mod instruction_help;
 mod isa_lessons;

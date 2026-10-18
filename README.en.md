@@ -154,7 +154,10 @@ instruction and which register went wrong.
 
 ## Programming workshop
 
-The **Programming** tab opens before completing the CPU. Drafts save automatically
+Programming is not a separate tab; it lives inside the levels: each level lists the code
+lessons (↳) that use its circuit, and the right panel shows **Build → Code → Try in World**.
+The same work opens in World too; your compiled program is uploaded into a selected ROM and
+runs on the live circuit (undoable). You can write code before finishing the CPU. Drafts save automatically
 in your profile. **Build → Load from start → One source line** lets you write and
 trace assembly, with machine code, registers, memory and the last step's changes.
 Use the reference processor or your completed CPU circuit.

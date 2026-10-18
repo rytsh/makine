@@ -18,6 +18,7 @@ mod chrome;
 mod computer_ui;
 mod debug_ui;
 mod home_ui;
+mod journey_ui;
 mod mini_ui;
 mod programming_ui;
 mod sandbox_ui;
@@ -54,7 +55,6 @@ impl PartialEq for Target {
 enum View {
     Editor,
     Computer,
-    Programming,
     /// Only the computer's screen, filling the window (and the monitor, in
     /// full screen): like playing a game.
     Play,
@@ -87,6 +87,9 @@ pub struct App {
     /// World x of the chip's output column, from the last frame.
     output_x: f32,
     view: View,
+    /// Code is a tool inside Levels or World, not a separate destination.
+    editor_code: bool,
+    world_code: bool,
     computer: Option<Computer>,
     /// Use the reference emulator instead of the player's CPU.
     turbo: bool,
@@ -190,6 +193,8 @@ impl App {
             status_since: None,
             output_x: 0.0,
             view: View::Editor,
+            editor_code: false,
+            world_code: false,
             computer: None,
             turbo: false,
             just_opened: true,
@@ -247,6 +252,7 @@ impl App {
     }
 
     fn open_target(&mut self, target: Target) {
+        self.editor_code = false;
         self.target = target;
         self.solution = None;
         self.mini = None;
@@ -402,6 +408,7 @@ impl App {
 
     fn levels_panel(&mut self, ui: &mut Ui) {
         let mut open = None;
+        let mut activity = None;
         let all = levels();
         let mut start = 0;
         while start < all.len() {
@@ -436,12 +443,29 @@ impl App {
                         } else {
                             "🔒"
                         };
-                        let selected =
-                            self.target == Target::Level(level) && self.view == View::Editor;
+                        let selected = self.target == Target::Level(level)
+                            && self.view == View::Editor
+                            && !self.editor_code;
                         let label = format!("{mark}  {}", level.name());
                         let r = ui.add_enabled(unlocked, egui::Button::selectable(selected, label));
                         if r.clicked() && !selected {
                             open = Some(level);
+                        }
+                        if unlocked {
+                            for a in crate::curriculum::activities(level.chip) {
+                                let text = format!(
+                                    "    {} {}",
+                                    if a.done(&self.progress.notebook) {
+                                        "✔"
+                                    } else {
+                                        "↳"
+                                    },
+                                    a.title()
+                                );
+                                if ui.selectable_label(false, text).clicked() {
+                                    activity = Some(a);
+                                }
+                            }
                         }
                     }
                 });
@@ -451,6 +475,9 @@ impl App {
         if let Some(level) = open {
             self.view = View::Editor;
             self.open_level(level);
+        }
+        if let Some(a) = activity {
+            self.open_activity(a);
         }
         ui.add_space(6.0);
         ui.separator();
@@ -545,6 +572,7 @@ impl App {
         ui.heading(level.name());
         ui.add_space(4.0);
         ui.label(level.about());
+        self.level_activities(ui);
         self.circuit_teaching(ui);
         if let Some(page) = wiki::page_for_level(level.chip) {
             ui.add_space(4.0);
@@ -877,34 +905,64 @@ impl App {
                         .id_salt("levels_scroll")
                         .show(ui, |ui| self.levels_panel(ui));
                 });
-            egui::Panel::left("parts")
-                .default_size(130.0)
-                .resizable(true)
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("parts_scroll")
-                        .show(ui, |ui| self.parts_panel(ui));
-                });
+            if !self.editor_code {
+                egui::Panel::left("parts")
+                    .default_size(130.0)
+                    .resizable(true)
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt("parts_scroll")
+                            .show(ui, |ui| self.parts_panel(ui));
+                    });
+            }
         }
         egui::Panel::right("level")
             .default_size(320.0)
             .resizable(true)
             .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| match (&self.view, &self.target) {
+                    (View::Editor | View::World, _) if self.showing_code() => {
+                        self.programming_panel(ui)
+                    }
                     (View::Editor, Target::Level(_)) if self.solution.is_some() => {
                         self.solution_panel(ui)
                     }
                     (View::Editor, Target::Level(_)) => self.level_panel(ui),
                     (View::Editor, Target::Free(_)) => self.sandbox_panel(ui),
                     (View::Computer | View::Play, _) => self.computer_controls(ui),
-                    (View::Programming, _) => self.programming_panel(ui),
                     (View::Wiki, _) => self.wiki.contents(ui),
                     (View::World, _) => self.world_panel(ui),
                     (View::Home, _) => self.home_panel(ui),
                 });
             });
         self.toast(&ctx);
-        if self.view == View::Programming {
+        if self.showing_code() {
+            if self.view == View::World {
+                egui::Panel::bottom("live_world_below_code")
+                    .default_size(230.)
+                    .resizable(true)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new(tr!(
+                                    "Aynı Dünya devresi — canlı",
+                                    "Same World circuit — live"
+                                ))
+                                .strong(),
+                            );
+                            if ui.button(tr!("Devreyi büyüt", "Expand circuit")).clicked() {
+                                self.world_code = false;
+                            }
+                        });
+                        if let Some(w) = &mut self.world {
+                            let rev = w.world.revision();
+                            w.show(ui);
+                            if w.world.revision() != rev {
+                                self.store_world();
+                            }
+                        }
+                    });
+            }
             egui::CentralPanel::default().show(ui, |ui| self.programming_view(ui));
             return;
         }
