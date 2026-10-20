@@ -123,7 +123,7 @@ zamanlama analizinden geçtiği doğrulandı. Kartın %13'ünü kullanıyor.
 
 Bunu hızlandırmanın yolu, gerçek işlemcilerin yaptığını yapmaktır: işi
 aşamalara bölmek (boru hattı) ve belleği önbellekle hızlandırmak. Bunlar
-**Hızlı işlemci** sayfasında.
+[Hızlı işlemci](hizli.md) sayfasında.
 
 ## Tiny Tapeout: kendi çipin
 

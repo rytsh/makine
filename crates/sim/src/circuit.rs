@@ -127,6 +127,9 @@ struct Gate {
 struct NativeNode {
     name: String,
     inputs: Vec<Vec<Net>>,
+    /// Per input: whether it affects the outputs in the same evaluation
+    /// (see [`NativeDef::comb`]). A register's data input does not.
+    comb: Vec<bool>,
     outputs: Vec<Vec<Net>>,
     /// Behaviour per lane, created on first use: a memory should not be
     /// allocated 64 times when only one lane runs.
@@ -184,6 +187,7 @@ impl Clone for NativeNode {
         Self {
             name: self.name.clone(),
             inputs: self.inputs.clone(),
+            comb: self.comb.clone(),
             outputs: self.outputs.clone(),
             lanes: Vec::new(),
             make: self.make.clone(),
@@ -772,6 +776,7 @@ impl<'a> Flattener<'a> {
             .map(|p| NativeNode {
                 name: p.name.clone(),
                 inputs: p.inputs.iter().map(&mut map_bus).collect(),
+                comb: p.def.comb.clone(),
                 outputs: p.outputs.iter().map(&mut map_bus).collect(),
                 lanes: Vec::new(),
                 make: p.def.make.clone(),
@@ -1279,7 +1284,12 @@ pub struct Depth {
 impl Circuit {
     /// The longest chain of gates in the circuit. Gates in feedback loops
     /// (latches) start and end paths: a loop is storage, not a path. Native
-    /// parts count as no gates.
+    /// parts count as no gates; a clocked one (a register) starts and ends
+    /// paths too, since only its combinational inputs reach its outputs.
+    ///
+    /// For a clocked circuit built from gate-level flip-flops the whole
+    /// datapath is one feedback loop, so this says little; simulate the
+    /// flip-flops by native models to get the register-to-register path.
     pub fn depth(&self) -> Depth {
         // Arrival depth of each net: the most gates before it.
         let mut at = vec![0usize; self.values.len()];
@@ -1307,7 +1317,9 @@ impl Circuit {
                     let d = n
                         .inputs
                         .iter()
-                        .flatten()
+                        .zip(&n.comb)
+                        .filter(|(_, &c)| c)
+                        .flat_map(|(bus, _)| bus)
                         .map(|&x| at[x as usize])
                         .max()
                         .unwrap_or(0);
@@ -1316,6 +1328,16 @@ impl Circuit {
                     }
                 }
             }
+        }
+        // Paths into a native part end there, wherever it was scheduled: a
+        // register runs before the logic feeding its data input.
+        for n in &self.natives {
+            for &x in n.inputs.iter().flatten() {
+                longest = longest.max(at[x as usize]);
+            }
+        }
+        for o in self.outputs.iter().flatten() {
+            longest = longest.max(at[*o as usize]);
         }
         Depth { gates: longest }
     }
@@ -1336,6 +1358,26 @@ mod depth_tests {
         b.output("x", n3);
         b.output("y", n1);
         let c = Circuit::compile_def(&Library::new(), &b.build()).unwrap();
+        assert_eq!(c.depth().gates, 3);
+    }
+
+    /// A register (a clocked native) cuts paths: the logic before it and
+    /// after it are separate paths, the longer one counts.
+    #[test]
+    fn registers_cut_paths() {
+        let mut lib = Library::new();
+        lib.insert_native("Reg", crate::native::register(1));
+        let mut b = ChipBuilder::new("T", &["a", "clk"], &["q"]);
+        let (a, clk) = (b.input("a"), b.input("clk"));
+        // Three gates before the register, one after.
+        let n1 = b.nand(a, a);
+        let n2 = b.nand(n1, n1);
+        let n3 = b.nand(n2, n2);
+        let one = b.constant(1, 1);
+        let r = b.chip1("Reg", &[n3, one, clk]);
+        let o = b.nand(r, r);
+        b.output("q", o);
+        let c = Circuit::compile_def(&lib, &b.build()).unwrap();
         assert_eq!(c.depth().gates, 3);
     }
 

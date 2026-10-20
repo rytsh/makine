@@ -332,6 +332,50 @@ pub(crate) fn level(chip: &str) -> Option<(&'static str, &'static str)> {
             "Fetch Instructions from ROM",
             "Connect a 4-bit pc register to Program ROM; instr must always equal ROM[pc]. At each rising edge, priority is: reset→pc=0; load→pc=d; if run=1 and instr≠0xF0, pc=pc+1; otherwise hold. 15+1 wraps to 0.\n\nStep through addresses and instruction bytes; stop at HLT, load another address, reset to the start. This is an instruction-fetch circuit: it does not execute ADD or ST. To run the program, connect ALU, control and RAM in the Mini processor path next.",
         ),
+        "FastAdd32" => (
+            "Fast Adder",
+            "Add a + b + c like Adder32, but the longest gate path must be at most 60% of \
+            your own Adder32's.\n\n\
+            In a ripple adder the carry walks from one bit to the next: 68 to 130 gates for \
+            32 bits, depending on how you built the full adder. The clock can only tick once \
+            that path has settled. A carry-select adder adds the upper bytes twice in advance, \
+            for carry 0 and for carry 1; when the real carry arrives, a MUX picks the right \
+            result. More gates, but a shorter path.",
+        ),
+        "PipeAdd32" => (
+            "Pipeline: a Two-Stage Adder",
+            "sum is a + b as it was at the previous rising clk edge (32 bits, overflow \
+            dropped). Every edge starts a new addition. The longest gate path must be at most \
+            60% of your own Adder32's.\n\n\
+            Split the work in two: add the low 16 bits and put the result, the carry and the \
+            upper halves of a and b in a register. After the edge, add the upper half. Each \
+            stage is half as long, so the clock can tick twice as fast. One addition's result \
+            comes out a clock later (latency), but a result comes out every clock \
+            (throughput). This is the pipeline in processors.",
+        ),
+        "Forward" => (
+            "Forwarding",
+            "An instruction in a pipeline may need the result of the instruction before it, \
+            not yet written to the register file. fa (for rs1) and fb (for rs2) say:\n\
+            1: the result is in the previous instruction, in the EX stage (ex_we = 1, \
+            ex_rd = rs, ex_rd ≠ 0)\n\
+            2: otherwise in the one before that, in the MEM stage (mem_we = 1, mem_rd = rs, \
+            mem_rd ≠ 0)\n\
+            0: the value read from the register file is right.\n\n\
+            EX is newer, so if both match, 1 wins. Nothing written to x0 is forwarded: x0 is \
+            always 0.",
+        ),
+        "Cache4" => (
+            "Cache",
+            "A 4-line direct-mapped cache. The low 2 bits of addr pick the line, the upper 6 \
+            bits are the tag. If the line's valid bit is 1 and its tag matches, hit = 1 and q \
+            is the line's data. At a rising clk edge with fill = 1, d is written to the line: \
+            valid = 1, tag = the upper 6 bits of addr. At power-on every line is invalid.\n\n\
+            Main memory is slow: a processor waiting for it on every access stalls. A cache \
+            keeps the words used last next to the processor. On a hit the data comes at once; \
+            on a miss it is fetched from memory and written to the line. Real caches are the \
+            same idea with thousands of lines.",
+        ),
         _ => return None,
     })
 }
@@ -347,6 +391,7 @@ pub(crate) fn section(tr: &str) -> Option<&'static str> {
         "6. İşlemci atölyesi" => "6. Processor workshop",
         "Mini işlemci" => "Mini processor",
         "Bellek ve ROM" => "Memory and ROM",
+        "7. Hızlı işlemci" => "7. A fast processor",
         _ => return None,
     })
 }

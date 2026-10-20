@@ -120,8 +120,8 @@ makine's own example processor and passes timing analysis; it uses 13% of
 the board.
 
 The way to go faster is what real processors do: split the work into stages
-(a pipeline) and speed memory up with a cache. Those are on the **A fast
-processor** page.
+(a pipeline) and speed memory up with a cache. Those are on the [A fast
+processor](hizli.md) page.
 
 ## Tiny Tapeout: your own chip
 

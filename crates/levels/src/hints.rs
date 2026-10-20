@@ -512,6 +512,22 @@ pub fn hints(chip: &str) -> Vec<&'static str> {
             &["Bir kayıt adresi tutar, ROM o adresteki komutu verir. İzin yoksa adres aynı kalmalı.", "Bit×4, ProgramRom, +1 için Adder8, yükleme/reset için MUX×4; HLT için komutun üst dört bitini AND ile birleştir.", "d_reg=MUX(MUX((pc+1)&15,d,load),0,reset); load_reg=reset OR load OR (run AND !halt). clk doğrudan kayda; pc ROM'un addr'ına, ROM çıkışı instr'a."],
             &["A register holds the address; ROM supplies that instruction. Without permission the address must hold.", "Bit×4, ProgramRom, Adder8 for +1, MUX×4 for load/reset; AND the instruction's upper four bits to detect HLT.", "d_reg=MUX(MUX((pc+1)&15,d,load),0,reset); load_reg=reset OR load OR (run AND !halt). Wire clk directly to the register, pc to ROM addr and ROM output to instr."],
         ),
+        "FastAdd32" => (
+            &["Yolu uzatan, eldenin bitten bite yürümesi. Üst baytlar eldeyi beklemeden toplanabilir mi?", "Dört Adder8: ilki normal. Diğer üç bayt için ikişer Adder8 (elde 0 ve elde 1) ve MUX×8 ile MUX.", "Bayt k için s0 = a_k+b_k+0, s1 = a_k+b_k+1. Önceki bayttan gelen elde MUX'un sel'i: sum_k = MUX(s0, s1, elde), yeni elde = MUX(s0.carry, s1.carry, elde)."],
+            &["What makes the path long is the carry walking from bit to bit. Can the upper bytes be added without waiting for it?", "Four Adder8: the first as usual. For the other three bytes two Adder8 each (carry 0 and carry 1), plus MUX×8 and a MUX.", "For byte k, s0 = a_k+b_k+0 and s1 = a_k+b_k+1. The carry from the byte before is the MUX's sel: sum_k = MUX(s0, s1, carry), new carry = MUX(s0.carry, s1.carry, carry)."],
+        ),
+        "PipeAdd32" => (
+            &["İşi iki parçaya böl ve aralarına bir yazmaç koy. Yazmacın girişi ilk aşamanın bitişi, çıkışı ikinci aşamanın başıdır.", "İki Adder8 alt 16 bit için, Birleştir ile 49 bitlik bir bus (16 toplam + 1 elde + 16 + 16), Bit×49 yazmaç, iki Adder8 üst 16 bit için.", "Yazmaca: alt toplam, alt eldesi, a[16..31], b[16..31]; load = 1, clk doğrudan. Yazmaç çıkışını böl; üst yarıları ve eldeyi topla. sum = alt toplam (yazmaçtan) + üst toplam."],
+            &["Split the work in two and put a register between the halves. Its input is the end of the first stage, its output the start of the second.", "Two Adder8 for the low 16 bits, a Join into a 49-bit bus (16 sum + 1 carry + 16 + 16), a Bit×49 register, two Adder8 for the high 16 bits.", "Into the register: low sum, low carry, a[16..31], b[16..31]; load = 1, clk straight in. Split its output; add the high halves with the carry. sum = low sum (from the register) + high sum."],
+        ),
+        "Forward" => (
+            &["Her kaynak için iki soru: EX'teki komut bu register'ı mı yazıyor? Değilse MEM'deki mi?", "5 bitlik eşitlik için Xor×5 ve bir OR ağacı, sıfır olmama için OR ağacı; birkaç AND ve NOT.", "ex_hit = ex_we AND ex_rd≠0 AND ex_rd=rs; mem_hit = aynısı MEM için. f bit 0 = ex_hit, bit 1 = mem_hit AND NOT ex_hit. Birleştir (1,1)."],
+            &["Two questions for each source: does the instruction in EX write this register? If not, does the one in MEM?", "Xor×5 and an OR tree for 5-bit equality, an OR tree for not-zero; a few AND and NOT.", "ex_hit = ex_we AND ex_rd≠0 AND ex_rd=rs; mem_hit = the same for MEM. f bit 0 = ex_hit, bit 1 = mem_hit AND NOT ex_hit. Join (1,1)."],
+        ),
+        "Cache4" => (
+            &["Her satır bir yazmaçtır: geçerli biti, etiketi ve veriyi birlikte saklar. Okumak, RAM'deki gibi seçmektir; sonra etiketi karşılaştırırsın.", "Dört Bit×39 yazmaç (1 + 6 + 32), satır seçimi için NOT ve AND, okumak için üç MUX×39, etiket için Xor×6 ve bir OR ağacı.", "Satırın girişi: Birleştir(1, addr[2..7], d). load = fill AND (satır seçili). Seçilen satırı böl; hit = geçerli AND (etiket = addr[2..7]); q = verisi."],
+            &["Each line is a register holding the valid bit, the tag and the data together. Reading is selecting, as in RAM; then you compare the tag.", "Four Bit×39 registers (1 + 6 + 32), NOT and AND for picking the line, three MUX×39 for reading, Xor×6 and an OR tree for the tag.", "A line's input: Join(1, addr[2..7], d). load = fill AND (line selected). Split the selected line; hit = valid AND (tag = addr[2..7]); q = its data."],
+        ),
         _ => (&[], &[]),
     };
     pick(tr, en).to_vec()

@@ -69,7 +69,9 @@ impl Level {
     /// Whether the level is a side path: it unlocks like the others, but
     /// later levels do not wait for it.
     pub fn optional(&self) -> bool {
-        self.section == mini::SECTION || self.section == memory::SECTION
+        self.section == mini::SECTION
+            || self.section == memory::SECTION
+            || self.section == speed::SECTION
     }
 
     /// The title in the interface language.
@@ -149,13 +151,20 @@ pub fn check(level: &Level, lib: &Library, def: &ChipDef) -> Result<Verdict, Che
     }
     let mut circuit = Circuit::compile_def(lib, def).map_err(CheckError::Compile)?;
     let steps = level.steps();
-    Ok(match level.test {
+    let verdict = match level.test {
         Test::Function(_) | Test::Partial(_) => {
             check_combinational(&mut circuit, &level.input_pins(), &steps)
         }
         Test::Sequence(_) => check_sequence(&mut circuit, &steps),
         Test::Custom(f) => f(&mut circuit),
-    })
+    };
+    // Levels about speed also fail a working circuit that is too slow.
+    if verdict.passed() {
+        if let Some(slow) = speed::check_depth(level.chip, lib, def) {
+            return Ok(slow);
+        }
+    }
+    Ok(verdict)
 }
 
 pub fn find(chip: &str) -> Option<&'static Level> {
@@ -172,6 +181,7 @@ pub fn levels() -> &'static [&'static Level] {
             .chain(mini::LEVELS)
             .chain(cpu::LEVELS)
             .chain(workshop::LEVELS)
+            .chain(speed::LEVELS)
             .collect()
     })
 }
@@ -186,6 +196,7 @@ pub mod memory;
 pub mod mini;
 pub mod reference;
 mod reference_cpu;
+pub mod speed;
 pub mod teaching;
 pub mod workshop;
 

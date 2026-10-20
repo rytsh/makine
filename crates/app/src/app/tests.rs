@@ -1146,3 +1146,47 @@ mod sandbox_tests {
         assert_eq!(app.borrow().inputs.len(), 2);
     }
 }
+
+mod speed_tests {
+    use crate::app::*;
+    use egui_kittest::kittest::Queryable;
+    use makine_levels::reference::reference;
+    use std::{cell::RefCell, rc::Rc};
+
+    /// Press "Test et" on `chip` with `def` as the design; return the app.
+    fn test_with(chip: &str, def: makine_sim::ChipDef) -> Rc<RefCell<App>> {
+        let mut progress = Progress::default();
+        for l in levels().iter().take_while(|l| l.chip != chip) {
+            progress.solutions.insert(l.chip.into(), reference(l.chip));
+        }
+        progress.designs.insert(chip.into(), Design::new(def));
+        let app = Rc::new(RefCell::new(App::new(progress, None)));
+        app.borrow_mut()
+            .open_level(makine_levels::find(chip).unwrap());
+        let a = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui(move |ui| a.borrow_mut().ui(ui));
+        h.run_steps(2);
+        h.get_by_label("▶  Test et").click();
+        h.run_steps(2);
+        app
+    }
+
+    /// The speed levels unlock after the processor and judge speed in the
+    /// app too: a ripple adder is refused with its path length, a carry
+    /// select adder passes.
+    #[test]
+    fn fast_adder_in_the_app() {
+        let mut slow = reference("Adder32");
+        slow.name = "FastAdd32".into();
+        let app = test_with("FastAdd32", slow);
+        assert!(!app.borrow().progress.solved("FastAdd32"));
+        assert!(
+            matches!(&app.borrow().result, Some(TestResult::Wrong(m)) if m.contains("131")),
+            "slow adder accepted"
+        );
+        let app = test_with("FastAdd32", reference("FastAdd32"));
+        assert!(app.borrow().progress.solved("FastAdd32"));
+    }
+}
