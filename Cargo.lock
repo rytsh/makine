@@ -2067,6 +2067,7 @@ dependencies = [
  "egui_kittest",
  "embed-resource",
  "image",
+ "makine-hdl",
  "makine-lang",
  "makine-levels",
  "makine-net",
@@ -2078,6 +2079,16 @@ dependencies = [
  "serde",
  "serde_json",
  "sys-locale",
+]
+
+[[package]]
+name = "makine-hdl"
+version = "0.1.0"
+dependencies = [
+ "makine-lang",
+ "makine-levels",
+ "makine-rv",
+ "makine-sim",
 ]
 
 [[package]]

@@ -108,6 +108,7 @@ pub static PAGES: &[Page] = pages![
     "sinyaller",
     "atolye",
     "4004",
+    "silikon",
 ];
 
 macro_rules! images {

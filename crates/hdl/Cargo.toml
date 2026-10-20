@@ -1,0 +1,14 @@
+[package]
+name = "makine-hdl"
+description = "Export chips as Verilog: modules, testbenches, synthesis scripts and Tiny Tapeout projects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+makine-lang = { path = "../lang" }
+makine-sim = { path = "../sim" }
+
+[dev-dependencies]
+makine-levels = { path = "../levels" }
+makine-rv = { path = "../rv" }

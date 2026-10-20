@@ -264,6 +264,16 @@ Bellek haritası:
 | `0x1000000C` | yazınca ekranı gösterir |
 | `0x11000000` | ekran pikselleri, her biri bir `0x00RRGGBB` kelimesi, satır satır |
 
+## Gerçek donanım
+
+Bir seviyenin ya da serbest çipin panelindeki **🔌 Gerçek donanıma aktar** bölümü
+çipi Verilog'a çevirir. Bu Verilog'u Icarus Verilog'da test edebilir, Yosys ile
+sentezleyebilir, bir FPGA'ya yükleyebilir ya da [Tiny Tapeout](https://tinytapeout.com)
+ile gerçek bir çip olarak ürettirebilirsin. Her çip ayrı bir Verilog modülü olur ve
+NAND kapıları olduğu gibi kalır. Test tezgâhı, seviyenin kendi testini ya da
+makine'nin simülasyonunu kullanır. Bütün örnek çözümler, RISC-V işlemci de dahil,
+Icarus'ta `PASS` verir. Ayrıntılar Wiki'deki **Gerçek çip** sayfasında.
+
 ## Yapı
 
 | Klasör | İçerik |
@@ -272,11 +282,13 @@ Bellek haritası:
 | `crates/levels` | Seviyeler, testler, örnek çözümler, hızlı modeller |
 | `crates/rv` | RV32IM: referans emülatör, assembler, disassembler, ELF yükleyici, makine (RAM + cihazlar) |
 | `crates/app` | egui masaüstü uygulaması |
+| `crates/hdl` | Verilog'a aktarma: modüller, test tezgâhı, Yosys betiği, Tiny Tapeout projesi |
 | `sdk` | C programları için libc, başlangıç kodu, linker betiği |
 | `examples` | C örneği ve Doom derleme betiği |
 
 ```sh
 cargo test                                                       # bütün testler
+cargo test -p makine-hdl                                         # Verilog'u Icarus/Yosys'ta dene (PATH'te varsa)
 cargo test --release -p makine-levels -- --ignored               # işlemciyi NAND seviyesinde test et
 cargo run --release -p makine-rv --example run -- program.elf    # komut satırında çalıştır
 WGPU_BACKEND=vulkan cargo test -p makine screenshot -- --ignored # arayüz görüntüleri

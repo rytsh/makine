@@ -203,6 +203,9 @@ impl App {
             }
         });
 
+        ui.add_space(4.0);
+        self.hdl_section(ui);
+
         // Sharing and deleting.
         ui.separator();
         ui.label(RichText::new(tr!("Paylaş", "Share")).strong());

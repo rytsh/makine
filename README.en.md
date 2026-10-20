@@ -264,6 +264,16 @@ Memory map:
 | `0x1000000C` | write to show the screen |
 | `0x11000000` | screen pixels, one `0x00RRGGBB` word each, row by row |
 
+## Real hardware
+
+**🔌 Take it to real hardware**, in the panel of a level or a free chip, turns the
+chip into Verilog. You can test that Verilog in Icarus Verilog, synthesize it with
+Yosys, load it onto an FPGA or have it made as a real chip through
+[Tiny Tapeout](https://tinytapeout.com). Every chip becomes its own module and the
+NAND gates stay as they are. The testbench uses the level's own test or makine's
+simulation. Every reference solution passes in Icarus, the RISC-V processor
+included. See the **A real chip** page in the Wiki.
+
 ## Layout
 
 | Folder | Contents |
@@ -272,11 +282,13 @@ Memory map:
 | `crates/levels` | Levels, tests, reference solutions, fast models |
 | `crates/rv` | RV32IM: reference emulator, assembler, disassembler, ELF loader, machine (RAM + devices) |
 | `crates/app` | egui desktop app |
+| `crates/hdl` | Verilog export: modules, testbenches, Yosys script, Tiny Tapeout projects |
 | `sdk` | libc, startup code and linker script for C programs |
 | `examples` | C example and the Doom build script |
 
 ```sh
 cargo test                                                       # all tests
+cargo test -p makine-hdl                                         # try the Verilog in Icarus/Yosys (if on PATH)
 cargo test --release -p makine-levels -- --ignored               # test the CPU at NAND level
 cargo run --release -p makine-rv --example run -- program.elf    # run from the command line
 WGPU_BACKEND=vulkan cargo test -p makine screenshot -- --ignored # UI screenshots

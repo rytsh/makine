@@ -23,6 +23,7 @@ makine-rv = { path = "../rv" }
 makine-pack = { path = "../pack" }
 makine-world = { path = "../world" }
 makine-net = { path = "../net" }
+makine-hdl = { path = "../hdl" }
 
 [build-dependencies]
 embed-resource = "3"

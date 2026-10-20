@@ -2,7 +2,7 @@
 # Compile C programs for makine (RV32IM) with clang and ld.lld.
 #   sdk/build.sh prog.c [more.c ...] [-o out.elf] [-- extra clang flags]
 # Programs start at address 0 with 16 MB of RAM; see include/makine.h for
-# the devices.
+# the devices. MK_RAM=32K sdk/build.sh ... links for less RAM (an FPGA).
 #
 # The first run downloads the soft-float and 64-bit division routines from
 # LLVM compiler-rt (Apache-2.0 WITH LLVM-exception) into sdk/rt and builds
@@ -56,5 +56,6 @@ for s in "${SRCS[@]}"; do
     clang $CFLAGS ${EXTRA[@]+"${EXTRA[@]}"} -c "$s" -o "$o"
     OBJS+=("$o")
 done
-ld.lld -m elf32lriscv -T "$SDK/link.ld" --gc-sections "${RT_OBJS[@]}" "${OBJS[@]}" -o "$OUT"
+RAM=${MK_RAM:-16M}
+ld.lld -m elf32lriscv --defsym=__ram_size=$(echo "$RAM" | sed "s/K$/*1024/; s/M$/*1048576/") -T "$SDK/link.ld" --gc-sections "${RT_OBJS[@]}" "${OBJS[@]}" -o "$OUT"
 echo "$OUT"

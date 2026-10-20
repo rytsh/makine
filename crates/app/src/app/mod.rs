@@ -19,6 +19,7 @@ use crate::wiki::{self, Wiki};
 mod chrome;
 mod computer_ui;
 mod debug_ui;
+mod hdl_ui;
 mod home_ui;
 mod inspector_ui;
 mod journey_ui;
@@ -137,6 +138,7 @@ pub struct App {
     profiles: Option<crate::profiles::Profiles>,
     home: home_ui::Home,
     debug: debug_ui::Debug,
+    hdl: hdl_ui::HdlExport,
     /// The mini processor running a program, once solved.
     mini: Option<mini_ui::MiniRun>,
     /// Undo and redo for the design being edited, and the design as it was
@@ -233,6 +235,7 @@ impl App {
             workspace: Default::default(),
             profiles: None,
             home: Default::default(),
+            hdl: Default::default(),
             debug: debug_ui::Debug {
                 beginner: true,
                 lesson: Some(next_programming_lesson.into()),
@@ -606,6 +609,7 @@ impl App {
                     }
                 });
             });
+        self.hdl_section(ui);
         ui.add_space(6.0);
         self.result_view(ui);
         self.mini_view(ui);

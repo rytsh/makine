@@ -62,7 +62,9 @@ try {
         Compile $s $o $extra
         $objs += $o
     }
-    & ld.lld -m elf32lriscv -T "$Sdk/link.ld" --gc-sections @rtObjs @objs -o $out
+    $ram = if ($env:MK_RAM) { $env:MK_RAM } else { '16M' }
+    $ram = $ram -replace 'K$', '*1024' -replace 'M$', '*1048576'
+    & ld.lld -m elf32lriscv "--defsym=__ram_size=$ram" -T "$Sdk/link.ld" --gc-sections @rtObjs @objs -o $out
     if ($LASTEXITCODE) { throw 'bağlanamadı (ld.lld)' }
     Write-Output $out
 } finally {
