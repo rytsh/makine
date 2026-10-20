@@ -7,14 +7,16 @@
 //
 //   FETCH, DECODE:      the RAM reads the word at pc         -> instr
 //   SETTLE:             wait for the CPU's gates to settle
-//   ADDR, WAIT, READ:   read the word at the CPU's addr      -> rdata
-//   SETTLE:             wait again
+//   ADDR, WAIT, READ:   loads only: read the word at addr    -> rdata
+//   SETTLE:             loads only: wait again
 //   STEP, NEXT:         the CPU's clock rises: registers and pc update;
 //                       a store goes to RAM or a device
 //
 // The waits matter on real hardware: the CPU is built from NAND gates, so
-// its longest path (through the divider) takes a few hundred nanoseconds.
-// SETTLE clocks must cover it; at 12.5 MHz, 8 clocks are 640 ns.
+// its longest path takes a while to settle. SETTLE clocks must cover it;
+// makine works SETTLE out from the CPU's longest path when it writes the
+// project. A CPU that holds its pc (a multi-step divider) simply runs the
+// same instruction again until the pc moves on.
 //
 // A store to the console waits until the UART is free, so nothing is lost.
 // The memory map is makine's (crates/rv/src/machine.rs):
@@ -168,15 +170,17 @@ module makine_soc #(
             end
             // ram_addr = pc: wait for the word.
             S_FETCH: state <= S_DECODE;
+            // rdata is 0 except for loads, as in makine.
             S_DECODE: begin
                 instr <= ram_q;
+                rdata <= 0;
                 state <= ram_q == EBREAK ? S_HALT : S_SETTLE1;
             end
             S_SETTLE1, S_SETTLE2: begin
                 wait_count <= wait_count + 1;
                 if (wait_count == SETTLE - 1) begin
                     wait_count <= 0;
-                    state <= state == S_SETTLE1 ? S_ADDR : S_STEP;
+                    state <= state == S_SETTLE1 && is_load ? S_ADDR : S_STEP;
                 end
             end
             // The CPU now computes addr from instr: read it if it is a
@@ -187,18 +191,17 @@ module makine_soc #(
             end
             S_WAIT: state <= S_READ;
             S_READ: begin
-                if (!(we && addr == CONSOLE && tx_busy)) begin
-                    rdata <= in_ram ? ram_q
-                           : addr == CONSOLE ? (rx_full ? {24'h0, rx_hold} : 32'hFFFF_FFFF)
-                           : addr == TIMER ? millis
-                           : addr == RANDOM ? rng
-                           : 32'h0;
-                    state <= S_SETTLE2;
-                end
+                rdata <= in_ram ? ram_q
+                       : addr == CONSOLE ? (rx_full ? {24'h0, rx_hold} : 32'hFFFF_FFFF)
+                       : addr == TIMER ? millis
+                       : addr == RANDOM ? rng
+                       : 32'h0;
+                state <= S_SETTLE2;
             end
             // Rising edge of the CPU clock: registers and pc update. The
-            // store uses the values from before the edge.
-            S_STEP: begin
+            // store uses the values from before the edge. A byte for the
+            // console waits here until the UART is free.
+            S_STEP: if (!(we && addr == CONSOLE && tx_busy)) begin
                 cpu_clk <= 1;
                 if (we) begin
                     if (in_ram) begin

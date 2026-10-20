@@ -1,5 +1,5 @@
 <!--
-seviyeler: FastAdd32, PipeAdd32, Forward, Cache4
+seviyeler: FastAdd32, PipeAdd32, Forward, Cache4, SeqMulDiv, CpuSeq
 -->
 # Hızlı işlemci: Apple ve ARM çekirdekleri neden hızlı?
 
@@ -26,6 +26,22 @@ geçmek zorunda kaldığı en fazla NAND sayısıdır. Örnek çözümlerde:
 İşlemcinin yolu bu kadar uzun, çünkü bölme birimi 32 çıkarmayı art arda
 yapar. Bölme olmasa yol 122 kapıya iner. Gerçek işlemciler bu yüzden bölmeyi
 tek bir saatte değil, birçok saatte adım adım yapar.
+
+**Adım Adım Çarpma ve Bölme** (SeqMulDiv) seviyesinde bunu kendin yaparsın:
+tek bir toplayıcı ve üç yazmaç, MulDiv'in 64 satırının işini 35 saatte görür.
+**Hızlı Saatli İşlemci** (CpuSeq) seviyesinde işlemcin bu birimi kullanır ve
+çarpma ya da bölme bitene kadar bekler (stall):
+
+| Devre | En uzun yol (NAND) | Kapı sayısı |
+|---|---|---|
+| MulDiv | 2392 | ~79 bin |
+| SeqMulDiv | 92 | ~12 bin |
+| Tek döngülü işlemci | 2411 | ~139 bin |
+| CpuSeq | 122 | ~72 bin |
+
+Yol 20 kat kısalır, işlemci de yarı yarıya küçülür. Bölme artık 35 saat
+sürer, ama öteki her komut 20 kat hızlı bir saatle çalışır. FPGA
+bilgisayarında fark ölçülebilir: bkz. [Gerçek çip](silikon.md).
 
 ## 1. Daha kısa yol: hızlı toplayıcı
 

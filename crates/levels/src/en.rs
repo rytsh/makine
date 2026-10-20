@@ -377,6 +377,46 @@ pub(crate) fn level(chip: &str) -> Option<(&'static str, &'static str)> {
             y to its coordinates, and the triangle gets drawn. A real GPU does the same with \
             thousands of cores, on thousands of pixels at once.",
         ),
+        "Shade" => (
+            "Coloured Pixel",
+            "color is a 12-bit colour: bits 8..11 red, 4..7 green, 0..3 blue; each channel \
+            0..15. near is how close the pixel is to the eye (0 farthest, 255 nearest). Far \
+            things should look darker: let k = the top two bits of near (0..3); for each \
+            channel out = channel × (k + 1) ÷ 4 (remainder dropped).\n\n\
+            Each pixel of the screen is now a colour, not a bit. GPUs work out colours channel \
+            by channel: the same operation on three channels separately, like the lanes in \
+            Simd4. Channel × 3 = channel + channel × 2; × 2 and × 4 are only shifts. So is ÷ 4.",
+        ),
+        "DepthTest" => (
+            "Depth Test",
+            "on = 1 means the pixel is inside the triangle. near is how close the triangle is at \
+            this pixel; old is the nearness stored for this pixel in the depth buffer. write = 1 \
+            when on = 1 and near > old: the pixel is closer than what is in front, so draw it.\n\n\
+            When triangles overlap, which one shows? Drawing from far to near like a painter \
+            does not always work. GPUs keep, for every pixel, how near the nearest thing is, in \
+            a memory called the depth buffer (z-buffer). A new pixel is drawn only if it is \
+            closer, and the buffer is updated. The buffer starts at 0: everything infinitely far.",
+        ),
+        "FrameScan" => (
+            "Triangle by Triangle",
+            "Scan x and y as in ScanCounter, but also keep a triangle counter t (0..3). At every \
+            rising clk edge: if reset = 1, x = y = t = 0. Otherwise x goes up by one; when x \
+            wraps from 31 to 0, y goes up; when y also wraps from 31 to 0 (a frame is done), t \
+            goes up. t wraps from 3 to 0.\n\n\
+            A scene is made of many triangles. The simplest way is to draw them in turn: one \
+            triangle per frame. t says which triangle's corners to read from memory. Real GPUs \
+            process millions of triangles at once, in a pipeline.",
+        ),
+        "Raster3" => (
+            "Scene Rasterizer",
+            "Put it all together. x, y, t advance as in FrameScan. The corners, near and color \
+            on the inputs are triangle t's (World supplies them from memory). old is the depth \
+            buffer's value at (x, y). write = 1: (x, y) is inside t and near > old. c = color, \
+            darkened by near as in Coloured Pixel.\n\n\
+            In World: t selects a triangle's corners, colour and nearness from a ROM; a RAM is \
+            the depth buffer; the colour screen paints the pixels with write = 1 in colour c. \
+            Four coloured triangles, in front of and behind each other, show in the right order.",
+        ),
         "FastAdd32" => (
             "Fast Adder",
             "Add a + b + c like Adder32, but the longest gate path must be at most 60% of \
@@ -420,6 +460,35 @@ pub(crate) fn level(chip: &str) -> Option<(&'static str, &'static str)> {
             keeps the words used last next to the processor. On a hit the data comes at once; \
             on a miss it is fetched from memory and written to the line. Real caches are the \
             same idea with thousands of lines.",
+        ),
+        "SeqMulDiv" => (
+            "Multiply and Divide, Step by Step",
+            "Do what MulDiv does, but one step per clock. funct3 is as in MulDiv.\n\
+            While go = 1, every rising clk edge moves the work one step on. When the result is \
+            ready, ready = 1 and out shows it. The edge with go = 1 while ready = 1 finishes \
+            the work: ready goes back to 0, and the next edge starts a new operation. An edge \
+            with go = 0 drops the work. From go = 1 until ready, a, b and funct3 do not change. \
+            It may take up to 64 edges; the longest gate path must be at most 1.5 times your \
+            own Adder32's.\n\n\
+            MulDiv does 32 additions and 32 subtractions one after another: that is the \
+            processor's longest path. Here one adder works at each edge. Multiplying: shift the \
+            pair {A, Q} right at each step, first adding the multiplicand to A when Q's lowest \
+            bit is 1. Dividing: shift {A, Q} left, subtract the divisor from A if it fits and \
+            set the quotient bit. Fix the signs in one step each at the start and the end.",
+        ),
+        "CpuSeq" => (
+            "A Fast-Clocked Processor",
+            "Build your RISC-V processor again, this time with SeqMulDiv instead of MulDiv. The \
+            pins are the same as in the Processor level. For a multiply or divide, go = 1; \
+            until ready comes, the pc must not move on and no register is written (the \
+            processor waits). When ready comes, write the result to rd and go on. Other \
+            instructions still take one clock. The longest gate path must be at most 3 times \
+            your own Adder32's.\n\n\
+            The clock can only tick once the longest path has settled. In the single-cycle \
+            processor that path goes through the divider and slows every other instruction \
+            too. Dividing now takes 35 clocks, but the clock can tick about 20 times faster; \
+            division is rare in programs, so they all get faster. The FPGA computer runs much \
+            faster with this processor.",
         ),
         _ => return None,
     })

@@ -43,6 +43,7 @@ impl Example {
             "screen_line" => tr!("Ekrana çizgi", "A line on the screen"),
             "typewriter" => tr!("Daktilo", "Typewriter"),
             "gpu_triangle" => tr!("GPU: üçgen çiz", "GPU: draw a triangle"),
+            "gpu_scene" => tr!("GPU: renkli sahne", "GPU: a colour scene"),
             _ => self.id,
         }
     }
@@ -109,6 +110,10 @@ impl Example {
                 "Senin rasterleyicin (Fill) ekranı tarar ve üçgeni çizer. Köşelerin girişlerine tıklayıp üçgeni değiştir.",
                 "Your rasterizer (Fill) scans the screen and draws the triangle. Click the corners' inputs to change it."
             ),
+            "gpu_scene" => tr!(
+                "Senin sahne rasterleyicin (Raster3) dört renkli üçgeni sırayla çizer: köşeler, renk ve yakınlık ROM'larda, derinlik tamponu bir RAM'de. Öndeki üçgen hep üstte kalır. ROM'ları değiştirip sahneyi yeniden kur.",
+                "Your scene rasterizer (Raster3) draws four coloured triangles in turn: corners, colour and nearness in ROMs, the depth buffer in a RAM. The front triangle always stays on top. Change the ROMs to build a new scene."
+            ),
             _ => "",
         }
     }
@@ -136,14 +141,24 @@ pub fn all() -> Vec<Example> {
 
 /// Examples that use a chip the player builds; they open once it is solved.
 pub fn with_chips() -> Vec<(Example, &'static str)> {
-    vec![(
-        Example {
-            id: "gpu_triangle",
-            size: Size::Large,
-            build: gpu_triangle,
-        },
-        "Fill",
-    )]
+    vec![
+        (
+            Example {
+                id: "gpu_triangle",
+                size: Size::Large,
+                build: gpu_triangle,
+            },
+            "Fill",
+        ),
+        (
+            Example {
+                id: "gpu_scene",
+                size: Size::Large,
+                build: gpu_scene,
+            },
+            "Raster3",
+        ),
+    ]
 }
 
 /// Places parts and wires with fresh ids.
@@ -688,6 +703,111 @@ fn gpu_triangle() -> Project {
     b.wire((nclk, 0), (screen, 4));
     b.watch(fill, 2);
     b.done(vec![])
+}
+
+/// A triangle of a scene: corners (ax, ay, bx, by, cx, cy), nearness and
+/// 12-bit colour.
+pub type SceneTriangle = ([u64; 6], u64, u64);
+
+/// The scene of the multi-triangle GPU levels: for each triangle the
+/// corners, nearness and 12-bit colour. Kept here so World does not depend
+/// on the levels; a test checks it is the same.
+pub const GPU_SCENE: [SceneTriangle; 4] = [
+    ([1, 2, 30, 4, 6, 29], 60, 0x36C),
+    ([10, 6, 30, 22, 4, 26], 160, 0xE52),
+    ([2, 12, 17, 1, 22, 30], 110, 0x4D5),
+    ([14, 12, 25, 16, 13, 24], 250, 0xFE3),
+];
+
+/// The player's Raster3 drawing a scene of four triangles on a colour
+/// screen. Four ROMs hold the scene (indexed by the triangle number t), a
+/// RAM is the depth buffer. As in the triangle example, the screen and the
+/// buffer are written while the clock is low.
+fn gpu_scene() -> Project {
+    let mut b = B::new(tr!("GPU: sahne", "GPU: scene"));
+    let pack =
+        |f: &dyn Fn(&SceneTriangle) -> u64| -> Vec<u64> { GPU_SCENE.iter().map(f).collect() };
+    let v = |c: &[u64; 6], k: usize| c[k];
+    let roms = [
+        (
+            tr!("a, bx", "a, bx"),
+            15,
+            pack(&|t| v(&t.0, 0) | v(&t.0, 1) << 5 | v(&t.0, 2) << 10),
+            vec![5u8, 5, 5],
+        ),
+        (
+            tr!("by, c", "by, c"),
+            15,
+            pack(&|t| v(&t.0, 3) | v(&t.0, 4) << 5 | v(&t.0, 5) << 10),
+            vec![5, 5, 5],
+        ),
+        (tr!("yakınlık", "near"), 8, pack(&|t| t.1), vec![8]),
+        (tr!("renk", "colour"), 12, pack(&|t| t.2), vec![12]),
+    ];
+    let raster = b.put(
+        Kind::Part(Part::new(PartKind::Chip("Raster3".into()))),
+        560.0,
+        240.0,
+    );
+    let mut pin = 0;
+    for (k, (name, data, words, widths)) in roms.into_iter().enumerate() {
+        let y = 40.0 + k as f32 * 150.0;
+        let rom = b.device(
+            Device::Rom {
+                addr: 2,
+                data,
+                words,
+            },
+            160.0,
+            y,
+        );
+        b.named((raster, 2), (rom, 0), "t");
+        if widths.len() == 1 {
+            b.named((rom, 0), (raster, pin), name);
+            pin += 1;
+        } else {
+            let s = b.split(widths.clone(), 360.0, y);
+            b.named((rom, 0), (s, 0), name);
+            for g in 0..widths.len() {
+                b.wire((s, g), (raster, pin));
+                pin += 1;
+            }
+        }
+    }
+    let clk = b.put(Kind::Clock { period: 1 }, 40.0, 660.0);
+    let reset = b.input("reset", 1, 0, 40.0, 740.0);
+    b.wire((reset, 0), (raster, 9));
+    b.wire((clk, 0), (raster, 10));
+    let nclk = b.gate(Gate::Not, 760.0, 640.0);
+    b.wire((clk, 0), (nclk, 0));
+
+    // The depth buffer: one byte per pixel, at y·32 + x.
+    let addr = b.join(vec![5, 5], 860.0, 460.0);
+    b.named((raster, 0), (addr, 0), "x");
+    b.named((raster, 1), (addr, 1), "y");
+    let depth = b.device(Device::Ram { addr: 10, data: 8 }, 1040.0, 420.0);
+    b.wire((addr, 0), (depth, 0));
+    let near = pin_source(&b, raster, 6);
+    b.wire(near, (depth, 1));
+    b.named((raster, 3), (depth, 2), tr!("yaz", "write"));
+    b.wire((nclk, 0), (depth, 3));
+    b.named((depth, 0), (raster, 8), tr!("eski", "old"));
+
+    let screen = b.device(Device::ColorScreen { bits: 5 }, 1040.0, 40.0);
+    b.wire((raster, 0), (screen, 0));
+    b.wire((raster, 1), (screen, 1));
+    b.named((raster, 4), (screen, 2), tr!("renk", "colour"));
+    b.wire((raster, 3), (screen, 3));
+    b.wire((nclk, 0), (screen, 4));
+    b.watch(raster, 2);
+    b.watch(raster, 3);
+    b.done(vec![])
+}
+
+/// Where input `pin` of `part` is wired from.
+fn pin_source(b: &B, part: Id, pin: usize) -> (Id, usize) {
+    let e = b.w.wire_into(End::new(part, pin)).expect("wired");
+    (e.part, e.pin)
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 <!--
-seviyeler: Simd4, Edge, Triangle, ScanCounter, Fill
+seviyeler: Simd4, Edge, Triangle, ScanCounter, Fill, Shade, DepthTest, FrameScan, Raster3
 -->
 # A graphics processor: how does a GPU work?
 
@@ -101,7 +101,32 @@ it.
 The example triangle has corners (2,3), (29,8) and (9,27). In one frame,
 309 pixels light up.
 
-## 5. The road to a real GPU
+## 5. Colour, depth and many triangles
+
+A scene is not a single black and white triangle. Four more levels add this:
+
+- **Coloured Pixel (Shade):** each pixel is now a 12-bit colour: four bits of
+  red, four of green, four of blue. Far things look darker: each channel is
+  multiplied by ¼, ½, ¾ or full brightness depending on nearness. The three
+  channels do the same sum separately, like the lanes in Simd4.
+- **Depth Test (DepthTest):** when triangles overlap, which one shows? For
+  every pixel the nearness of the nearest thing is kept in a memory, the
+  **depth buffer** (z-buffer). A new pixel is drawn only if it is closer. So
+  the order the triangles are drawn in stops mattering.
+- **Triangle by Triangle (FrameScan):** the scanner gets one more digit:
+  when a frame is done, the triangle counter t goes up. Each frame draws one
+  triangle.
+- **Scene Rasterizer (Raster3):** all of it together: scan, test inside,
+  compare depth, work out the colour.
+
+Once Raster3 is solved, a **🖥 In World: GPU: a colour scene** button
+appears. There t selects a triangle's corners, colour and nearness from four
+ROMs; a RAM is the depth buffer; the **colour screen** paints the pixels that
+are written. After four frames the scene is complete: the yellow triangle in
+front, the blue one at the back and darkest. Change the ROMs to build your own
+scene. The colour screen is also in World's parts list.
+
+## 6. The road to a real GPU
 
 The rasterizer you built computes pixels one by one. Real GPUs go faster
 with these ideas:
@@ -114,8 +139,9 @@ with these ideas:
 - **Shaders:** a program runs for every pixel and works out its colour,
   lighting and texture. Thousands of pixels run the same program on
   different data. This is Simd4's idea, made big.
-- **The depth buffer (z-buffer):** for every pixel it stores which of the
-  overlapping triangles is in front.
+- **Depth at every pixel:** here a triangle is equally near everywhere.
+  Real GPUs blend nearness between the corners, using the ratios of the edge
+  functions; that is how slanted surfaces are drawn.
 - **Textures and caches:** images (textures) are read through special
   caches.
 - **High-bandwidth memory:** moving the data of millions of pixels takes a

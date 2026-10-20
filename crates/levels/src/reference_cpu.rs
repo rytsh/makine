@@ -500,6 +500,16 @@ fn muldiv(b: &mut ChipBuilder) {
 }
 
 fn cpu(b: &mut ChipBuilder) {
+    cpu_with(b, false)
+}
+
+/// The processor with the multi-step multiplier/divider: it holds the pc
+/// and the register write until the unit is ready.
+pub(crate) fn cpu_seq(b: &mut ChipBuilder) {
+    cpu_with(b, true)
+}
+
+fn cpu_with(b: &mut ChipBuilder, seq: bool) {
     let (instr, rdata, reset, clk) = (
         b.input("instr"),
         b.input("rdata"),
@@ -537,7 +547,13 @@ fn cpu(b: &mut ChipBuilder) {
     let alu_a = b.chip1("Mux32", &[ra, pc, auipc]);
     let alu_b = b.chip1("Mux32", &[rb, imm, b_imm]);
     let alu = b.chip1("Alu", &[alu_a, alu_b, alu_op]);
-    let md = b.chip1("MulDiv", &[ra, rb, f3]);
+    let (md, stall) = if seq {
+        let u = b.chip("SeqMulDiv", &[ra, rb, f3, mul, clk]);
+        let waiting = b.chip1("Not", &[out(u, 1)]);
+        (out(u, 0), Some(b.chip1("And", &[mul, waiting])))
+    } else {
+        (b.chip1("MulDiv", &[ra, rb, f3]), None)
+    };
     let result = b.chip1("Mux32", &[alu, md, mul]);
 
     // Memory.
@@ -560,6 +576,10 @@ fn cpu(b: &mut ChipBuilder) {
     let tgt = b.split(&[1, 31], alu);
     let jalr_t = b.join(&[1, 31], &[zero1, out(tgt, 1)]);
     let next = b.chip1("Mux32", &[next, jalr_t, jalr]);
+    let next = match stall {
+        Some(s) => b.chip1("Mux32", &[next, pc, s]),
+        None => next,
+    };
     let next = b.chip1("Mux32", &[next, zero32, reset]);
 
     // Write back.
@@ -572,6 +592,13 @@ fn cpu(b: &mut ChipBuilder) {
     );
     let nreset = b.chip1("Not", &[reset]);
     let we = b.chip1("And", &[reg_we, nreset]);
+    let we = match stall {
+        Some(s) => {
+            let go_on = b.chip1("Not", &[s]);
+            b.chip1("And", &[we, go_on])
+        }
+        None => we,
+    };
     b.wire(wb, into(rf, 3));
     b.wire(we, into(rf, 4));
     b.wire(clk, into(rf, 5));

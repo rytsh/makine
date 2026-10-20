@@ -25,6 +25,10 @@ pub enum Device {
     /// A `2^bits` × `2^bits` black and white screen. On a rising `clk` while
     /// `load` is 1, sets pixel (`x`, `y`) to `d`.
     Screen { bits: u8 },
+    /// A colour screen of `2^bits` × `2^bits` pixels, 12-bit colour (4 bits
+    /// each of red, green, blue). On a rising `clk` while `load` is 1, sets
+    /// pixel (`x`, `y`) to `c`.
+    ColorScreen { bits: u8 },
     /// Keys typed by the player, in a queue. Outputs the oldest key's code
     /// (7 bits) and `ready` while the queue is not empty; a rising `next`
     /// removes it.
@@ -49,6 +53,7 @@ impl Device {
             Device::Ram { .. } => "RAM".into(),
             Device::Rom { .. } => "ROM".into(),
             Device::Screen { .. } => tr!("Ekran", "Screen").into(),
+            Device::ColorScreen { .. } => tr!("Renkli ekran", "Colour screen").into(),
             Device::Keyboard => tr!("Klavye", "Keyboard").into(),
             Device::Display { .. } => tr!("Gösterge", "Display").into(),
             Device::Register { .. } => tr!("Yazmaç", "Register").into(),
@@ -74,6 +79,12 @@ impl Device {
                  (1: yanık).",
                 "x, y: pixel. When clk goes from 0 to 1 and load is 1, pixel (x, y) \
                  becomes d (1: on)."
+            ),
+            Device::ColorScreen { .. } => tr!(
+                "x, y: piksel. clk 0'dan 1'e geçerken load 1 ise (x, y) pikseli c rengini \
+                 alır: 12 bit, bit 8..11 kırmızı, 4..7 yeşil, 0..3 mavi.",
+                "x, y: pixel. When clk goes from 0 to 1 and load is 1, pixel (x, y) takes \
+                 colour c: 12 bits, bits 8..11 red, 4..7 green, 0..3 blue."
             ),
             Device::Keyboard => tr!(
                 "Seçip yazınca tuşlar kuyruğa girer. k: en eski tuşun ASCII kodu, ready: \
@@ -102,6 +113,7 @@ impl Device {
             Device::Ram { .. } => "ram",
             Device::Rom { .. } => "rom",
             Device::Screen { .. } => "screen",
+            Device::ColorScreen { .. } => "cscreen",
             Device::Keyboard => "kbd",
             Device::Display { .. } => "display",
             Device::Register { .. } => "register",
@@ -127,6 +139,9 @@ impl Device {
             Device::Screen { bits } => Device::Screen {
                 bits: (*bits).clamp(2, MAX_SCREEN_BITS),
             },
+            Device::ColorScreen { bits } => Device::ColorScreen {
+                bits: (*bits).clamp(2, MAX_SCREEN_BITS),
+            },
             Device::Keyboard => Device::Keyboard,
             Device::Display { bits } => Device::Display {
                 bits: c(*bits, MAX_DATA),
@@ -149,6 +164,13 @@ impl Device {
             Device::Screen { bits } => {
                 pins(&[("x", bits), ("y", bits), ("d", 1), ("load", 1), ("clk", 1)])
             }
+            Device::ColorScreen { bits } => pins(&[
+                ("x", bits),
+                ("y", bits),
+                ("c", COLOR_BITS),
+                ("load", 1),
+                ("clk", 1),
+            ]),
             Device::Keyboard => pins(&[("next", 1)]),
             Device::Display { bits } => pins(&[("n", bits)]),
             Device::Register { bits } => {
@@ -162,7 +184,9 @@ impl Device {
         match self.clamped() {
             Device::Ram { data, .. } | Device::Rom { data, .. } => pins(&[("q", data)]),
             Device::Keyboard => pins(&[("k", 7), ("ready", 1)]),
-            Device::Screen { .. } | Device::Display { .. } => Vec::new(),
+            Device::Screen { .. } | Device::ColorScreen { .. } | Device::Display { .. } => {
+                Vec::new()
+            }
             Device::Register { bits } => pins(&[("q", bits)]),
             Device::ProgramRom { .. } => pins(&[("q", 8), ("next", 8), ("indirect", 8)]),
         }
@@ -206,6 +230,22 @@ impl Device {
                     if i[3] & 1 == 1 {
                         let (x, y) = (i[0] as usize, i[1] as usize);
                         s.pixels[y << s.bits | x] = i[2] & 1 == 1;
+                    }
+                },
+                |_, _, _| {},
+            )),
+            Device::ColorScreen { bits } => Some(NativeDef::clocked(
+                &ins,
+                &outs,
+                &[],
+                ColorScreenState {
+                    bits,
+                    pixels: vec![0; 1 << (2 * bits)],
+                },
+                |s, i| {
+                    if i[3] & 1 == 1 {
+                        let (x, y) = (i[0] as usize, i[1] as usize);
+                        s.pixels[y << s.bits | x] = (i[2] & 0xFFF) as u16;
                     }
                 },
                 |_, _, _| {},
@@ -261,6 +301,16 @@ pub struct ScreenState {
     pub pixels: Vec<bool>,
 }
 
+/// Bits of a colour screen's pixel.
+pub const COLOR_BITS: u8 = 12;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColorScreenState {
+    pub bits: u8,
+    /// Row by row, `2^bits` per row; 12-bit colours.
+    pub pixels: Vec<u16>,
+}
+
 #[derive(Default)]
 pub struct Keyboard {
     pub queue: VecDeque<u8>,
@@ -293,6 +343,7 @@ impl Behavior for Keyboard {
 pub enum Saved {
     Ram(RamState),
     Screen(ScreenState),
+    ColorScreen(ColorScreenState),
     Keys(VecDeque<u8>),
     Register(RegisterState),
 }
@@ -307,6 +358,9 @@ pub fn save(circuit: &mut Circuit, name: &str) -> Option<Saved> {
     }
     if let Some(s) = circuit.native_mut::<Clocked<ScreenState>>(name) {
         return Some(Saved::Screen(s.state.clone()));
+    }
+    if let Some(s) = circuit.native_mut::<Clocked<ColorScreenState>>(name) {
+        return Some(Saved::ColorScreen(s.state.clone()));
     }
     let k = circuit.native_mut::<Keyboard>(name)?;
     Some(Saved::Keys(k.queue.clone()))
@@ -336,6 +390,13 @@ pub fn restore(circuit: &mut Circuit, name: &str, saved: Saved) {
                 }
             }
         }
+        Saved::ColorScreen(s) => {
+            if let Some(r) = circuit.native_mut::<Clocked<ColorScreenState>>(name) {
+                if r.state.bits == s.bits {
+                    r.state = s;
+                }
+            }
+        }
         Saved::Keys(q) => {
             if let Some(k) = circuit.native_mut::<Keyboard>(name) {
                 k.queue = q;
@@ -353,6 +414,22 @@ pub fn screen(circuit: &mut Circuit, name: &str) -> Option<Vec<bool>> {
             .pixels
             .clone(),
     )
+}
+
+/// The pixels of a colour screen device, 12-bit colours.
+pub fn color_screen(circuit: &mut Circuit, name: &str) -> Option<Vec<u16>> {
+    Some(
+        circuit
+            .native_mut::<Clocked<ColorScreenState>>(name)?
+            .state
+            .pixels
+            .clone(),
+    )
+}
+
+/// A 12-bit colour as 8-bit red, green, blue.
+pub fn rgb(c: u16) -> [u8; 3] {
+    [8, 4, 0].map(|s| ((c >> s) & 15) as u8 * 17)
 }
 
 /// The words of a RAM device.
@@ -441,6 +518,7 @@ mod tests {
                 words: vec![],
             },
             Device::Screen { bits: 3 },
+            Device::ColorScreen { bits: 4 },
             Device::Keyboard,
         ];
         for d in devices {

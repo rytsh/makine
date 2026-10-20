@@ -532,6 +532,22 @@ pub fn hints(chip: &str) -> Vec<&'static str> {
             &["İki parçayı birleştir: ekranı tarayan sayaç ve üçgen testi.", "Bir ScanCounter ve bir Triangle.", "ScanCounter(reset, clk) → x, y. Triangle(ax..cy, x, y) → on. x ve y'yi de çıkışa ver."],
             &["Put two parts together: the counter that scans the screen and the triangle test.", "One ScanCounter and one Triangle.", "ScanCounter(reset, clk) → x, y. Triangle(ax..cy, x, y) → on. Send x and y to the outputs too."],
         ),
+        "Shade" => (
+            &["Üç kanal, üç ayrı ve aynı hesap. k + 1 ile çarpmak, k'nin iki bitine göre kanalın kendisini ve iki katını eklemektir.", "Böl ile renk kanallarını ve near'ın üst iki bitini ayır; her kanal için 8 bitlik iki Adder8 ve iki MUX×8, sonra Böl ile ÷ 4.", "Kanal v'yi 8 bite genişlet. s = v + (k0 ? v : 0) + (k1 ? 2v : 0); 2v, v'yi bir bit sola koymaktır. s'nin bit 2..5'i sonuç kanalıdır. Üç kanalı Birleştir."],
+            &["Three channels, three separate identical sums. Multiplying by k + 1 is adding the channel itself and twice it, depending on k's two bits.", "Split the colour channels and near's top two bits; for each channel two 8-bit Adder8 and two MUX×8, then a Split for ÷ 4.", "Widen channel v to 8 bits. s = v + (k0 ? v : 0) + (k1 ? 2v : 0); 2v is v moved one bit left. Bits 2..5 of s are the result channel. Join the three channels."],
+        ),
+        "DepthTest" => (
+            &["İki soru: piksel içeride mi, ve öndekinden daha yakın mı? İkisi birden.", "Karşılaştırma için bir Adder8 ve NOT×8 (old − near), bir NOT ve bir AND.", "old + NOT(near) + 1: elde 0 ise old < near. write = on AND NOT(elde)."],
+            &["Two questions: is the pixel inside, and is it closer than what is in front? Both at once.", "An Adder8 and NOT×8 for the comparison (old − near), a NOT and an AND.", "old + NOT(near) + 1: if the carry is 0, old < near. write = on AND NOT(carry)."],
+        ),
+        "FrameScan" => (
+            &["ScanCounter'a bir basamak daha ekle: x taşınca y, y de taşınca t artar.", "Bit×12 yazmaç, üç Adder8, Böl ve Birleştir, sıfırlama için MUX×12.", "ScanCounter gibi x+1 ve y+elde; y'nin toplamının bit 5'i y'nin taştığını söyler, onu t'nin toplayıcısına elde olarak ver. t'nin alt 2 bitini al."],
+            &["Add one more digit to ScanCounter: when x wraps, y goes up; when y wraps too, t goes up.", "A Bit×12 register, three Adder8, Split and Join, a MUX×12 for reset.", "x+1 and y+carry as in ScanCounter; bit 5 of y's sum says y wrapped, give it to t's adder as the carry. Keep t's low 2 bits."],
+        ),
+        "Raster3" => (
+            &["Önceki dört parçanın her biri bir iş yapar: tara, içeride mi, önde mi, hangi renk.", "FrameScan, Triangle, DepthTest ve Shade; birer tane.", "FrameScan(reset, clk) → x, y, t. Triangle(köşeler, x, y) → on. DepthTest(on, near, old) → write. Shade(color, near) → c."],
+            &["Each of the four parts before does one job: scan, inside, in front, which colour.", "FrameScan, Triangle, DepthTest and Shade; one of each.", "FrameScan(reset, clk) → x, y, t. Triangle(corners, x, y) → on. DepthTest(on, near, old) → write. Shade(color, near) → c."],
+        ),
         "FastAdd32" => (
             &["Yolu uzatan, eldenin bitten bite yürümesi. Üst baytlar eldeyi beklemeden toplanabilir mi?", "Dört Adder8: ilki normal. Diğer üç bayt için ikişer Adder8 (elde 0 ve elde 1) ve MUX×8 ile MUX.", "Bayt k için s0 = a_k+b_k+0, s1 = a_k+b_k+1. Önceki bayttan gelen elde MUX'un sel'i: sum_k = MUX(s0, s1, elde), yeni elde = MUX(s0.carry, s1.carry, elde)."],
             &["What makes the path long is the carry walking from bit to bit. Can the upper bytes be added without waiting for it?", "Four Adder8: the first as usual. For the other three bytes two Adder8 each (carry 0 and carry 1), plus MUX×8 and a MUX.", "For byte k, s0 = a_k+b_k+0 and s1 = a_k+b_k+1. The carry from the byte before is the MUX's sel: sum_k = MUX(s0, s1, carry), new carry = MUX(s0.carry, s1.carry, carry)."],
@@ -547,6 +563,14 @@ pub fn hints(chip: &str) -> Vec<&'static str> {
         "Cache4" => (
             &["Her satır bir yazmaçtır: geçerli biti, etiketi ve veriyi birlikte saklar. Okumak, RAM'deki gibi seçmektir; sonra etiketi karşılaştırırsın.", "Dört Bit×39 yazmaç (1 + 6 + 32), satır seçimi için NOT ve AND, okumak için üç MUX×39, etiket için Xor×6 ve bir OR ağacı.", "Satırın girişi: Birleştir(1, addr[2..7], d). load = fill AND (satır seçili). Seçilen satırı böl; hit = geçerli AND (etiket = addr[2..7]); q = verisi."],
             &["Each line is a register holding the valid bit, the tag and the data together. Reading is selecting, as in RAM; then you compare the tag.", "Four Bit×39 registers (1 + 6 + 32), NOT and AND for picking the line, three MUX×39 for reading, Xor×6 and an OR tree for the tag.", "A line's input: Join(1, addr[2..7], d). load = fill AND (line selected). Split the selected line; hit = valid AND (tag = addr[2..7]); q = its data."],
+        ),
+        "SeqMulDiv" => (
+            &["MulDiv'in 32 satırını tek satıra indir: yarım kalan sonucu bir yazmaç tutar, her kenarda bir satır toplama (ya da çıkarma) çalışır.", "Üç Register32 (A, Q ve çarpılan/bölen M), adım sayısı ile busy ve done bayrakları için Bit×8, çarpma için bir Adder32, bölme için bir Adder32, işaretler için Sub32, bolca Mux32.", "Boşta: Q = b (ya da |a|), M = a (ya da |b|), A = 0 yükle. 32 adım: çarpmada A,Q = ((A + (Q[0] ? M : 0)) : Q) >> 1; bölmede sola kaydır, sığarsa çıkar. İki adım daha işaretleri düzeltir (mulh: A − a'nın ve b'nin düzeltmeleri; div/rem: 0 − sonuç). Sonra done = 1. go = 0 her zaman boşa döndürür."],
+            &["Keep MulDiv's 32 rows but make them one: a register holds the halfway result, and one row of adding (or subtracting) runs at each edge.", "Three Register32 (A, Q and the multiplicand/divisor M), a Bit×8 for a step count and the busy and done flags, one Adder32 for multiplying, one for dividing, Sub32 for the signs, many Mux32.", "Idle: load Q = b (or |a|) and M = a (or |b|), A = 0. 32 steps: multiply A,Q = ((A + (Q[0] ? M : 0)) : Q) >> 1; divide shift left and subtract if it fits. Two more steps fix the signs (mulh: A − a's and b's corrections; div/rem: 0 − result). Then done = 1. go = 0 always back to idle."],
+        ),
+        "CpuSeq" => (
+            &["İşlemcinden başla. Yalnızca çarpma/bölme birimi değişir; gerisi aynı.", "Cpu'nun parçaları, MulDiv yerine SeqMulDiv, bir NOT, iki AND ve bir Mux32.", "SeqMulDiv(rs1, rs2, funct3, go = mul, clk). bekle = mul AND NOT ready. Sonraki pc: bekle ise pc'nin kendisi (reset MUX'undan önce bir Mux32). Register yazma: reg_we AND NOT reset AND NOT bekle."],
+            &["Start from your Processor. Only the multiplier/divider changes; the rest is the same.", "Your Cpu's parts, with SeqMulDiv in place of MulDiv, plus a NOT, two ANDs and a Mux32.", "SeqMulDiv(rs1, rs2, funct3, go = mul, clk). wait = mul AND NOT ready. Next pc: when wait, the pc itself (a Mux32 before the reset one). Register write: reg_we AND NOT reset AND NOT wait."],
         ),
         _ => (&[], &[]),
     };

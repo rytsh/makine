@@ -190,7 +190,7 @@ pub struct WorldView {
     /// Other players' pointers: name, colour, world position.
     pub others: Vec<(String, Color32, Pos)>,
     /// Screens' pixels, by part, read once per frame.
-    screens: std::collections::HashMap<Id, Vec<bool>>,
+    screens: std::collections::HashMap<Id, Vec<Option<Color32>>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

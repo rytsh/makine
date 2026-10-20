@@ -186,12 +186,15 @@ levels without a page. Diagrams are drawn by `docs/diagrams/make.py`
    multiply/divide, and the **RV32IM CPU** that ties them together
 6. **Processor workshop:** 4-bit selector, carry adder, register and 12-bit program counter
 7. **A fast processor (optional):** carry-select fast adder, two-stage pipeline,
-   forwarding and a cache. The adder levels measure speed as well as correctness: the
-   longest gate path must be at most 60% of your own Adder32's.
+   forwarding, a cache, a step-by-step multiplier/divider and a fast-clocked processor
+   that uses it. These levels measure speed as well as correctness: the longest gate
+   path is limited relative to your own Adder32's. With the multi-step divider the
+   processor's path drops from ~2400 gates to ~120.
    [Why are Apple and ARM cores fast?](docs/wiki/en/hizli.md)
 8. **A graphics processor (optional):** four-lane SIMD adder, edge function, triangle
-   test, screen scanner and rasterizer. Once it passes, your rasterizer draws a triangle
-   on a 32×32 screen in World. [How does a GPU work?](docs/wiki/en/gpu.md)
+   test, screen scanner and rasterizer; then coloured pixels, a depth buffer and several
+   triangles. In World your rasterizer draws a triangle on a 32×32 screen, and your scene
+   rasterizer a four-triangle scene on a colour screen. [How does a GPU work?](docs/wiki/en/gpu.md)
 
 The CPU test runs real programs on your CPU and on a reference CPU side by side and
 compares them after every instruction. When they differ, it tells you which

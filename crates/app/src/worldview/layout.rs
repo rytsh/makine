@@ -92,7 +92,7 @@ pub fn shape(kind: &Kind, lib: &Library, symbols: bool) -> Option<Shape> {
         Kind::Lamp => (Face::Lamp, col(LAMP, &pins)),
         Kind::Input { .. } => (Face::Input, col(PORT, &pins)),
         Kind::Output { .. } => (Face::Output, col(PORT, &pins)),
-        Kind::Device(Device::Screen { bits }) => {
+        Kind::Device(Device::Screen { bits } | Device::ColorScreen { bits }) => {
             // Pin names on the left, the pixels on the right.
             let side = (1u32 << bits) as f32 * SCREEN_PX + 16.0;
             let h = side.max(HEADER + pins.inputs.len() as f32 * PIN_GAP);

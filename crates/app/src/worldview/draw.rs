@@ -402,7 +402,10 @@ impl WorldView {
                 face(if lit { lit_fill } else { PART_FILL });
                 self.port_text(painter, r, name, *width, v, lit);
             }
-            (Face::Screen, Kind::Device(Device::Screen { bits })) => {
+            (
+                Face::Screen,
+                Kind::Device(Device::Screen { bits } | Device::ColorScreen { bits }),
+            ) => {
                 face(PART_FILL);
                 let n = 1usize << bits;
                 let px = SCREEN_PX * z;
@@ -414,12 +417,12 @@ impl WorldView {
                 if let Some(p) = pixels {
                     for y in 0..n {
                         for x in 0..n {
-                            if p[y * n + x] {
+                            if let Some(color) = p[y * n + x] {
                                 let cell = Rect::from_min_size(
                                     screen.min + vec2(x as f32, y as f32) * px,
                                     vec2(px, px),
                                 );
-                                painter.rect_filled(cell, 0.0, Color32::from_rgb(140, 255, 160));
+                                painter.rect_filled(cell, 0.0, color);
                             }
                         }
                     }
@@ -513,7 +516,7 @@ impl WorldView {
         );
     }
 
-    fn screen_pixels(&self, id: u64) -> Option<Vec<bool>> {
+    fn screen_pixels(&self, id: u64) -> Option<Vec<Option<Color32>>> {
         // Reading needs the circuit mutably; the view keeps a copy fresh
         // each frame (see `show`).
         self.screens.get(&id).cloned()
@@ -567,18 +570,40 @@ impl WorldView {
     }
 }
 
-/// Screens' pixels, read from the running circuit once per frame.
-pub(super) fn read_screens(v: &mut WorldView) -> std::collections::HashMap<u64, Vec<bool>> {
+/// Screens' pixels, read from the running circuit once per frame: the
+/// colour of each lit pixel.
+pub(super) fn read_screens(
+    v: &mut WorldView,
+) -> std::collections::HashMap<u64, Vec<Option<Color32>>> {
     let ids: Vec<u64> = v
         .world
         .parts()
-        .filter(|(_, p)| matches!(p.kind, Kind::Device(Device::Screen { .. })))
+        .filter(|(_, p)| {
+            matches!(
+                p.kind,
+                Kind::Device(Device::Screen { .. } | Device::ColorScreen { .. })
+            )
+        })
         .map(|(id, _)| id)
         .collect();
     ids.into_iter()
         .filter_map(|id| {
             let (sim, name) = v.sim.device(id)?;
-            Some((id, device::screen(sim, &name)?))
+            if let Some(px) = device::screen(sim, &name) {
+                let on = Color32::from_rgb(140, 255, 160);
+                return Some((id, px.into_iter().map(|p| p.then_some(on)).collect()));
+            }
+            let px = device::color_screen(sim, &name)?;
+            let px = px
+                .into_iter()
+                .map(|c| {
+                    (c != 0).then(|| {
+                        let [r, g, b] = device::rgb(c);
+                        Color32::from_rgb(r, g, b)
+                    })
+                })
+                .collect();
+            Some((id, px))
         })
         .collect()
 }

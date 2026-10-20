@@ -302,18 +302,16 @@ fn flat(elf: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The FPGA computer runs a C program: the reference CPU, the SoC and the
-/// UART in Verilator, compiled with the SDK for 64 KB. Needs verilator,
-/// clang and ld.lld; slow to build (about a minute): `make test-slow`.
-#[test]
-#[ignore]
-fn fpga_computer_runs_c_in_verilator() {
+/// The FPGA computer runs a C program: `cpu` from the reference solutions,
+/// the SoC and the UART in Verilator, compiled with the SDK for 64 KB.
+/// Needs verilator, clang and ld.lld; slow to build (about a minute).
+fn fpga_computer_runs_c(cpu: &str) {
     if !have("verilator") || !have("clang") {
         eprintln!("verilator or clang not found; skipping");
         return;
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let dir = scratch("fpga");
+    let dir = scratch(&format!("fpga-{cpu}"));
     let src = dir.join("hello.c");
     std::fs::write(
         &src,
@@ -322,7 +320,8 @@ fn fpga_computer_runs_c_in_verilator() {
              int *v = malloc(10 * sizeof *v), s = 0;\n\
              for (int i = 0; i < 10; i++) v[i] = i * i;\n\
              for (int i = 0; i < 10; i++) s += v[i];\n\
-             printf(\"Merhaba FPGA! %d %d\\n\", s, 1000 / 7);\n\
+             volatile int d = 7, n = -1000;\n\
+             printf(\"Merhaba FPGA! %d %d %d %d\\n\", s, 1000 / d, n / d, n % d * s);\n\
              return 0;\n\
          }\n",
     )
@@ -342,7 +341,7 @@ fn fpga_computer_runs_c_in_verilator() {
     let image = flat(&std::fs::read(dir.join("hello.elf")).unwrap());
 
     let lib = reference_library();
-    let p = makine_hdl::fpga_project(&lib, &reference("Cpu"), &image).unwrap();
+    let p = makine_hdl::fpga_project(&lib, &reference(cpu), &image).unwrap();
     p.write_to(&dir).unwrap();
     let out = Command::new("make")
         .current_dir(&dir)
@@ -351,10 +350,24 @@ fn fpga_computer_runs_c_in_verilator() {
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
-        text.contains("Merhaba FPGA! 285 142"),
+        text.contains("Merhaba FPGA! 285 142 -142 -1710"),
         "{text}\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+#[ignore]
+fn fpga_computer_runs_c_in_verilator() {
+    fpga_computer_runs_c("Cpu");
+}
+
+/// The same with the processor that divides step by step: it stalls on
+/// multiplies and divides, and the SoC waits for it.
+#[test]
+#[ignore]
+fn fpga_computer_with_seq_cpu_runs_c_in_verilator() {
+    fpga_computer_runs_c("CpuSeq");
 }
 
 #[test]

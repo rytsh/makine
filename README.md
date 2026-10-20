@@ -186,12 +186,15 @@ fotoğraflar yapay zekâ ile üretilmiştir.
     çarpma/bölme, ve hepsini birleştiren **RV32IM işlemci**
 6. **İşlemci atölyesi:** 4-bit seçici, taşımalı toplayıcı, yazmaç ve 12-bit program sayacı
 7. **Hızlı işlemci (isteğe bağlı):** elde seçmeli hızlı toplayıcı, iki aşamalı boru hattı,
-   veri yönlendirme ve önbellek. Toplayıcı seviyeleri yalnızca doğruluğu değil hızı da
-   ölçer: en uzun kapı yolu, kendi Adder32'nin %60'ını geçmemeli.
+   veri yönlendirme, önbellek, adım adım çarpma/bölme ve onu kullanan hızlı saatli
+   işlemci. Bu seviyeler yalnızca doğruluğu değil hızı da ölçer: en uzun kapı yolu,
+   kendi Adder32'ninkine göre sınırlıdır. Çok adımlı bölücüyle işlemcinin yolu ~2400
+   kapıdan ~120'ye iner.
    [Apple ve ARM çekirdekleri neden hızlı?](docs/wiki/hizli.md)
 8. **Grafik işlemci (isteğe bağlı):** dört şeritli SIMD toplayıcı, kenar fonksiyonu, üçgen
-   testi, ekran tarayıcı ve rasterleyici. Geçince rasterleyicin Dünya'da 32×32 bir ekrana
-   üçgen çizer. [GPU nasıl çalışır?](docs/wiki/gpu.md)
+   testi, ekran tarayıcı ve rasterleyici; sonra renkli piksel, derinlik tamponu ve
+   birden fazla üçgen. Rasterleyicin Dünya'da 32×32 bir ekrana üçgen, sahne
+   rasterleyicin de renkli ekrana dört üçgenlik bir sahne çizer. [GPU nasıl çalışır?](docs/wiki/gpu.md)
 
 İşlemci testi, gerçek programları senin işlemcinde ve bir referans işlemcide yan yana
 çalıştırır ve her komuttan sonra karşılaştırır. Bir fark olursa hangi komutun, hangi
@@ -326,6 +329,8 @@ serbestçe dağıtılabilir), compiler-rt (Apache-2.0 with LLVM exception).
 
 ## Yapılacaklar
 
-1. Kartta deneme: ULX3S'e yükleyip seri porttan ilk "Merhaba" çıktısını görmek. Sorun çıkarsa logları birlikte inceleriz.
-2. Bölücüyü çok adımlı yapmak: en uzun yolu yaklaşık 2400 kapıdan 120 civarına indirir. Bu, FPGA'da işlemciyi yaklaşık 20 kat hızlandırır.
-3. GPU'yu büyütmek: renkli piksel, derinlik tamponu ve birden fazla üçgen için yeni seviyeler.
+1. Kartta deneme: ULX3S'e yükleyip seri porttan ilk "Merhaba" çıktısını görmek. Bilgisayarda
+   hazır: `make sim` ile Verilator'da iki işlemci de (Cpu ve CpuSeq) C programının
+   çıktısını basıyor; Yosys + nextpnr ile FPGA dosyası üretiliyor ve zamanlama analizinden
+   geçiyor. Kalan: kartı bağlayıp `make prog`, sonra `screen /dev/ttyUSB0 115200`
+   (macOS'ta `/dev/cu.usbserial-*`). Sorun çıkarsa logları birlikte inceleriz.

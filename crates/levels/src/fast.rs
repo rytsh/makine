@@ -8,6 +8,11 @@ use makine_sim::{mask, ChipDef, Library, NativeDef};
 
 use crate::cpu::{alu, control};
 use crate::{find, levels, Test};
+use makine_rv::emu::mul_div;
+
+/// The phase in which the multi-step multiplier/divider's model is ready:
+/// the start edge, 32 steps and two sign fixes, as in the example solution.
+const SEQ_DONE: u32 = 35;
 
 /// Native model of a level's chip.
 pub fn model(chip: &str) -> Option<NativeDef> {
@@ -174,6 +179,34 @@ pub fn model(chip: &str) -> Option<NativeDef> {
                 o[2] = crate::gpu::triangle(&v) as u64;
             },
         ),
+        "FrameScan" => NativeDef::clocked(
+            ins,
+            outs,
+            &[],
+            (0u64, 0u64, 0u64),
+            |p, i| *p = crate::gpu::frame_next(p.0, p.1, p.2, i[0] & 1 == 1),
+            |p, _, o| {
+                o[0] = p.0;
+                o[1] = p.1;
+                o[2] = p.2;
+            },
+        ),
+        "Raster3" => NativeDef::clocked(
+            ins,
+            outs,
+            &["ax", "ay", "bx", "by", "cx", "cy", "near", "color", "old"],
+            (0u64, 0u64, 0u64),
+            |p, i| *p = crate::gpu::frame_next(p.0, p.1, p.2, i[9] & 1 == 1),
+            |p, i, o| {
+                let mut v = i[..6].to_vec();
+                v.extend([p.0, p.1]);
+                o[0] = p.0;
+                o[1] = p.1;
+                o[2] = p.2;
+                o[3] = (crate::gpu::triangle(&v) && i[6] > i[8]) as u64;
+                o[4] = crate::gpu::shade(i[7], i[6]);
+            },
+        ),
         "PipeAdd32" => NativeDef::clocked(
             ins,
             outs,
@@ -205,6 +238,27 @@ pub fn model(chip: &str) -> Option<NativeDef> {
             },
         ),
         "Cpu" => return None,
+        "SeqMulDiv" => NativeDef::clocked(
+            ins,
+            outs,
+            &[],
+            (0u32, 0u64),
+            |(phase, r), i| {
+                *phase = match *phase {
+                    _ if i[3] & 1 == 0 => 0,
+                    0 => {
+                        *r = mul_div(i[2] as u32, i[0] as u32, i[1] as u32) as u64;
+                        1
+                    }
+                    p if p < SEQ_DONE => p + 1,
+                    _ => 0,
+                }
+            },
+            |(phase, r), _, o| {
+                o[0] = *r;
+                o[1] = (*phase == SEQ_DONE) as u64;
+            },
+        ),
         _ => match level.test {
             Test::Function(f) => NativeDef::function(ins, outs, f),
             Test::Partial(f) => NativeDef::function(ins, outs, move |i| {

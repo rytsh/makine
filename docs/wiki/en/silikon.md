@@ -111,13 +111,22 @@ MK_RAM=64K sdk/build.sh hello.c
 
 **Why a sequencer?** In makine's computer, memory answers instantly. An
 FPGA's block memory answers one clock later. And because your processor is
-built from NAND gates, its longest path (the divider) takes about 250 ns.
-On every instruction the sequencer reads the instruction, waits for the
-gates to settle, reads the data, waits again, and then ticks the
-processor's clock once. At 12.5 MHz that makes about 650 thousand
-instructions a second. The design was placed and routed for the FPGA with
-makine's own example processor and passes timing analysis; it uses 13% of
-the board.
+built from NAND gates, its gates take a while to settle. On every
+instruction the sequencer reads the instruction, waits for the gates to
+settle, for loads reads the data and waits again, and then ticks the
+processor's clock once. makine works out how long to wait from the
+processor's longest path.
+
+| Processor | Longest path | On the FPGA | Per second |
+|---|---|---|---|
+| Single-cycle (MulDiv) | 4615 NANDs | ~255 ns | ~650 thousand instructions |
+| Step-by-step divider (CpuSeq) | 208 NANDs | ~27 ns | ~2.5 million instructions |
+
+Making the divider multi-step ([A fast processor](hizli.md)) shortens the
+path 22 times; the FPGA computer gets about 4 times faster at 12.5 MHz,
+since waiting for memory now dominates. The clock could also go up to
+38 MHz. Both designs were placed and routed for the FPGA with makine's
+example processors and pass timing analysis; they use 10-13% of the board.
 
 The way to go faster is what real processors do: split the work into stages
 (a pipeline) and speed memory up with a cache. Those are on the [A fast

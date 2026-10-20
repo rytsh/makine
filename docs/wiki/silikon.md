@@ -114,12 +114,22 @@ MK_RAM=64K sdk/build.sh merhaba.c
 
 **Neden sıralayıcı var?** makine'deki bilgisayarda bellek anında cevap
 verir. FPGA'nın blok belleği ise bir saat vuruşu sonra cevap verir. Ayrıca
-işlemcin NAND kapılarından yapıldığı için en uzun yolu (bölücü) yaklaşık
-250 ns sürer. Sıralayıcı her komutta önce komutu okur, kapıların durulmasını
-bekler, sonra veriyi okur, tekrar bekler ve en sonunda işlemcinin saatini
-bir kez vurur. 12,5 MHz'de bu, saniyede yaklaşık 650 bin komut eder.
-Tasarımın, makine'nin kendi örnek işlemcisiyle FPGA'ya yerleştirilip
-zamanlama analizinden geçtiği doğrulandı. Kartın %13'ünü kullanıyor.
+işlemcin NAND kapılarından yapıldığı için kapılarının durulması zaman alır.
+Sıralayıcı her komutta önce komutu okur, kapıların durulmasını bekler,
+yükleme komutlarında veriyi okuyup tekrar bekler ve en sonunda işlemcinin
+saatini bir kez vurur. Ne kadar bekleyeceğini makine, işlemcinin en uzun
+yolundan hesaplar.
+
+| İşlemci | En uzun yol | FPGA'da | Saniyede |
+|---|---|---|---|
+| Tek döngülü (MulDiv) | 4615 NAND | ~255 ns | ~650 bin komut |
+| Adım adım bölen (CpuSeq) | 208 NAND | ~27 ns | ~2,5 milyon komut |
+
+Bölücüyü çok adımlı yapmak ([Hızlı işlemci](hizli.md)) yolu 22 kat
+kısaltır; FPGA bilgisayarı 12,5 MHz'de yaklaşık 4 kat hızlanır, çünkü artık
+bellek beklemesi baskındır. Saat de 38 MHz'e kadar çıkabilir. İki tasarım da
+makine'nin örnek işlemcileriyle FPGA'ya yerleştirilip zamanlama analizinden
+geçti; kartın %10-13'ünü kullanıyor.
 
 Bunu hızlandırmanın yolu, gerçek işlemcilerin yaptığını yapmaktır: işi
 aşamalara bölmek (boru hattı) ve belleği önbellekle hızlandırmak. Bunlar

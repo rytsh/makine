@@ -1,5 +1,5 @@
 <!--
-seviyeler: Simd4, Edge, Triangle, ScanCounter, Fill
+seviyeler: Simd4, Edge, Triangle, ScanCounter, Fill, Shade, DepthTest, FrameScan, Raster3
 -->
 # Grafik işlemci: GPU nasıl çalışır?
 
@@ -99,7 +99,31 @@ düğme bir Dünya açar. Orada senin Fill çipin bir 32 × 32 ekrana bağlıdı
 Örnek üçgenin köşeleri (2,3), (29,8) ve (9,27)'dir. Bir karede 309 piksel
 yanar.
 
-## 5. Gerçek bir GPU'ya giden yol
+## 5. Renk, derinlik ve birçok üçgen
+
+Bir sahne tek bir siyah beyaz üçgen değildir. Dört seviye daha bunu ekler:
+
+- **Renkli Piksel (Shade):** Her piksel artık 12 bitlik bir renktir: dört bit
+  kırmızı, dört bit yeşil, dört bit mavi. Uzaktaki şeyler daha koyu görünür:
+  her kanal, yakınlığa göre ¼, ½, ¾ ya da tam parlaklıkla çarpılır. Üç kanal
+  aynı hesabı ayrı ayrı yapar, Simd4'teki şeritler gibi.
+- **Derinlik Testi (DepthTest):** Üçgenler üst üste binince hangisi görünür?
+  Her piksel için en yakın şeyin yakınlığı bir bellekte, **derinlik
+  tamponunda** (z-buffer) tutulur. Yeni piksel ancak daha yakınsa çizilir.
+  Böylece üçgenlerin hangi sırayla çizildiği önemsizleşir.
+- **Üçgen Sırası (FrameScan):** Tarayıcıya bir basamak daha eklenir: her
+  kare bitince üçgen sayacı t bir artar. Her karede bir üçgen çizilir.
+- **Sahne Rasterleyici (Raster3):** Hepsi bir arada: tara, içeride mi bak,
+  derinliği karşılaştır, rengi hesapla.
+
+Raster3'ü çözünce **🖥 Dünya'da: GPU: renkli sahne** düğmesi çıkar. Orada
+t, dört ROM'dan üçgenin köşelerini, rengini ve yakınlığını seçer; bir RAM
+derinlik tamponudur; **renkli ekran** yazılan pikselleri boyar. Dört
+kare sonra sahne tamamdır: sarı üçgen en önde, mavi en arkada ve en koyu.
+ROM'ları değiştirerek kendi sahneni kurabilirsin. Renkli ekranı Dünya'nın
+parça listesinde de bulursun.
+
+## 6. Gerçek bir GPU'ya giden yol
 
 Burada kurduğun rasterleyici pikselleri tek tek hesaplar. Gerçek GPU'lar şu
 fikirlerle hızlanır:
@@ -112,8 +136,9 @@ fikirlerle hızlanır:
 - **Gölgelendiriciler (shader):** Her piksel için bir program çalışır. Bu
   program rengi, ışığı ve dokuyu hesaplar. Binlerce piksel aynı programı,
   farklı verilerle çalıştırır. Bu, Simd4'teki fikrin büyük halidir.
-- **Derinlik tamponu (z-buffer):** Üst üste binen üçgenlerden hangisinin
-  önde olduğunu her piksel için saklar.
+- **Derinliği her pikselde hesaplamak:** Burada bir üçgenin yakınlığı her
+  yerde aynıdır. Gerçek GPU'lar yakınlığı köşeler arasında, kenar
+  fonksiyonlarının oranlarıyla karıştırır; eğik yüzeyler böyle çizilir.
 - **Dokular ve önbellekler:** Resimler (dokular) özel önbelleklerden okunur.
 - **Yüksek bant genişlikli bellek:** Milyonlarca pikselin verisini taşımak
   için çok geniş bir bellek yolu gerekir.

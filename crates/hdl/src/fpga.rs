@@ -72,6 +72,12 @@ pub fn fpga_project(lib: &Library, cpu: &ChipDef, program: &[u8]) -> Result<Proj
     let mut lib = lib.clone();
     lib.remove(&cpu.name);
     let export = verilog(&lib, &def, &Options::default())?;
+    let depth = cpu_depth(&lib, &def)?;
+    let settle = settle_clocks(depth);
+    let board = ULX3S.replace(
+        ".RAM_INIT(\"program.hex\")",
+        &format!(".RAM_INIT(\"program.hex\"),\n        .SETTLE({settle})"),
+    );
 
     let makefile = format!(
         "# {}\n\
@@ -103,7 +109,7 @@ pub fn fpga_project(lib: &Library, cpu: &ChipDef, program: &[u8]) -> Result<Proj
         ),
     );
 
-    let readme = readme(cpu, program.len());
+    let readme = readme(cpu, program.len(), depth, settle);
     Ok(Project {
         files: vec![
             (
@@ -119,7 +125,7 @@ pub fn fpga_project(lib: &Library, cpu: &ChipDef, program: &[u8]) -> Result<Proj
                 ),
             ),
             ("soc.v".into(), SOC.into()),
-            ("ulx3s.v".into(), ULX3S.into()),
+            ("ulx3s.v".into(), board),
             ("ulx3s_pll.v".into(), ULX3S_PLL.into()),
             ("ulx3s.lpf".into(), ULX3S_LPF.into()),
             ("program.hex".into(), hex_image(program)),
@@ -129,6 +135,29 @@ pub fn fpga_project(lib: &Library, cpu: &ChipDef, program: &[u8]) -> Result<Proj
         ],
         notes: vec![],
     })
+}
+
+/// Gates on the longest path of the CPU, with storage chips as the
+/// flip-flops they are exported as.
+fn cpu_depth(lib: &Library, def: &ChipDef) -> Result<usize, String> {
+    let gates = crate::verilog::gate_library(lib, &Options::default());
+    Ok(makine_sim::Circuit::compile_def(&gates, def)
+        .map_err(|e| e.to_string())?
+        .depth()
+        .gates)
+}
+
+/// The SoC clock in nanoseconds (12.5 MHz on the ULX3S).
+const CLOCK_NS: f64 = 80.0;
+
+/// Clocks the SoC waits for the CPU's logic to settle (`SETTLE` in
+/// `soc.v`), from its longest path. On the ECP5, measured with nextpnr: a
+/// path of `depth` NANDs takes about 20 ns + 0.06 ns per gate (the reference
+/// CPU's 4615 gates: 255 ns; with the multi-step divider, 208 gates: 27 ns).
+/// Twice that, as the board's timing is not checked.
+pub fn settle_clocks(depth: usize) -> usize {
+    let ns = 2.0 * (20.0 + 0.06 * depth as f64);
+    ((ns / CLOCK_NS).ceil() as usize).clamp(1, 255)
 }
 
 /// Verilator testbench: runs the SoC and prints what it sends on the UART.
@@ -166,7 +195,7 @@ int main(int argc, char **argv) {
 }
 "#;
 
-fn readme(cpu: &ChipDef, program: usize) -> String {
+fn readme(cpu: &ChipDef, program: usize, depth: usize, settle: usize) -> String {
     let mut s = String::new();
     let _ = writeln!(
         s,
@@ -204,12 +233,6 @@ fn readme(cpu: &ChipDef, program: usize) -> String {
          Başka bir program için: `MK_RAM=64K sdk/build.sh prog.c`, sonra \
          `llvm-objcopy -O binary prog.elf prog.bin` ve makine'nin \"FPGA bilgisayarı\" \
          düğmesiyle projeyi yeniden üret ya da `program.hex`'i değiştirip `make` çalıştır.\n\n\
-         ## Hız\n\n\
-         İşlemci NAND kapılarından yapıldığı için en uzun yolu (bölücü) yaklaşık 250 ns sürer. \
-         `soc.v` her komutta bu yolun durulmasını bekler: 12,5 MHz'de bir komut yaklaşık \
-         1,5 µs, yani saniyede ~650 bin komut. Gerçek işlemciler aynı işi boru hattı \
-         (pipeline) ve hızlı toplayıcılarla çok daha hızlı yapar; Wiki'deki \
-         \"Hızlı işlemci\" sayfasına bak.\n\n\
          Araçlar: [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build) \
          (yosys, nextpnr-ecp5, ecppack, openFPGALoader, verilator).\n",
         "| File | |\n|---|---|\n\
@@ -229,21 +252,57 @@ fn readme(cpu: &ChipDef, program: usize) -> String {
          For another program: `MK_RAM=64K sdk/build.sh prog.c`, then \
          `llvm-objcopy -O binary prog.elf prog.bin`, and export again with makine's \
          \"FPGA computer\" button, or replace `program.hex` and run `make`.\n\n\
-         ## Speed\n\n\
-         The processor is built from NAND gates, so its longest path (the divider) takes \
-         about 250 ns. `soc.v` waits for it to settle on every instruction: at 12.5 MHz an \
-         instruction takes about 1.5 µs, some 650 thousand instructions a second. Real \
-         processors do the same work much faster with pipelines and fast adders; see the \
-         \"A fast processor\" page in the Wiki.\n\n\
          Tools: the [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build) \
          (yosys, nextpnr-ecp5, ecppack, openFPGALoader, verilator).\n"
     ));
+    // FETCH, DECODE, SETTLE, STEP, NEXT; loads also ADDR, WAIT, READ and a
+    // second SETTLE.
+    let clocks = settle + 4;
+    let per_second = 1e9 / (CLOCK_NS * clocks as f64);
+    let _ = write!(
+        s,
+        "\n{}\n",
+        trf!(
+            "## Hız\n\n\
+             İşlemcinin en uzun yolu {depth} NAND kapısı. `soc.v` her komutta bu yolun durulmasını \
+             {settle} saat bekler: 12,5 MHz'de bir komut {clocks} saat, saniyede yaklaşık {} komut \
+             (yükleme komutları biraz daha uzun). Yolu kısaltmanın en etkili yolu bölücüyü çok adımlı \
+             yapmaktır: Wiki'deki \"Hızlı işlemci\" sayfasına ve Adım Adım Çarpma ve Bölme \
+             seviyesine bak.",
+            "## Speed\n\n\
+             The processor's longest path is {depth} NAND gates. `soc.v` waits {settle} clocks for it \
+             to settle on every instruction: at 12.5 MHz an instruction takes {clocks} clocks, about \
+             {} instructions a second (loads a little longer). The best way to shorten the \
+             path is a multi-step divider: see the \"A fast processor\" page in the Wiki and the \
+             Multiply and Divide, Step by Step level.",
+            rate(per_second)
+        )
+    );
     s
+}
+
+/// A number of instructions a second, in words: "650 bin", "2,5 milyon".
+fn rate(n: f64) -> String {
+    if n >= 1e6 {
+        let m = format!("{:.1}", n / 1e6);
+        trf!("{} milyon", "{} million", m.replace('.', tr!(",", ".")))
+    } else {
+        trf!("{} bin", "{} thousand", (n / 1000.0).round())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settle_follows_the_path() {
+        // The single-cycle reference CPU waits as long as before; the one
+        // with the multi-step divider hardly at all.
+        assert_eq!(settle_clocks(4615), 8);
+        assert_eq!(settle_clocks(208), 1);
+        assert_eq!(settle_clocks(1_000_000), 255);
+    }
 
     #[test]
     fn hex() {

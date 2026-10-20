@@ -541,14 +541,20 @@ pub const CPU_OUT_WDATA: usize = 2;
 pub const CPU_OUT_WMASK: usize = 3;
 pub const CPU_OUT_WE: usize = 4;
 
-/// What one clock cycle of a circuit CPU did.
+/// What one instruction did on a circuit CPU.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cycle {
     pub pc: u32,
     pub instr: u32,
     /// (aligned address, data, byte mask)
     pub store: Option<(u32, u32, u8)>,
+    /// Clock cycles it took: 1, or more for a multiply or divide on a CPU
+    /// that waits for a multi-step unit.
+    pub cycles: u32,
 }
+
+/// Clock cycles a multiply or divide may hold the pc for.
+pub const MAX_STALL: u32 = 80;
 
 /// Drives a compiled CPU circuit: holds reset, then runs one instruction per
 /// clock cycle against a memory.
@@ -581,9 +587,38 @@ impl CircuitCpu {
         self.circuit.output(CPU_OUT_PC) as u32
     }
 
-    /// Run one clock cycle. Memory is only read for load instructions, so
+    /// Run one instruction. Memory is only read for load instructions, so
     /// devices with side effects (keyboard) see exactly the program's reads.
+    /// A multiply or divide that keeps the pc where it is is clocked again
+    /// until the pc moves on: the CPU is waiting for a multi-step unit.
     pub fn step<M: Memory>(&mut self, mem: &mut M) -> Result<Cycle, String> {
+        let mut cycle = self.clock(mem)?;
+        let m_ext = opcode(cycle.instr) == OP_REG && funct7(cycle.instr) == 1;
+        while m_ext && self.pc() == cycle.pc {
+            if cycle.cycles == MAX_STALL {
+                return Err(trf!(
+                    "0x{:04X}: '{}' {MAX_STALL} saatte bitmedi; pc ilerlemiyor.",
+                    "0x{:04X}: '{}' did not finish in {MAX_STALL} clocks; the pc does not move on.",
+                    cycle.pc,
+                    makine_rv::disasm::disasm(cycle.instr, cycle.pc)
+                ));
+            }
+            let next = self.clock(mem)?;
+            if next.store.is_some() {
+                return Err(trf!(
+                    "0x{:04X}: '{}' beklerken belleğe yazdı.",
+                    "0x{:04X}: '{}' wrote to memory while waiting.",
+                    cycle.pc,
+                    makine_rv::disasm::disasm(cycle.instr, cycle.pc)
+                ));
+            }
+            cycle.cycles += 1;
+        }
+        Ok(cycle)
+    }
+
+    /// Run one clock cycle.
+    fn clock<M: Memory>(&mut self, mem: &mut M) -> Result<Cycle, String> {
         let c = &mut self.circuit;
         let osc = |e: makine_sim::Oscillation| e.to_string();
         // Clock low: logic settles for the instruction at pc.
@@ -629,7 +664,12 @@ impl CircuitCpu {
                 )
             })?;
         }
-        Ok(Cycle { pc, instr, store })
+        Ok(Cycle {
+            pc,
+            instr,
+            store,
+            cycles: 1,
+        })
     }
 }
 
@@ -691,7 +731,7 @@ impl Memory for TestRam {
 pub const TEST_RAM_BYTES: usize = 16 * 1024;
 const TEST_MAX_STEPS: usize = 50_000;
 
-fn cpu_test(circuit: &mut Circuit) -> Verdict {
+pub(crate) fn cpu_test(circuit: &mut Circuit) -> Verdict {
     let mut cpu = CircuitCpu::new(circuit.clone());
     let mut steps = 0;
     for (name, src) in TEST_PROGRAMS {

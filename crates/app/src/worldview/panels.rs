@@ -157,6 +157,14 @@ pub fn device_palette() -> Vec<Entry> {
             tr!("Siyah beyaz piksel ekran", "Black and white pixel screen"),
         ),
         e(
+            tr!("Renkli ekran", "Colour screen"),
+            Device::ColorScreen { bits: 4 },
+            tr!(
+                "12 bit renkli piksel ekran",
+                "Pixel screen with 12-bit colour"
+            ),
+        ),
+        e(
             tr!("Klavye", "Keyboard"),
             Device::Keyboard,
             tr!(
@@ -350,22 +358,33 @@ fn icon_for(painter: &egui::Painter, r: egui::Rect, kind: &Kind, lit: bool) {
             }
             _ => chip_icon(painter, c, s, line),
         },
-        Kind::Device(Device::Screen { .. }) => {
+        Kind::Device(Device::Screen { .. } | Device::ColorScreen { .. }) => {
+            let colour = matches!(kind, Kind::Device(Device::ColorScreen { .. }));
             let body = egui::Rect::from_center_size(c, vec2(s * 0.86, s * 0.62));
             painter.rect_filled(body, 2.0, Color32::from_rgb(8, 12, 10));
             painter.rect_stroke(body, 2.0, line, egui::StrokeKind::Inside);
-            for (x, y) in [
+            for (i, (x, y)) in [
                 (-0.2, -0.1),
                 (0.2, -0.1),
                 (-0.2, 0.12),
                 (0.0, 0.16),
                 (0.2, 0.12),
-            ] {
-                painter.circle_filled(
-                    c + vec2(x * s, y * s),
-                    s * 0.04,
-                    Color32::from_rgb(140, 255, 160),
-                );
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let dot = if colour {
+                    [
+                        Color32::from_rgb(255, 90, 80),
+                        Color32::from_rgb(90, 220, 110),
+                        Color32::from_rgb(90, 140, 255),
+                        Color32::from_rgb(255, 220, 60),
+                        Color32::from_rgb(220, 120, 255),
+                    ][i]
+                } else {
+                    Color32::from_rgb(140, 255, 160)
+                };
+                painter.circle_filled(c + vec2(x * s, y * s), s * 0.04, dot);
             }
         }
         Kind::Device(Device::Display { .. }) => {
@@ -656,6 +675,17 @@ impl WorldView {
                     device::MAX_SCREEN_BITS,
                 ) {
                     changed = Some(Device::Screen { bits: b });
+                }
+            }
+            Device::ColorScreen { bits } => {
+                if let Some(b) = size(
+                    ui,
+                    tr!("Boyut biti", "Size bits"),
+                    *bits,
+                    2,
+                    device::MAX_SCREEN_BITS,
+                ) {
+                    changed = Some(Device::ColorScreen { bits: b });
                 }
             }
             Device::Display { bits } => {

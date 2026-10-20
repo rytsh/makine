@@ -651,6 +651,48 @@ mod example_tests {
         assert_eq!(px.iter().filter(|&&p| p).count(), 309);
     }
 
+    /// The player's scene rasterizer draws the four triangles with the
+    /// depth buffer: every pixel has the colour of the nearest triangle.
+    #[test]
+    fn gpu_scene_draws_the_scene() {
+        use makine_levels::gpu::{scene_pixels, SCENE};
+        assert_eq!(SCENE, makine_world::projects::examples::GPU_SCENE);
+        let e = makine_world::projects::examples::with_chips()
+            .into_iter()
+            .find(|(e, _)| e.id == "gpu_scene")
+            .unwrap();
+        let p = (e.0.build)();
+        let mut lib = makine_sim::Library::new();
+        for l in makine_levels::levels() {
+            lib.insert(makine_levels::reference::reference(l.chip));
+        }
+        let fast = makine_levels::fast::library(lib.chips(), true);
+        let c = makine_world::compile(&p.world, &fast);
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        let mut s = WorldSim::default();
+        s.set_library(fast);
+        // Four frames, one per triangle, and once more round: the buffer
+        // keeps the scene as it is.
+        let want = scene_pixels(&SCENE);
+        let id = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::ColorScreen { .. }))
+        })[0];
+        for lap in 0..2 {
+            run(&mut s, &p.world, 2 * 4 * 1024 + 8);
+            let (c, name) = s.device(id).unwrap();
+            let px = makine_world::device::color_screen(c, &name).unwrap();
+            let wrong: Vec<usize> = (0..1024)
+                .filter(|&k| px[k] as u64 != want[k].unwrap_or(0))
+                .collect();
+            assert!(
+                wrong.is_empty(),
+                "lap {lap}: {} wrong pixels, e.g. {:?}",
+                wrong.len(),
+                &wrong[..wrong.len().min(8)]
+            );
+        }
+    }
+
     #[test]
     fn typewriter_stores_keys() {
         let (p, mut s) = open("typewriter");

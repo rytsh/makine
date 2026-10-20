@@ -1,5 +1,5 @@
 <!--
-seviyeler: FastAdd32, PipeAdd32, Forward, Cache4
+seviyeler: FastAdd32, PipeAdd32, Forward, Cache4, SeqMulDiv, CpuSeq
 -->
 # A fast processor: why are Apple and ARM cores fast?
 
@@ -27,6 +27,23 @@ most NAND gates any signal has to pass through. In the example solutions:
 The processor's path is that long because the divider does 32 subtractions
 one after another. Without division the path drops to 122 gates. That is why
 real processors divide step by step over many clocks, not in a single one.
+
+In the **Multiply and Divide, Step by Step** (SeqMulDiv) level you do this
+yourself: one adder and three registers do the work of MulDiv's 64 rows in
+35 clocks. In the **A Fast-Clocked Processor** (CpuSeq) level your processor
+uses that unit and waits (stalls) until a multiply or divide is done:
+
+| Circuit | Longest path (NANDs) | Gates |
+|---|---|---|
+| MulDiv | 2392 | ~79 thousand |
+| SeqMulDiv | 92 | ~12 thousand |
+| Single-cycle processor | 2411 | ~139 thousand |
+| CpuSeq | 122 | ~72 thousand |
+
+The path gets 20 times shorter and the processor half the size. A divide now
+takes 35 clocks, but every other instruction runs on a clock 20 times
+faster. On the FPGA computer the difference can be measured: see [A real
+chip](silikon.md).
 
 ## 1. A shorter path: a fast adder
 
