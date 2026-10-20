@@ -184,6 +184,14 @@ levels without a page. Diagrams are drawn by `docs/diagrams/make.py`
 4. **ALU:** zero test, comparator, left/right shifter, ALU, register file
 5. **CPU:** instruction decoder, control unit, branch unit, load/store units,
    multiply/divide, and the **RV32IM CPU** that ties them together
+6. **Processor workshop:** 4-bit selector, carry adder, register and 12-bit program counter
+7. **A fast processor (optional):** carry-select fast adder, two-stage pipeline,
+   forwarding and a cache. The adder levels measure speed as well as correctness: the
+   longest gate path must be at most 60% of your own Adder32's.
+   [Why are Apple and ARM cores fast?](docs/wiki/en/hizli.md)
+8. **A graphics processor (optional):** four-lane SIMD adder, edge function, triangle
+   test, screen scanner and rasterizer. Once it passes, your rasterizer draws a triangle
+   on a 32×32 screen in World. [How does a GPU work?](docs/wiki/en/gpu.md)
 
 The CPU test runs real programs on your CPU and on a reference CPU side by side and
 compares them after every instruction. When they differ, it tells you which
@@ -273,6 +281,12 @@ Yosys, load it onto an FPGA or have it made as a real chip through
 NAND gates stay as they are. The testbench uses the level's own test or makine's
 simulation. Every reference solution passes in Icarus, the RISC-V processor
 included. See the **A real chip** page in the Wiki.
+
+Once you pass the Processor level, a **🖥 Save FPGA computer** button appears. It wraps
+your processor in 64 KB of RAM, a serial port and a timer, as a ready project for the
+**ULX3S** board (Lattice ECP5): `make sim` runs it on the computer in Verilator, `make`
+builds the bitstream, `make prog` loads it onto the board. C programs built with
+`MK_RAM=64K sdk/build.sh prog.c` send their `printf` output over the board's USB serial port.
 
 ## Layout
 

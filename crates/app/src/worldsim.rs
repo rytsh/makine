@@ -597,6 +597,55 @@ mod example_tests {
         assert!(!px[1]);
     }
 
+    /// The player's rasterizer (here the reference Fill and the chips under
+    /// it) draws exactly the triangle's pixels on the screen in one frame.
+    #[test]
+    fn gpu_triangle_draws_the_triangle() {
+        let e = makine_world::projects::examples::with_chips()
+            .into_iter()
+            .find(|(e, _)| e.id == "gpu_triangle")
+            .unwrap();
+        let p = (e.0.build)();
+        let mut lib = makine_sim::Library::new();
+        for l in makine_levels::levels() {
+            lib.insert(makine_levels::reference::reference(l.chip));
+        }
+        let fast = makine_levels::fast::library(lib.chips(), true);
+        let c = makine_world::compile(&p.world, &fast);
+        assert!(c.problems.is_empty(), "{:?}", c.problems);
+        let mut s = WorldSim::default();
+        s.set_library(fast);
+        // Two frames: the first one sets reset-free scanning going.
+        run(&mut s, &p.world, 2 * 2 * 1024 + 8);
+        let id = find(&p, |k| {
+            matches!(k, Kind::Device(makine_world::Device::Screen { .. }))
+        })[0];
+        let (c, name) = s.device(id).unwrap();
+        let px = makine_world::device::screen(c, &name).unwrap();
+        let mut wrong = Vec::new();
+        for y in 0..32u64 {
+            for x in 0..32u64 {
+                let want = makine_levels::gpu::triangle(&[2, 3, 29, 8, 9, 27, x, y]);
+                if px[(y * 32 + x) as usize] != want {
+                    wrong.push((x, y));
+                }
+            }
+        }
+        if let Ok(path) = std::env::var("MAKINE_GPU_ASCII") {
+            let art: String = (0..32)
+                .map(|y| {
+                    (0..32)
+                        .map(|x| if px[y * 32 + x] { '#' } else { '.' })
+                        .collect::<String>()
+                        + "\n"
+                })
+                .collect();
+            std::fs::write(path, art).unwrap();
+        }
+        assert!(wrong.is_empty(), "{} wrong pixels: {:?}", wrong.len(), &wrong[..wrong.len().min(10)]);
+        assert_eq!(px.iter().filter(|&&p| p).count(), 309);
+    }
+
     #[test]
     fn typewriter_stores_keys() {
         let (p, mut s) = open("typewriter");

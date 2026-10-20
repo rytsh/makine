@@ -185,6 +185,13 @@ fotoğraflar yapay zekâ ile üretilmiştir.
 5. **İşlemci:** komut çözücü, kontrol birimi, dallanma, yükleme/saklama birimleri,
     çarpma/bölme, ve hepsini birleştiren **RV32IM işlemci**
 6. **İşlemci atölyesi:** 4-bit seçici, taşımalı toplayıcı, yazmaç ve 12-bit program sayacı
+7. **Hızlı işlemci (isteğe bağlı):** elde seçmeli hızlı toplayıcı, iki aşamalı boru hattı,
+   veri yönlendirme ve önbellek. Toplayıcı seviyeleri yalnızca doğruluğu değil hızı da
+   ölçer: en uzun kapı yolu, kendi Adder32'nin %60'ını geçmemeli.
+   [Apple ve ARM çekirdekleri neden hızlı?](docs/wiki/hizli.md)
+8. **Grafik işlemci (isteğe bağlı):** dört şeritli SIMD toplayıcı, kenar fonksiyonu, üçgen
+   testi, ekran tarayıcı ve rasterleyici. Geçince rasterleyicin Dünya'da 32×32 bir ekrana
+   üçgen çizer. [GPU nasıl çalışır?](docs/wiki/gpu.md)
 
 İşlemci testi, gerçek programları senin işlemcinde ve bir referans işlemcide yan yana
 çalıştırır ve her komuttan sonra karşılaştırır. Bir fark olursa hangi komutun, hangi
@@ -273,6 +280,12 @@ ile gerçek bir çip olarak ürettirebilirsin. Her çip ayrı bir Verilog modül
 NAND kapıları olduğu gibi kalır. Test tezgâhı, seviyenin kendi testini ya da
 makine'nin simülasyonunu kullanır. Bütün örnek çözümler, RISC-V işlemci de dahil,
 Icarus'ta `PASS` verir. Ayrıntılar Wiki'deki **Gerçek çip** sayfasında.
+
+İşlemci seviyesini geçince **🖥 FPGA bilgisayarı kaydet** düğmesi çıkar. İşlemcinin
+etrafına 64 KB RAM, bir seri port ve bir zamanlayıcı ekleyip **ULX3S** (Lattice ECP5)
+kartı için hazır bir proje kurar: `make sim` bilgisayarda Verilator ile çalıştırır,
+`make` FPGA dosyasını üretir, `make prog` karta yükler. `MK_RAM=64K sdk/build.sh prog.c`
+ile derlediğin C programları `printf` çıktısını kartın USB seri portundan gönderir.
 
 ## Yapı
 

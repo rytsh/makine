@@ -107,7 +107,9 @@ fn run_levels(range: std::ops::Range<usize>, steps_limit: usize) -> usize {
             primitives: !matches!(l.chip, "Latch" | "DLatch" | "DFF" | "Bit"),
             ..Options::default()
         };
-        let steps: Vec<TestStep> = steps.into_iter().take(steps_limit).collect();
+        // Icarus simulates every gate: keep gates × steps bounded.
+        let limit = steps_limit.min(2_000_000 / gates.max(1)).max(40);
+        let steps: Vec<TestStep> = steps.into_iter().take(limit).collect();
         let e = verilog(&lib, &def, &opts).unwrap();
         let dir = scratch(l.chip);
         std::fs::write(dir.join("design.v"), &e.source).unwrap();

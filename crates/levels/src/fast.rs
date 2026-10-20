@@ -149,6 +149,61 @@ pub fn model(chip: &str) -> Option<NativeDef> {
                 s.mul,
             ]
         }),
+        "ScanCounter" => NativeDef::clocked(
+            ins,
+            outs,
+            &[],
+            (0u64, 0u64),
+            |p, i| *p = crate::gpu::scan_next(p.0, p.1, i[0] & 1 == 1),
+            |p, _, o| {
+                o[0] = p.0;
+                o[1] = p.1;
+            },
+        ),
+        "Fill" => NativeDef::clocked(
+            ins,
+            outs,
+            &["ax", "ay", "bx", "by", "cx", "cy"],
+            (0u64, 0u64),
+            |p, i| *p = crate::gpu::scan_next(p.0, p.1, i[6] & 1 == 1),
+            |p, i, o| {
+                let mut v = i[..6].to_vec();
+                v.extend([p.0, p.1]);
+                o[0] = p.0;
+                o[1] = p.1;
+                o[2] = crate::gpu::triangle(&v) as u64;
+            },
+        ),
+        "PipeAdd32" => NativeDef::clocked(
+            ins,
+            outs,
+            &[],
+            0u64,
+            |s, i| *s = (i[0] + i[1]) & mask(32),
+            |s, _, o| o[0] = *s,
+        ),
+        "Cache4" => NativeDef::clocked(
+            ins,
+            outs,
+            &["addr"],
+            [None::<(u64, u64)>; 4],
+            |lines, i| {
+                if i[2] & 1 == 1 {
+                    lines[i[0] as usize % 4] = Some((i[0] >> 2, i[1]));
+                }
+            },
+            |lines, i, o| match lines[i[0] as usize % 4] {
+                Some((tag, d)) if tag == i[0] >> 2 => {
+                    o[0] = 1;
+                    o[1] = d;
+                }
+                // The data of a missed line is "don't care"; show it anyway.
+                line => {
+                    o[0] = 0;
+                    o[1] = line.map_or(0, |l| l.1);
+                }
+            },
+        ),
         "Cpu" => return None,
         _ => match level.test {
             Test::Function(f) => NativeDef::function(ins, outs, f),

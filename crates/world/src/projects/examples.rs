@@ -42,6 +42,7 @@ impl Example {
             ),
             "screen_line" => tr!("Ekrana çizgi", "A line on the screen"),
             "typewriter" => tr!("Daktilo", "Typewriter"),
+            "gpu_triangle" => tr!("GPU: üçgen çiz", "GPU: draw a triangle"),
             _ => self.id,
         }
     }
@@ -104,6 +105,10 @@ impl Example {
                 "Klavyeyi seçip yaz: her tuşun kodu göstergede çıkar ve RAM'e sırayla yazılır.",
                 "Select the keyboard and type: each key's code shows on the display and is written to RAM in turn."
             ),
+            "gpu_triangle" => tr!(
+                "Senin rasterleyicin (Fill) ekranı tarar ve üçgeni çizer. Köşelerin girişlerine tıklayıp üçgeni değiştir.",
+                "Your rasterizer (Fill) scans the screen and draws the triangle. Click the corners' inputs to change it."
+            ),
             _ => "",
         }
     }
@@ -127,6 +132,18 @@ pub fn all() -> Vec<Example> {
         e("screen_line", Size::Large, screen_line),
         e("typewriter", Size::Large, typewriter),
     ]
+}
+
+/// Examples that use a chip the player builds; they open once it is solved.
+pub fn with_chips() -> Vec<(Example, &'static str)> {
+    vec![(
+        Example {
+            id: "gpu_triangle",
+            size: Size::Large,
+            build: gpu_triangle,
+        },
+        "Fill",
+    )]
 }
 
 /// Places parts and wires with fresh ids.
@@ -629,6 +646,48 @@ fn typewriter() -> Project {
     b.wire((cursor, 0), (pos, 0));
     b.watch(cursor, 0);
     b.done(vec![m])
+}
+
+/// The player's Fill chip drawing a triangle on a 32 × 32 screen. The
+/// screen draws while the clock is low, so a pixel is set before the scan
+/// moves on.
+fn gpu_triangle() -> Project {
+    let mut b = B::new(tr!("GPU: üçgen", "GPU: triangle"));
+    let corners = [
+        ("ax", 2),
+        ("ay", 3),
+        ("bx", 29),
+        ("by", 8),
+        ("cx", 9),
+        ("cy", 27),
+    ];
+    let mut ins = Vec::new();
+    for (k, (name, v)) in corners.iter().enumerate() {
+        ins.push(b.input(name, 5, *v, 40.0, 40.0 + k as f32 * 80.0));
+    }
+    let clk = b.put(Kind::Clock { period: 1 }, 40.0, 560.0);
+    let reset = b.input("reset", 1, 0, 40.0, 640.0);
+    let fill = b.put(
+        Kind::Part(Part::new(PartKind::Chip("Fill".into()))),
+        320.0,
+        200.0,
+    );
+    for (k, id) in ins.iter().enumerate() {
+        b.wire((*id, 0), (fill, k));
+    }
+    b.wire((reset, 0), (fill, 6));
+    b.wire((clk, 0), (fill, 7));
+    let screen = b.device(Device::Screen { bits: 5 }, 760.0, 60.0);
+    b.named((fill, 0), (screen, 0), "x");
+    b.named((fill, 1), (screen, 1), "y");
+    b.named((fill, 2), (screen, 2), tr!("içeride", "inside"));
+    let one = b.constant(1, 1, 560.0, 420.0);
+    b.wire((one, 0), (screen, 3));
+    let nclk = b.gate(Gate::Not, 560.0, 520.0);
+    b.wire((clk, 0), (nclk, 0));
+    b.wire((nclk, 0), (screen, 4));
+    b.watch(fill, 2);
+    b.done(vec![])
 }
 
 #[cfg(test)]

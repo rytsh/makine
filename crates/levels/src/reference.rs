@@ -178,6 +178,7 @@ pub fn reference(chip: &str) -> ChipDef {
             return crate::mini::reference(other)
                 .or_else(|| crate::memory::reference(other))
                 .or_else(|| crate::speed::reference(other))
+                .or_else(|| crate::gpu::reference(other))
                 .or_else(|| crate::reference_cpu::reference(other))
                 .unwrap_or_else(|| panic!("no reference solution for {other}"))
         }

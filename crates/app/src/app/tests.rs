@@ -1190,3 +1190,46 @@ mod speed_tests {
         assert!(app.borrow().progress.solved("FastAdd32"));
     }
 }
+
+mod gpu_tests {
+    use crate::app::*;
+    use egui_kittest::kittest::Queryable;
+    use makine_levels::reference::reference;
+    use std::{cell::RefCell, rc::Rc};
+
+    /// After the Fill level, its panel opens the GPU project in World with
+    /// the player's own chip running.
+    #[test]
+    fn fill_opens_the_gpu_world() {
+        let mut progress = Progress::default();
+        for l in levels().iter().take_while(|l| l.chip != "Fill") {
+            progress.solutions.insert(l.chip.into(), reference(l.chip));
+        }
+        let app = Rc::new(RefCell::new(App::new(progress, None)));
+        app.borrow_mut().open_level(makine_levels::find("Fill").unwrap());
+        app.borrow_mut().inspector.circuit = super::super::inspector_ui::CircuitSection::Learn;
+        let a = app.clone();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 1000.0))
+            .build_ui(move |ui| a.borrow_mut().ui(ui));
+        h.run_steps(2);
+        let label = "🖥 Dünya'da: GPU: üçgen çiz";
+        // Not before the level is solved: clicking does nothing.
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert!(app.borrow().view != View::World);
+        app.borrow_mut()
+            .progress
+            .solutions
+            .insert("Fill".into(), reference("Fill"));
+        app.borrow_mut().refresh_library();
+        h.run_steps(2);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        let a = app.borrow();
+        assert!(a.view == View::World);
+        let w = a.world.as_ref().unwrap();
+        assert!(w.sim.running);
+        assert!(w.world.parts().any(|(_, p)| p.kind.chip_name() == Some("Fill")));
+    }
+}

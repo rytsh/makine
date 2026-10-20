@@ -512,6 +512,26 @@ pub fn hints(chip: &str) -> Vec<&'static str> {
             &["Bir kayıt adresi tutar, ROM o adresteki komutu verir. İzin yoksa adres aynı kalmalı.", "Bit×4, ProgramRom, +1 için Adder8, yükleme/reset için MUX×4; HLT için komutun üst dört bitini AND ile birleştir.", "d_reg=MUX(MUX((pc+1)&15,d,load),0,reset); load_reg=reset OR load OR (run AND !halt). clk doğrudan kayda; pc ROM'un addr'ına, ROM çıkışı instr'a."],
             &["A register holds the address; ROM supplies that instruction. Without permission the address must hold.", "Bit×4, ProgramRom, Adder8 for +1, MUX×4 for load/reset; AND the instruction's upper four bits to detect HLT.", "d_reg=MUX(MUX((pc+1)&15,d,load),0,reset); load_reg=reset OR load OR (run AND !halt). Wire clk directly to the register, pc to ROM addr and ROM output to instr."],
         ),
+        "Simd4" => (
+            &["Dört ayrı 8 bitlik toplayıcı, aynı anda. Her şeridin eldesi yalnızca o şeride ait.", "Böl (8,8,8,8) a ve b için, dört Adder8, doyurma için dört MUX×8 ve 255 sabiti, Birleştir.", "Şerit k: s = Adder8(a_k, b_k, 0). Taşma = s.carry AND sat. out_k = MUX×8(s.sum, 255, taşma). Dört sonucu Birleştir."],
+            &["Four separate 8-bit adders at once. Each lane's carry belongs to that lane alone.", "Split (8,8,8,8) for a and b, four Adder8, four MUX×8 and a 255 constant for saturation, a Join.", "Lane k: s = Adder8(a_k, b_k, 0). Overflow = s.carry AND sat. out_k = MUX×8(s.sum, 255, overflow). Join the four results."],
+        ),
+        "Edge" => (
+            &["Önce dört farkı bul (bx−ax, by−ay, px−ax, py−ay), sonra iki çarpımı, sonra farklarını. Sonucun işaret biti cevabı verir.", "Koordinatları 32 bite genişlet (Birleştir ile 27 sıfır), dört Sub32, iki çarpma, bir Sub32 ve bir NOT. Çarpma için kaydır-topla: altı satır Adder32 ve Mux32.", "Çarpan m'nin bit i'si 1 ise toplama (a << i) ekle; bit 5 işaret bitidir, orada ekleme yerine çıkar (Sub32). right = NOT(E'nin bit 31'i)."],
+            &["First the four differences (bx−ax, by−ay, px−ax, py−ay), then the two products, then their difference. The answer is in the result's sign bit.", "Widen the coordinates to 32 bits (Join with 27 zeros), four Sub32, two multiplications, one Sub32 and a NOT. Multiply by shift-and-add: six rows of Adder32 and Mux32.", "If bit i of the multiplier m is 1, add (a << i) to the sum; bit 5 is the sign bit, subtract there instead (Sub32). right = NOT(bit 31 of E)."],
+        ),
+        "Triangle" => (
+            &["Üçgenin içi, üç kenarın da aynı yanıdır. Kenar fonksiyonunu üç kez kullan.", "Üç Edge ve iki AND.", "Edge(a, b, p), Edge(b, c, p), Edge(c, a, p): üçünü AND'le. Kenarların sırası önemli: c→a, a→c değil."],
+            &["The inside of a triangle is the same side of all three edges. Use the edge function three times.", "Three Edge and two AND.", "Edge(a, b, p), Edge(b, c, p), Edge(c, a, p): AND all three. The order of the edges matters: c→a, not a→c."],
+        ),
+        "ScanCounter" => (
+            &["x ve y'yi bir yazmaçta tut. x her saatte artar; x taşınca y artar. 5 bitlik sayaç 31'den sonra kendiliğinden 0'a döner.", "Bit×10 yazmaç, iki Adder8 (x+1 ve y+elde), Böl ve Birleştir, sıfırlama için MUX×10.", "x'i 8 bite genişletip 1 ekle: sonucun bit 5'i, x'in 31'den taştığını söyler. Bunu y'nin toplayıcısına elde olarak ver. reset ile sıfırı seç, load = 1."],
+            &["Keep x and y in a register. x goes up every clock; when x overflows, y goes up. A 5-bit counter wraps from 31 to 0 by itself.", "A Bit×10 register, two Adder8 (x+1 and y+carry), Split and Join, a MUX×10 for reset.", "Widen x to 8 bits and add 1: bit 5 of the result says x overflowed from 31. Give it to y's adder as the carry. Select zero with reset, load = 1."],
+        ),
+        "Fill" => (
+            &["İki parçayı birleştir: ekranı tarayan sayaç ve üçgen testi.", "Bir ScanCounter ve bir Triangle.", "ScanCounter(reset, clk) → x, y. Triangle(ax..cy, x, y) → on. x ve y'yi de çıkışa ver."],
+            &["Put two parts together: the counter that scans the screen and the triangle test.", "One ScanCounter and one Triangle.", "ScanCounter(reset, clk) → x, y. Triangle(ax..cy, x, y) → on. Send x and y to the outputs too."],
+        ),
         "FastAdd32" => (
             &["Yolu uzatan, eldenin bitten bite yürümesi. Üst baytlar eldeyi beklemeden toplanabilir mi?", "Dört Adder8: ilki normal. Diğer üç bayt için ikişer Adder8 (elde 0 ve elde 1) ve MUX×8 ile MUX.", "Bayt k için s0 = a_k+b_k+0, s1 = a_k+b_k+1. Önceki bayttan gelen elde MUX'un sel'i: sum_k = MUX(s0, s1, elde), yeni elde = MUX(s0.carry, s1.carry, elde)."],
             &["What makes the path long is the carry walking from bit to bit. Can the upper bytes be added without waiting for it?", "Four Adder8: the first as usual. For the other three bytes two Adder8 each (carry 0 and carry 1), plus MUX×8 and a MUX.", "For byte k, s0 = a_k+b_k+0 and s1 = a_k+b_k+1. The carry from the byte before is the MUX's sel: sum_k = MUX(s0, s1, carry), new carry = MUX(s0.carry, s1.carry, carry)."],

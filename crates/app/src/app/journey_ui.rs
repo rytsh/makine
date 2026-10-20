@@ -153,6 +153,31 @@ impl App {
                 }
             }
         }
+        for (e, needs) in makine_world::projects::examples::with_chips() {
+            if needs != chip {
+                continue;
+            }
+            let solved = self.progress.solved(needs);
+            let r = ui.add_enabled(
+                self.session.is_none() && solved,
+                egui::Button::new(trf!("🖥 Dünya'da: {}", "🖥 In World: {}", e.title())),
+            );
+            let r = if solved {
+                r.on_hover_text(e.about())
+            } else {
+                r.on_disabled_hover_text(tr!(
+                    "Önce bu seviyeyi çöz: proje senin çipini kullanıyor.",
+                    "Solve this level first: the project uses your chip."
+                ))
+            };
+            if r.clicked() {
+                self.open_project((e.build)());
+                self.attach_lab(chip, None, None);
+                if let Some(w) = &mut self.world {
+                    w.sim.running = true;
+                }
+            }
+        }
         if chip == "MiniCpu"
             && ui
                 .button(tr!(

@@ -109,6 +109,7 @@ pub static PAGES: &[Page] = pages![
     "atolye",
     "4004",
     "hizli",
+    "gpu",
     "silikon",
 ];
 

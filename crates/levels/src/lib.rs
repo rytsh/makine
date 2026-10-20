@@ -72,6 +72,7 @@ impl Level {
         self.section == mini::SECTION
             || self.section == memory::SECTION
             || self.section == speed::SECTION
+            || self.section == gpu::SECTION
     }
 
     /// The title in the interface language.
@@ -182,6 +183,7 @@ pub fn levels() -> &'static [&'static Level] {
             .chain(cpu::LEVELS)
             .chain(workshop::LEVELS)
             .chain(speed::LEVELS)
+            .chain(gpu::LEVELS)
             .collect()
     })
 }
@@ -191,6 +193,7 @@ pub mod cpu;
 pub mod depth;
 mod en;
 pub mod fast;
+pub mod gpu;
 pub mod hints;
 pub mod memory;
 pub mod mini;

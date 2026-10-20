@@ -332,6 +332,51 @@ pub(crate) fn level(chip: &str) -> Option<(&'static str, &'static str)> {
             "Fetch Instructions from ROM",
             "Connect a 4-bit pc register to Program ROM; instr must always equal ROM[pc]. At each rising edge, priority is: reset→pc=0; load→pc=d; if run=1 and instr≠0xF0, pc=pc+1; otherwise hold. 15+1 wraps to 0.\n\nStep through addresses and instruction bytes; stop at HLT, load another address, reset to the start. This is an instruction-fetch circuit: it does not execute ADD or ST. To run the program, connect ALU, control and RAM in the Mini processor path next.",
         ),
+        "Simd4" => (
+            "Four Lanes: SIMD",
+            "a and b each carry four 8-bit numbers side by side (byte 0 in the low bits). Add \
+            each byte on its own: byte k of out = byte k of a + byte k of b. With sat = 0 the \
+            overflow is dropped (200 + 100 = 44); with sat = 1 the result stops at 255 \
+            (200 + 100 = 255).\n\n\
+            This is the core idea of a GPU: single instruction, multiple data (SIMD). The same \
+            operation that brightens one pixel is applied to four at once. Careful: a lane's \
+            carry must not spill into the next; every lane is an adder of its own.",
+        ),
+        "Edge" => (
+            "The Edge Function",
+            "An edge from a to b and a point p (coordinates 0..31). Compute \
+            E = (bx − ax) × (py − ay) − (by − ay) × (px − ax); right = 1 if E ≥ 0.\n\n\
+            The sign of E says which side of the edge p is on. In screen coordinates y grows \
+            downwards; E ≥ 0 means p is on the right of the edge (or on it). The differences \
+            are −31..31 and the products are signed: Sub32 already gives the two's complement \
+            difference. You can use MulDiv for the multiplication, but it is huge; a 6-bit \
+            signed multiplication takes six rows of add-and-select.",
+        ),
+        "Triangle" => (
+            "Inside a Triangle",
+            "A triangle with corners a, b, c and a point p. inside = 1 if p is on the right \
+            of (or on) all three edges (a→b, b→c, c→a).\n\n\
+            If the corners go clockwise on screen, the inside lies on the right of all three \
+            edges. This is how GPUs draw triangles: they run this test for every pixel of the \
+            screen, each on its own and all at the same time. It is called rasterization.",
+        ),
+        "ScanCounter" => (
+            "Scan the Screen",
+            "A counter that walks the pixels of a 32 × 32 screen row by row. At every rising \
+            clk edge: if reset = 1, x = 0 and y = 0. Otherwise x goes up by one; at 31 it \
+            wraps to 0 and y goes up by one. y wraps to 0 after 31 too.\n\n\
+            This is how screens draw a picture: left to right, top to bottom, dozens of times \
+            a second. One frame of the screen takes 32 × 32 = 1024 clocks.",
+        ),
+        "Fill" => (
+            "The Rasterizer",
+            "Scan the screen and say for each pixel whether it is inside the triangle. x and y \
+            advance as in ScanCounter (reset, clk); on = 1 when (x, y) is inside the \
+            triangle.\n\n\
+            This is a GPU's most basic job. In World, wire on to the screen's d input and x and \
+            y to its coordinates, and the triangle gets drawn. A real GPU does the same with \
+            thousands of cores, on thousands of pixels at once.",
+        ),
         "FastAdd32" => (
             "Fast Adder",
             "Add a + b + c like Adder32, but the longest gate path must be at most 60% of \
@@ -392,6 +437,7 @@ pub(crate) fn section(tr: &str) -> Option<&'static str> {
         "Mini işlemci" => "Mini processor",
         "Bellek ve ROM" => "Memory and ROM",
         "7. Hızlı işlemci" => "7. A fast processor",
+        "8. Grafik işlemci" => "8. A graphics processor",
         _ => return None,
     })
 }
