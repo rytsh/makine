@@ -1206,7 +1206,8 @@ mod gpu_tests {
             progress.solutions.insert(l.chip.into(), reference(l.chip));
         }
         let app = Rc::new(RefCell::new(App::new(progress, None)));
-        app.borrow_mut().open_level(makine_levels::find("Fill").unwrap());
+        app.borrow_mut()
+            .open_level(makine_levels::find("Fill").unwrap());
         app.borrow_mut().inspector.circuit = super::super::inspector_ui::CircuitSection::Learn;
         let a = app.clone();
         let mut h = egui_kittest::Harness::builder()
@@ -1230,6 +1231,9 @@ mod gpu_tests {
         assert!(a.view == View::World);
         let w = a.world.as_ref().unwrap();
         assert!(w.sim.running);
-        assert!(w.world.parts().any(|(_, p)| p.kind.chip_name() == Some("Fill")));
+        assert!(w
+            .world
+            .parts()
+            .any(|(_, p)| p.kind.chip_name() == Some("Fill")));
     }
 }

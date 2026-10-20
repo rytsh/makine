@@ -642,7 +642,12 @@ mod example_tests {
                 .collect();
             std::fs::write(path, art).unwrap();
         }
-        assert!(wrong.is_empty(), "{} wrong pixels: {:?}", wrong.len(), &wrong[..wrong.len().min(10)]);
+        assert!(
+            wrong.is_empty(),
+            "{} wrong pixels: {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(10)]
+        );
         assert_eq!(px.iter().filter(|&&p| p).count(), 309);
     }
 
