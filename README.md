@@ -322,3 +322,10 @@ makine MIT lisanslıdır. Gömülü DejaVu fontları (`crates/app/fonts/`) Bitst
 lisanslıdır, bkz. `LICENSE-DejaVu.txt`. Doom derleme betiğinin indirdiği dosyalar kendi lisanslarıyla
 gelir ve depoya eklenmez: doomgeneric (GPL-2.0), DOOM1.WAD (id Software shareware,
 serbestçe dağıtılabilir), compiler-rt (Apache-2.0 with LLVM exception).
+
+
+## Yapılacaklar
+
+1. Kartta deneme: ULX3S'e yükleyip seri porttan ilk "Merhaba" çıktısını görmek. Sorun çıkarsa logları birlikte inceleriz.
+2. Bölücüyü çok adımlı yapmak: en uzun yolu yaklaşık 2400 kapıdan 120 civarına indirir. Bu, FPGA'da işlemciyi yaklaşık 20 kat hızlandırır.
+3. GPU'yu büyütmek: renkli piksel, derinlik tamponu ve birden fazla üçgen için yeni seviyeler.
