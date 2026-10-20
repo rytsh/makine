@@ -74,7 +74,7 @@ int main(void) {
 ```
 
 ```sh
-make c SRC=program.c        # or: sdk/build.sh program.c
+make build-c SRC=program.c        # or: sdk/build.sh program.c
 ```
 
 Open the resulting `program.elf` with **Load from file**.
@@ -85,7 +85,7 @@ Open the resulting `program.elf` with **Load from file**.
 open. You can compile it for RISC-V and run it on your computer:
 
 ```sh
-make doom
+make build-doom
 ```
 
 Then **👹 Doom** → **🎮 Play**. The arrows walk, Ctrl fires, space opens

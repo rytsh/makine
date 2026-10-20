@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- makine.app's description for macOS; `make build-macos-app` fills in @VERSION@. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>makine</string>
+	<key>CFBundleDisplayName</key>
+	<string>makine</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.github.rytsh.makine</string>
+	<key>CFBundleExecutable</key>
+	<string>makine</string>
+	<key>CFBundleIconFile</key>
+	<string>makine</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>tr</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>tr</string>
+		<string>en</string>
+	</array>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.education</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+</dict>
+</plist>

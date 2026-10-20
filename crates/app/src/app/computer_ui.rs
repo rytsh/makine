@@ -340,15 +340,19 @@ impl App {
 }
 
 /// Where a built Doom is looked for: next to the executable (for a packaged
-/// release), then in the source tree (for `cargo run`).
+/// release), in Contents/Resources (for makine.app on macOS), then in the
+/// source tree (for `cargo run`).
 pub(super) fn doom_path() -> Option<std::path::PathBuf> {
-    let next_to_exe = std::env::current_exe()
+    let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|e| e.parent().map(|d| d.join("doom.elf")));
+        .and_then(|e| e.parent().map(|d| d.to_path_buf()));
+    let next_to_exe = exe_dir.as_ref().map(|d| d.join("doom.elf"));
+    let app_resources = exe_dir.map(|d| d.join("../Resources/doom.elf"));
     let source_tree =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/doom/build/doom.elf");
     next_to_exe
         .into_iter()
+        .chain(app_resources)
         .chain([source_tree])
         .find(|p| p.exists())
 }

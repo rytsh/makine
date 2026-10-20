@@ -76,7 +76,7 @@ int main(void) {
 ```
 
 ```sh
-make c SRC=program.c        # ya da: sdk/build.sh program.c
+make build-c SRC=program.c        # ya da: sdk/build.sh program.c
 ```
 
 Çıkan `program.elf`'i **Dosyadan yükle** ile aç.
@@ -87,7 +87,7 @@ make c SRC=program.c        # ya da: sdk/build.sh program.c
 RISC-V için derleyip senin bilgisayarında çalıştırabilirsin:
 
 ```sh
-make doom
+make build-doom
 ```
 
 Sonra **👹 Doom** → **🎮 Oyna**. Oklar yürür, Ctrl ateş eder, boşluk

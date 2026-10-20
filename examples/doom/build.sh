@@ -21,7 +21,8 @@ fi
 if [ ! -f "$B/doom1.wad" ]; then
     curl -fL -o "$B/doom1.wad" "$WAD_URL"
 fi
-echo "$WAD_SHA1  $B/doom1.wad" | sha1sum -c --quiet
+if command -v sha1sum >/dev/null; then SHA1="sha1sum"; else SHA1="shasum -a 1"; fi
+echo "$WAD_SHA1  $B/doom1.wad" | $SHA1 -c --quiet
 
 DG=$B/doomgeneric/doomgeneric
 SRCS=$(sed -n 's/^SRC_DOOM = //p' "$DG/Makefile" | tr ' ' '\n' | grep -v xlib \

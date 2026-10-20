@@ -22,10 +22,11 @@ Sık kullanılan komutlar Makefile'da; `make` yazınca listesi çıkar:
 | `make run-gl` | Vulkan/DirectX yerine OpenGL ile çalıştırır |
 | `make test` | testleri çalıştırır |
 | `make check` | biçim, clippy ve testler |
-| `make doom` | Doom'u derler |
-| `make c SRC=prog.c` | bir C programını derler |
-| `make windows` | Linux'tan Windows `.exe`'si derler |
+| `make build-doom` | Doom'u derler |
+| `make build-c SRC=prog.c` | bir C programını derler |
+| `make build-windows` | Linux'tan Windows `.exe`'si derler |
 | `make dist-windows` | `.exe` + Doom'u `dist/makine-windows-x64.zip` yapar |
+| `make dist-macos` | Mac'te `makine.app` (içinde Doom) + relay'i `dist/makine-macos-arm64.zip` yapar (Doom için `brew install llvm lld`) |
 | `make clean` | derleme çıktılarını siler |
 
 Grafik için wgpu kullanılır: Vulkan, DirectX 12, Metal ya da OpenGL'den hangisi
@@ -133,7 +134,7 @@ Telde sağ tık → **Sinyali izle**: son 256 simülasyon adımını incele,
 **Değişince dur** ile bir değişimi yakala. **Saat çevrimi** ilk saatin sonraki
 yükselen kenarına ilerler. Bunlar kaydedilen devreyi değiştirmeyen yerel
 inceleme araçlarıdır. Modüller ve teller yerel ağda ya da internette birlikte
-düzenlenebilir. İnternet için bir aracı sunucu gerekir: `make relay` ile derlenen
+düzenlenebilir. İnternet için bir aracı sunucu gerekir: `make build-relay` ile derlenen
 `makine-relay`'i herkesin ulaşabildiği bir makinede çalıştır; paylaşan bir oda kodu
 alır, öteki o kodla katılır.
 
@@ -165,7 +166,7 @@ Programa gömülür, `.exe` tek dosya kalır. Yeni sayfa eklemek için:
 3. Resim kullanıyorsan `docs/wiki/img/`'e koy ve `IMAGES` listesine ekle.
 
 Testler eksik sayfa, kırık bağlantı, gömülmemiş resim ya da sayfası olmayan seviye
-olursa uyarır. Şemalar `docs/diagrams/make.py` ile çizilir (`make diagrams`);
+olursa uyarır. Şemalar `docs/diagrams/make.py` ile çizilir (`make build-diagrams`);
 fotoğraflar yapay zekâ ile üretilmiştir.
 
 ## Bölümler

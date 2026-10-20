@@ -10,7 +10,7 @@ a per-simulation-step logic analyser (16 probes, 256 samples per probe).
 Modules preserve the actual gates, wiring and layout; closing a module does
 not replace it with an emulator. Modules and routes are shared over the local
 network or the internet; open/closed views and probes are local to each player.
-Over the internet you need a relay: run `makine-relay` (built with `make relay`)
+Over the internet you need a relay: run `makine-relay` (built with `make build-relay`)
 on a machine everyone can reach; the one sharing gets a room code, the other
 joins with it.
 
@@ -47,10 +47,11 @@ Common commands are in the Makefile; run `make` to list them:
 | `make run-gl` | run with OpenGL instead of Vulkan/DirectX |
 | `make test` | run the tests |
 | `make check` | format check, clippy and tests |
-| `make doom` | build Doom |
-| `make c SRC=prog.c` | compile a C program |
-| `make windows` | build the Windows `.exe` from Linux |
+| `make build-doom` | build Doom |
+| `make build-c SRC=prog.c` | compile a C program |
+| `make build-windows` | build the Windows `.exe` from Linux |
 | `make dist-windows` | zip the `.exe` + Doom into `dist/makine-windows-x64.zip` |
+| `make dist-macos` | on a Mac, zip `makine.app` (with Doom inside) + relay into `dist/makine-macos-arm64.zip` (Doom needs `brew install llvm lld`) |
 | `make clean` | delete build output |
 
 Graphics go through wgpu, which picks whichever of Vulkan, DirectX 12, Metal or
@@ -166,7 +167,7 @@ compiled into the executable, so it stays a single file. To add a page:
 
 Tests catch missing pages, broken links, images that are not embedded, and
 levels without a page. Diagrams are drawn by `docs/diagrams/make.py`
-(`make diagrams`); the photos are AI-generated.
+(`make build-diagrams`); the photos are AI-generated.
 
 ## Sections
 
